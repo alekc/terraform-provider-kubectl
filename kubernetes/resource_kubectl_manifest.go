@@ -9,7 +9,10 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"io/ioutil"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/cli-runtime/pkg/printers"
+	"k8s.io/kubectl/pkg/scheme"
 	"k8s.io/kubectl/pkg/validation"
 	"os"
 	"sort"
@@ -18,7 +21,6 @@ import (
 	"log"
 	"strings"
 
-	"k8s.io/cli-runtime/pkg/genericclioptions"
 	k8sresource "k8s.io/cli-runtime/pkg/resource"
 	apiregistration "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
 	"k8s.io/kubectl/pkg/cmd/apply"
@@ -435,6 +437,25 @@ var (
 	}
 )
 
+func newApplyOptions(yamlBody string) *apply.ApplyOptions {
+	applyOptions := &apply.ApplyOptions{
+		PrintFlags: genericclioptions.NewPrintFlags("created").WithTypeSetter(scheme.Scheme),
+
+		IOStreams: genericclioptions.IOStreams{
+			In:     strings.NewReader(yamlBody),
+			Out:    log.Writer(),
+			ErrOut: log.Writer(),
+		},
+
+		Overwrite:    true,
+		OpenAPIPatch: true,
+		Recorder:     genericclioptions.NoopRecorder{},
+
+		VisitedUids:       sets.NewString(),
+		VisitedNamespaces: sets.NewString(),
+	}
+	return applyOptions
+}
 func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, meta interface{}) error {
 
 	yamlBody := d.Get("yaml_body").(string)
@@ -466,11 +487,8 @@ func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, m
 	_, _ = tmpfile.Write([]byte(yamlBody))
 	_ = tmpfile.Close()
 
-	applyOptions := apply.NewApplyOptions(genericclioptions.IOStreams{
-		In:     strings.NewReader(yamlBody),
-		Out:    log.Writer(),
-		ErrOut: log.Writer(),
-	})
+	applyOptions := newApplyOptions(yamlBody)
+
 	applyOptions.Builder = k8sresource.NewBuilder(k8sresource.RESTClientGetter(meta.(*KubeProvider)))
 	applyOptions.DeleteOptions = &k8sdelete.DeleteOptions{
 		FilenameOptions: k8sresource.FilenameOptions{
