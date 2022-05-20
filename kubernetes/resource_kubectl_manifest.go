@@ -430,7 +430,7 @@ var (
 		},
 		"validate_schema": {
 			Type:        schema.TypeBool,
-			Description: "Default to true (validate). Set this flag to not validate the yaml schema before appying.",
+			Description: "Default to true (validate). Set this flag to not validate the yaml schema before applying.",
 			Optional:    true,
 			Default:     true,
 		},
