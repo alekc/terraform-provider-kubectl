@@ -15,7 +15,7 @@ func main() {
 
 	opts := &plugin.ServeOpts{
 		Debug:        debug,
-		ProviderAddr: "registry.terraform.io/alekc-forks/kubectl",
+		ProviderAddr: "registry.terraform.io/alekc/kubectl",
 		ProviderFunc: func() *schema.Provider {
 			return kubernetes.Provider()
 		},
