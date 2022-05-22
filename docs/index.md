@@ -8,8 +8,7 @@ This yaml object is then tracked and handles creation, updates and deleted seaml
 
 A set of helpful data resources to process directories of yaml files and inline templating is available.
 
-This `terraform-provider-kubectl` provider has been used by many large Kubernetes installations to completely
-manage the lifecycle of Kubernetes resources. 
+This `terraform-provider-kubectl` provider has been originally forked from `gavinbunney/kubectl` and followed a separate development path from the version 0.14
 
 ## Installation
 
@@ -23,8 +22,8 @@ terraform {
 
   required_providers {
     kubectl = {
-      source  = "gavinbunney/kubectl"
-      version = ">= 1.7.0"
+      source  = "alekc/kubectl"
+      version = ">= 2.0.0"
     }
   }
 }
@@ -121,7 +120,7 @@ provider "kubectl" {
 
 ### Retry Support
 
-The provider has an additional paramater `apply_retry_count` that allows kubernetes commands to be retried on failure.
+The provider has an additional parameter `apply_retry_count` that allows kubernetes commands to be retried on failure.
 This is useful if you have flaky CRDs or network connections and need to wait for the cluster state to be back in quorum.
 This applies to both create and update operations. 
 
@@ -173,4 +172,4 @@ YAML
 }
 ```
 
-Updates are also preserved so you can fully manage your kubernetes resources with ease!
+Updates are also preserved, so you can fully manage your kubernetes resources with ease!

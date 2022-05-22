@@ -36,44 +36,6 @@ YAML
 
 > Note: When the kind is a Deployment, this provider will wait for the deployment to be rolled out automatically for you!
 
-### With explicit `wait_for`
-If `wait_for` is specified, upon applying the resource, provider will wait for **all** conditions to become true before proceeding further. 
-
-```hcl
-resource "kubectl_manifest" "test" {
-  wait_for {
-    field {
-      key = "status.containerStatuses.[0].ready"
-      value = "true"
-    }
-    field {
-      key = "status.phase"
-      value = "Running"
-    }
-    field {
-      key = "status.podIP"
-      value = "^(\\d+(\\.|$)){4}"
-      value_type = "regex"
-    }
-  }
-  yaml_body = <<YAML
-apiVersion: v1
-kind: Pod
-metadata:
-  name: nginx
-spec:
-  containers:
-  - name: nginx
-    image: nginx:1.14.2
-    readinessProbe:
-      httpGet:
-        path: "/"
-        port: 80			
-      initialDelaySeconds: 10
-YAML
-}
-```
-
 ## Argument Reference
 
 * `yaml_body` - Required. YAML to apply to kubernetes.
@@ -87,27 +49,7 @@ YAML
 * `validate_schema` - Optional. Setting to `false` will mimic `kubectl apply --validate=false` mode. Default `true`.
 * `wait` - Optional. Set this flag to wait or not for finalized to complete for deleted objects. Default `false`.
 * `wait_for_rollout` - Optional. Set this flag to wait or not for Deployments and APIService to complete rollout. Default `true`.
-* `wait_for`- Optional. If set, will wait until either all conditions are satisfied, or until timeout is reached (see [below for nested schema](#nestedblock--wait_for)). Under the hood [gojsonq](https://github.com/thedevsaddam/gojsonq) is used for querying, see the related syntax and examples
-
-### Nested schemas
-<a id="nestedblock--wait_for"></a>
-### Nested Schema for `wait_for`
-
-Required:
-
-- `field` (Block List, Min: 1) Condition criteria for a field (see [below for nested schema](#nestedblock--wait_for--field))
-
-<a id="nestedblock--wait_for--field"></a>
-### Nested Schema for `wait_for.field`
-
-Required:
-
-- `key` (String) Key which should be matched from resulting object
-- `value` (String) Value to wait for
-
-Optional:
-
-- `value_type` (String) Value type. Can be either a `eq` (equivalent) or `regex`
+* wait_for - Optional. If set, the apply operation will wait until all the specified conditions are true before proceeding any further.
 
 ## Attribute Reference
 
@@ -158,15 +100,15 @@ You can configure a list of yaml keys to ignore changes to via the `ignore_field
 Set these for fields set by Operators or other processes in kubernetes and as such you don't want to update.
 
 By default, the following control fields are ignored:
-  - `status`
-  - `metadata.finalizers`
-  - `metadata.initializers`
-  - `metadata.ownerReferences`
-  - `metadata.creationTimestamp`
-  - `metadata.generation`
-  - `metadata.resourceVersion`
-  - `metadata.uid`
-  - `metadata.annotations.kubectl.kubernetes.io/last-applied-configuration`
+- `status`
+- `metadata.finalizers`
+- `metadata.initializers`
+- `metadata.ownerReferences`
+- `metadata.creationTimestamp`
+- `metadata.generation`
+- `metadata.resourceVersion`
+- `metadata.uid`
+- `metadata.annotations.kubectl.kubernetes.io/last-applied-configuration`
 
 These syntax matches the Terraform style flattened-map syntax, whereby keys are separated by `.` paths.
 
