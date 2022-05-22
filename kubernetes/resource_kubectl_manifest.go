@@ -5,9 +5,13 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"github.com/alekc/terraform-provider-kubectl/flatten"
+	"github.com/alekc/terraform-provider-kubectl/internal/types"
 	"github.com/alekc/terraform-provider-kubectl/yaml"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+	validate2 "github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+	"github.com/mitchellh/mapstructure"
+	"github.com/thedevsaddam/gojsonq/v2"
 	"io/ioutil"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
@@ -15,6 +19,7 @@ import (
 	"k8s.io/kubectl/pkg/scheme"
 	"k8s.io/kubectl/pkg/validation"
 	"os"
+	"regexp"
 	"sort"
 	"time"
 
@@ -434,6 +439,43 @@ var (
 			Optional:    true,
 			Default:     true,
 		},
+		"wait_for": {
+			Type:        schema.TypeList,
+			Optional:    true,
+			Description: "If set, will wait until either all of conditions are satisfied, or until timeout is reached",
+			MaxItems:    1,
+			Elem: &schema.Resource{
+				Schema: map[string]*schema.Schema{
+					"field": {
+						Type:        schema.TypeList,
+						MinItems:    1,
+						Description: "Condition criteria for a field",
+						Required:    true,
+						Elem: &schema.Resource{
+							Schema: map[string]*schema.Schema{
+								"key": {
+									Type:        schema.TypeString,
+									Description: "Key which should be matched from resulting object",
+									Required:    true,
+								},
+								"value": {
+									Type:        schema.TypeString,
+									Description: "Value to wait for",
+									Required:    true,
+								},
+								"value_type": {
+									Type:             schema.TypeString,
+									Description:      "Value type. Can be either a `eq` (equivalent) or `regex`",
+									ValidateDiagFunc: validate2.ToDiagFunc(validate2.StringInSlice([]string{"eq", "regex"}, false)),
+									Default:          "eq",
+									Optional:         true,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 )
 
@@ -565,6 +607,20 @@ func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, m
 			if err != nil {
 				return err
 			}
+		}
+	}
+
+	if v, ok := d.GetOk("wait_for"); ok {
+		timeout := d.Timeout(schema.TimeoutCreate)
+		waitFor := types.WaitFor{}
+		if err := mapstructure.Decode((v.([]interface{}))[0], &waitFor); err != nil {
+			return fmt.Errorf("cannot decode wait for conditions %v", err)
+		}
+		log.Printf("[INFO] %v waiting for wait conditions for %vmin", manifest, timeout.Minutes())
+		err = resource.RetryContext(ctx, timeout,
+			waitForFields(ctx, restClient, waitFor.Field, manifest.GetNamespace(), manifest.GetName()))
+		if err != nil {
+			return err
 		}
 	}
 
@@ -824,6 +880,48 @@ func GetDeploymentCondition(status apps_v1.DeploymentStatus, condType apps_v1.De
 		}
 	}
 	return nil
+}
+
+func waitForFields(ctx context.Context, provider *RestClientResult, conditions []types.WaitForField, ns, name string) resource.RetryFunc {
+	return func() *resource.RetryError {
+		rawResponse, err := provider.ResourceInterface.Get(ctx, name, meta_v1.GetOptions{})
+		if err != nil {
+			return resource.NonRetryableError(err)
+		}
+
+		//convert to json and create a json query object from it
+		yamlJson, err := rawResponse.MarshalJSON()
+		if err != nil {
+			return resource.NonRetryableError(err)
+		}
+		gq := gojsonq.New().FromString(string(yamlJson))
+		for _, c := range conditions {
+			//find the key
+			v := gq.Reset().Find(c.Key)
+			if v == nil {
+				return resource.RetryableError(fmt.Errorf("key %s was not found in the resource %s", c.Key, name))
+			}
+			// for the sake of comparison, we will convert everything to a string
+			stringVal := fmt.Sprintf("%v", v)
+			switch c.ValueType {
+			case "regex":
+				matched, err := regexp.Match(c.Value, []byte(stringVal))
+				switch {
+				case err != nil:
+					return resource.NonRetryableError(fmt.Errorf(
+						"invalid regex `%s`. error was %v", c.Value, err))
+				case !matched:
+					return resource.RetryableError(fmt.Errorf("%s key %s did not match regex %s. Value was %s", name, c.Key, c.Value, stringVal))
+				}
+
+			case "eq", "":
+				if stringVal != c.Value {
+					return resource.RetryableError(fmt.Errorf("%s key %s value was not equal to expected. Got %s, want %s", name, c.Key, stringVal, c.Value))
+				}
+			}
+		}
+		return nil
+	}
 }
 
 func waitForDeploymentReplicasFunc(ctx context.Context, provider *KubeProvider, ns, name string) resource.RetryFunc {

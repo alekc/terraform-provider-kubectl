@@ -38,6 +38,57 @@ YAML
 	})
 }
 
+func TestAccKubectl_WaitFor(t *testing.T) {
+	//language=hcl
+	config := `
+resource "kubectl_manifest" "test" {
+	wait_for {
+		field {
+			key = "status.containerStatuses.[0].ready"
+			value = "true"
+		}
+		field {
+			key = "status.phase"
+			value = "Running"
+		}
+		field {
+			key = "status.podIP"
+			value = "^(\\d+(\\.|$)){4}"
+			value_type = "regex"
+		}
+	}
+	yaml_body = <<YAML
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.14.2
+    readinessProbe:
+      httpGet:
+        path: "/"
+        port: 80			
+      initialDelaySeconds: 10
+YAML
+}
+`
+
+	//start := time.Now()
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckkubectlDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				//todo: improve checking
+			},
+		},
+	})
+}
+
 func TestAccKubectlUnknownNamespace(t *testing.T) {
 
 	config := `
