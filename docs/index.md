@@ -29,29 +29,9 @@ terraform {
 }
 ```
 
-### Terraform 0.12
-
-#### Install latest version
-
-The following one-liner script will fetch the latest provider version and download it to your `~/.terraform.d/plugins` directory.
-
-```bash
-$ mkdir -p ~/.terraform.d/plugins && \
-      curl -Ls https://api.github.com/repos/gavinbunney/terraform-provider-kubectl/releases/latest \
-      | jq -r ".assets[] | select(.browser_download_url | contains(\"$(uname -s | tr A-Z a-z)\")) | select(.browser_download_url | contains(\"amd64\")) | .browser_download_url" \
-      | xargs -n 1 curl -Lo ~/.terraform.d/plugins/terraform-provider-kubectl.zip && \
-      pushd ~/.terraform.d/plugins/ && \
-      unzip ~/.terraform.d/plugins/terraform-provider-kubectl.zip -d terraform-provider-kubectl-tmp && \
-      mv terraform-provider-kubectl-tmp/terraform-provider-kubectl* . && \
-      chmod +x terraform-provider-kubectl* && \
-      rm -rf terraform-provider-kubectl-tmp && \
-      rm -rf terraform-provider-kubectl.zip && \
-      popd
-```
-
 #### Install manually
 
-If you don't want to use the one-liner above, you can download a binary for your system from the [release page](https://github.com/gavinbunney/terraform-provider-kubectl/releases), 
+If you don't want to use the one-liner above, you can download a binary for your system from the [release page](https://github.com/alekc/terraform-provider-kubectl/releases), 
 then either place it at the root of your Terraform folder or in the Terraform plugin folder on your system. 
 
 ## Configuration
