@@ -30,7 +30,7 @@ import (
 	"k8s.io/kubectl/pkg/cmd/apply"
 	k8sdelete "k8s.io/kubectl/pkg/cmd/delete"
 
-	backoff "github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 
 	apps_v1 "k8s.io/api/apps/v1"
@@ -894,14 +894,14 @@ func waitForFields(ctx context.Context, provider *RestClientResult, conditions [
 			return resource.NonRetryableError(err)
 		}
 
-		//convert to json and create a json query object from it
+		// convert to json and create a json query object from it
 		yamlJson, err := rawResponse.MarshalJSON()
 		if err != nil {
 			return resource.NonRetryableError(err)
 		}
 		gq := gojsonq.New().FromString(string(yamlJson))
 		for _, c := range conditions {
-			//find the key
+			// find the key
 			v := gq.Reset().Find(c.Key)
 			if v == nil {
 				return resource.RetryableError(fmt.Errorf("key %s was not found in the resource %s", c.Key, name))
