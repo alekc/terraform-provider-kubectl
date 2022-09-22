@@ -3,7 +3,7 @@
     <module name="terraform-provider-kubectl" />
     <working_directory value="$PROJECT_DIR$/kubernetes" />
     <envs>
-      <env name="KUBECONFIG" value="/home/alekc/.kube/config" />
+      <env name="KUBECONFIG" value="$USER_HOME$/.kube/config" />
       <env name="TF_ACC" value="1" />
     </envs>
     <root_directory value="$PROJECT_DIR$" />

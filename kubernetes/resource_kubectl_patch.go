@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -18,12 +19,20 @@ import (
 
 var patchTypes = map[string]types.PatchType{"json": types.JSONPatchType, "merge": types.MergePatchType, "strategic": types.StrategicMergePatchType}
 
+func resourceKubectlPatchRead(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
+	test2(
+		meta.(*KubeProvider),
+		d.Get("name").(string),
+		d.Get("namespace").(string),
+		d.Get("object_type").(string),
+	)
+	return nil
+}
+
 func resourceKubectlPatch() *schema.Resource {
 	return &schema.Resource{
 		CreateContext: resourceKubectlPatchCreate,
-		ReadContext: func(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-			return nil
-		},
+		ReadContext:   resourceKubectlPatchRead,
 		DeleteContext: func(ctx context.Context, data *schema.ResourceData, meta interface{}) diag.Diagnostics {
 			return nil
 		},
@@ -81,8 +90,8 @@ func resourceKubectlPatch() *schema.Resource {
 	}
 }
 func resourceKubectlPatchCreate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	provider := meta.(*KubeProvider)
 	var err error
+	provider := meta.(*KubeProvider)
 	factory := cmdutil.NewFactory(provider)
 
 	patchType := patchTypes[strings.ToLower(d.Get("patch_type").(string))]
@@ -127,7 +136,7 @@ func resourceKubectlPatchCreate(ctx context.Context, d *schema.ResourceData, met
 		}
 		helper := resource.
 			NewHelper(client, mapping).
-			DryRun(false).
+			//DryRun(false).
 			WithFieldManager(d.Get("field_manager").(string))
 		patchedObj, err := helper.Patch(
 			info.Namespace,
@@ -163,5 +172,45 @@ func resourceKubectlPatchCreate(ctx context.Context, d *schema.ResourceData, met
 
 		return nil
 	})
-	return diag.FromErr(err)
+	if err != nil {
+		return diag.FromErr(err)
+	}
+	return resourceKubectlPatchRead(ctx, d, meta)
+}
+
+func test2(provider *KubeProvider, name, namespace, objectType string) error {
+	factory := cmdutil.NewFactory(provider)
+	r := factory.NewBuilder().
+		Unstructured().
+		NamespaceParam(namespace).DefaultNamespace().
+		ResourceTypeOrNameArgs(true, objectType, name).
+		//ContinueOnError().
+		Latest().
+		Flatten().
+		//TransformRequests(o.transformRequests). //needed? kind of. Called by .infos()
+		Do()
+	if false {
+		r.IgnoreErrors(errors.IsNotFound)
+	}
+	if err := r.Err(); err != nil {
+		return err
+	}
+	r.Visit(func(info *resource.Info, err error) error {
+		if err != nil {
+			return err
+		}
+		mapping := info.ResourceMapping()
+		client, err := factory.UnstructuredClientForMapping(mapping)
+		if err != nil {
+			return err
+		}
+		helper := resource.NewHelper(client, mapping)
+		get, err := helper.Get(namespace, name)
+		if err != nil {
+			return err
+		}
+		fmt.Println(get)
+		return nil
+	})
+	return nil
 }
