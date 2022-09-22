@@ -20,13 +20,13 @@ import (
 var patchTypes = map[string]types.PatchType{"json": types.JSONPatchType, "merge": types.MergePatchType, "strategic": types.StrategicMergePatchType}
 
 func resourceKubectlPatchRead(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	test2(
+	_, err := readUnstructuredFromK8s(
 		meta.(*KubeProvider),
 		d.Get("name").(string),
 		d.Get("namespace").(string),
-		d.Get("object_type").(string),
+		d.Get("type").(string),
 	)
-	return nil
+	return diag.FromErr(err)
 }
 
 func resourceKubectlPatch() *schema.Resource {
@@ -136,7 +136,7 @@ func resourceKubectlPatchCreate(ctx context.Context, d *schema.ResourceData, met
 		}
 		helper := resource.
 			NewHelper(client, mapping).
-			//DryRun(false).
+			// DryRun(false).
 			WithFieldManager(d.Get("field_manager").(string))
 		patchedObj, err := helper.Patch(
 			info.Namespace,
@@ -178,39 +178,46 @@ func resourceKubectlPatchCreate(ctx context.Context, d *schema.ResourceData, met
 	return resourceKubectlPatchRead(ctx, d, meta)
 }
 
-func test2(provider *KubeProvider, name, namespace, objectType string) error {
+// readUnstructuredFromK8s returns an unstructured runtime object from kubernetes
+func readUnstructuredFromK8s(provider *KubeProvider, name, namespace, objectType string) (runtime.Object, error) {
 	factory := cmdutil.NewFactory(provider)
 	r := factory.NewBuilder().
 		Unstructured().
 		NamespaceParam(namespace).DefaultNamespace().
 		ResourceTypeOrNameArgs(true, objectType, name).
-		//ContinueOnError().
+		// ContinueOnError().
 		Latest().
 		Flatten().
-		//TransformRequests(o.transformRequests). //needed? kind of. Called by .infos()
+		// TransformRequests(o.transformRequests). //needed? kind of. Called by .infos()
 		Do()
 	if false {
 		r.IgnoreErrors(errors.IsNotFound)
 	}
 	if err := r.Err(); err != nil {
-		return err
+		return nil, err
 	}
-	r.Visit(func(info *resource.Info, err error) error {
+	var obj runtime.Object
+	err := r.Visit(func(info *resource.Info, err error) error {
 		if err != nil {
 			return err
 		}
+		// obtain the mapping
 		mapping := info.ResourceMapping()
+
 		client, err := factory.UnstructuredClientForMapping(mapping)
 		if err != nil {
 			return err
 		}
+
 		helper := resource.NewHelper(client, mapping)
-		get, err := helper.Get(namespace, name)
+		obj, err = helper.Get(namespace, name)
 		if err != nil {
 			return err
 		}
-		fmt.Println(get)
 		return nil
 	})
-	return nil
+	if err != nil {
+		return nil, err
+	}
+	return obj, err
 }

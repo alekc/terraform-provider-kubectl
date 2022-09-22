@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"log"
-	"strings"
 	"testing"
 	"text/template"
 )
@@ -37,37 +38,33 @@ func TestAccKubectl_Patch(t *testing.T) {
 					"name":      objectName,
 				}),
 				Check: func(state *terraform.State) error {
-					rs, ok := state.RootModule().Resources["kubectl_patch.test"]
-					if !ok {
-						return fmt.Errorf("not found %v", objectName)
-					}
-
-					name, ns, err := idParts(rs.Primary.ID)
+					// obtain the name, type, ns from the state
+					name, objType, ns, err := nameNsFromState(state, "kubectl_patch.test")
 					if err != nil {
 						return err
 					}
-					fmt.Println(name, ns)
-					// provider := testAccProvider.Meta().(*KubeProvider)
-					// provider.DynamicClient()
-					// provider := testAccProvider.Meta().(*KubeProvider)
-					// factory := cmdutil.NewFactory(provider)
-					// r := factory.NewBuilder().
-					// 	Unstructured().
-					// 	ContinueOnError().
-					// 	NamespaceParam("default").DefaultNamespace().
-					// 	ResourceTypeOrNameArgs(
-					// 		false,
-					// 		state.g,
-					// 		objectName).
-					// 	Flatten().
-					// 	Do()
-					// cl, err := provider.DynamicClient()
-					// if err != nil {
-					// 	return err
-					// }
-					// // get
-					// provider.ToRESTMapper()
-
+					rawObject, err := readUnstructuredFromK8s(
+						testAccProvider.Meta().(*KubeProvider),
+						name,
+						ns,
+						objType)
+					if err != nil {
+						return err
+					}
+					// check that the patch worked correctly
+					unstruct, err := runtime.DefaultUnstructuredConverter.ToUnstructured(rawObject)
+					if err != nil {
+						return err
+					}
+					replicas, b, err := unstructured.NestedInt64(unstruct, "spec", "replicas")
+					switch {
+					case err != nil:
+						return err
+					case !b:
+						return fmt.Errorf("not found")
+					case replicas != 2:
+						return fmt.Errorf("Invalid value for spec.replica. Wanted v, got %v", replicas)
+					}
 					return nil
 				},
 			},
@@ -75,12 +72,16 @@ func TestAccKubectl_Patch(t *testing.T) {
 	})
 }
 
-func idParts(id string) (string, string, error) {
-	parts := strings.Split(id, "/")
-	if len(parts) != 2 {
-		err := fmt.Errorf("Unexpected ID format (%q), expected %q.", id, "namespace/name")
-		return "", "", err
+func nameNsFromState(state *terraform.State, resourceName string) (name, objectType, ns string, err error) {
+	rs, ok := state.RootModule().Resources[resourceName]
+	if !ok {
+		err = fmt.Errorf("not found %v", resourceName)
+		return
 	}
 
-	return parts[0], parts[1], nil
+	attributes := rs.Primary.Attributes
+	name = attributes["name"]
+	objectType = attributes["type"]
+	ns = attributes["namespace"]
+	return
 }
