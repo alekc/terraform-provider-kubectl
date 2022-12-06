@@ -2,9 +2,9 @@
 
 Create a Kubernetes resource using raw YAML manifests.
 
-This resource handles creation, deletion and even updating your kubernetes resources. This allows complete lifecycle management of your kubernetes resources as terraform resources!
+This resource handles creation, deletion and even updating your Kubernetes resources. This allows complete lifecycle management of your Kubernetes resources as terraform resources!
 
-Behind the scenes, this provider uses the same capability as the `kubectl apply` command, that is, you can update the YAML inline and the resource will be updated in place in kubernetes.
+Behind the scenes, this provider uses the same capability as the `kubectl apply` command, that is, you can update the YAML inline and the resource will be updated in place in Kubernetes.
 
 > **TIP:** This resource only supports a single yaml resource. If you have a list of documents in your yaml file,
 > use the [kubectl_path_documents](https://registry.terraform.io/providers/alekc/kubectl/latest/docs/data-sources/kubectl_path_documents) data source to split the files into individual resources.
@@ -68,7 +68,7 @@ spec:
     readinessProbe:
       httpGet:
         path: "/"
-        port: 80			
+        port: 80
       initialDelaySeconds: 10
 YAML
 }
@@ -80,6 +80,7 @@ YAML
 * `sensitive_fields` - Optional. List of fields (dot-syntax) which are sensitive and should be obfuscated in output. Defaults to `["data"]` for Secrets.
 * `force_new` - Optional. Forces delete & create of resources if the `yaml_body` changes. Default `false`.
 * `server_side_apply` - Optional. Allow using server-side-apply method. Default `false`.
+* `field_manager` - Optional. Override the default field manager name. This is only relevent when using server-side apply. Default `kubectl`.
 * `force_conflicts` - Optional. Allow using force_conflicts. Default `false`.
 * `apply_only` - Optional. It does not delete resource in any case Default `false`.
 * `ignore_fields` - Optional. List of map fields to ignore when applying the manifest. See below for more details.
@@ -117,9 +118,9 @@ Optional:
 * `name` - Extracted object name from `yaml_body`.
 * `namespace` - Extracted object namespace from `yaml_body`.
 * `uid` - Kubernetes unique identifier from last run.
-* `live_uid` - Current uuid from kubernetes.
-* `yaml_incluster` - Current yaml within kubernetes.
-* `live_manifest_incluster` - Current manifest within kubernetes.
+* `live_uid` - Current uuid from Kubernetes.
+* `yaml_incluster` - Current yaml within Kubernetes.
+* `live_manifest_incluster` - Current manifest within Kubernetes.
 
 ## Sensitive Fields
 
@@ -127,7 +128,7 @@ You can obfuscate fields in the diff output by setting the `sensitive_fields` op
 
 By default, this is set to `["data"]` for all `v1/Secret` manifests.
 
-The fields provided should use dot-separater syntax to specify the field to obfuscate.
+The fields provided should use dot-separator syntax to specify the field to obfuscate.
 
 ```hcl
 resource "kubectl_manifest" "test" {
