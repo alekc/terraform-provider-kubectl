@@ -4,6 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"log"
+	"os"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
 	"github.com/alekc/terraform-provider-kubectl/flatten"
 	"github.com/alekc/terraform-provider-kubectl/internal/types"
 	"github.com/alekc/terraform-provider-kubectl/yaml"
@@ -12,19 +19,11 @@ import (
 	validate2 "github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
 	"github.com/mitchellh/mapstructure"
 	"github.com/thedevsaddam/gojsonq/v2"
-	"io/ioutil"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/cli-runtime/pkg/printers"
 	"k8s.io/kubectl/pkg/scheme"
 	"k8s.io/kubectl/pkg/validation"
-	"os"
-	"regexp"
-	"sort"
-	"time"
-
-	"log"
-	"strings"
 
 	k8sresource "k8s.io/cli-runtime/pkg/resource"
 	apiregistration "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
@@ -404,6 +403,12 @@ var (
 			Optional:    true,
 			Default:     false,
 		},
+		"field_manager": {
+			Type:        schema.TypeString,
+			Description: "Override the default field manager name. This is only relevent when using server-side apply.",
+			Optional:    true,
+			Default:     "kubectl",
+		},
 		"force_conflicts": {
 			Type:        schema.TypeBool,
 			Description: "Default false.",
@@ -525,7 +530,7 @@ func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, m
 		return fmt.Errorf("%v failed to convert to yaml: %+v", manifest, err)
 	}
 
-	tmpfile, _ := ioutil.TempFile("", "*kubectl_manifest.yaml")
+	tmpfile, _ := os.CreateTemp("", "*kubectl_manifest.yaml")
 	_, _ = tmpfile.Write([]byte(yamlBody))
 	_ = tmpfile.Close()
 
@@ -548,7 +553,7 @@ func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, m
 
 	if d.Get("server_side_apply").(bool) {
 		applyOptions.ServerSideApply = true
-		applyOptions.FieldManager = "kubectl"
+		applyOptions.FieldManager = d.Get("field_manager").(string)
 	}
 
 	if d.Get("force_conflicts").(bool) {
