@@ -12,6 +12,7 @@ import (
 	k8sresource "k8s.io/cli-runtime/pkg/resource"
 	"k8s.io/client-go/discovery"
 	diskcached "k8s.io/client-go/discovery/cached/disk"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	restclient "k8s.io/client-go/rest"
@@ -166,6 +167,7 @@ func Provider() *schema.Provider {
 		ResourcesMap: map[string]*schema.Resource{
 			"kubectl_manifest":       resourceKubectlManifest(),
 			"kubectl_server_version": resourceKubectlServerVersion(),
+			"kubectl_patch":          resourceKubectlPatch(),
 		},
 	}
 
@@ -215,6 +217,18 @@ func (p *KubeProvider) ToRESTMapper() (meta.RESTMapper, error) {
 	}
 
 	return nil, fmt.Errorf("no restmapper")
+}
+func (p *KubeProvider) DynamicClient() (dynamic.Interface, error) {
+	config, err := p.ToRESTConfig()
+	if err != nil {
+		return nil, err
+	}
+	dynClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return nil, err
+	}
+
+	return dynClient, err
 }
 
 var kubectlApplyRetryCount uint64

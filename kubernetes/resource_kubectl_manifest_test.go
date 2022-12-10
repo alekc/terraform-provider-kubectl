@@ -75,7 +75,7 @@ YAML
 }
 `
 
-	//start := time.Now()
+	// start := time.Now()
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
@@ -83,7 +83,7 @@ YAML
 		Steps: []resource.TestStep{
 			{
 				Config: config,
-				//todo: improve checking
+				// todo: improve checking
 			},
 		},
 	})
@@ -531,12 +531,12 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 		{
 			description: "Simple map with string value",
 			userProvided: map[string]interface{}{
-				"test1": "test2",
+				"test1": "readUnstructuredFromK8s",
 			},
 			liveManifest: map[string]interface{}{
-				"test1": "test2",
+				"test1": "readUnstructuredFromK8s",
 			},
-			expectedFields:      "test1=test2",
+			expectedFields:      "test1=readUnstructuredFromK8s",
 			expectedFingerprint: "9369bac4ce5d012a79110117b871e20bb3484dab079d1471ee5981da42fb4a30",
 			expectedDrift:       false,
 		},
@@ -544,18 +544,18 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 			// Ensure skippable fields are skipped
 			description: "Simple map with string value and Skippable fields",
 			userProvided: map[string]interface{}{
-				"test1": "test2",
+				"test1": "readUnstructuredFromK8s",
 				"metadata": map[string]interface{}{
 					"resourceVersion": "1245",
 				},
 			},
 			liveManifest: map[string]interface{}{
-				"test1": "test2",
+				"test1": "readUnstructuredFromK8s",
 				"metadata": map[string]interface{}{
 					"resourceVersion": "1245",
 				},
 			},
-			expectedFields:      "test1=test2",
+			expectedFields:      "test1=readUnstructuredFromK8s",
 			expectedFingerprint: "9369bac4ce5d012a79110117b871e20bb3484dab079d1471ee5981da42fb4a30",
 			expectedDrift:       false,
 		},
@@ -563,14 +563,14 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 			// Ensure ignored fields are skipped
 			description: "Simple map with string value and ignored fields",
 			userProvided: map[string]interface{}{
-				"test1":      "test2",
+				"test1":      "readUnstructuredFromK8s",
 				"ignoreThis": "1245",
 			},
 			liveManifest: map[string]interface{}{
-				"test1":      "test2",
+				"test1":      "readUnstructuredFromK8s",
 				"ignoreThis": "1245",
 			},
-			expectedFields:      "test1=test2",
+			expectedFields:      "test1=readUnstructuredFromK8s",
 			expectedFingerprint: "9369bac4ce5d012a79110117b871e20bb3484dab079d1471ee5981da42fb4a30",
 			ignored:             []string{"ignoreThis"},
 			expectedDrift:       false,
@@ -579,18 +579,18 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 			// Ensure ignored sub fields are skipped
 			description: "Simple map with string value and ignored fields",
 			userProvided: map[string]interface{}{
-				"test1": "test2",
+				"test1": "readUnstructuredFromK8s",
 				"ignore": map[string]string{
 					"this": "5432",
 				},
 			},
 			liveManifest: map[string]interface{}{
-				"test1": "test2",
+				"test1": "readUnstructuredFromK8s",
 				"ignore": map[string]string{
 					"this": "1245",
 				},
 			},
-			expectedFields:      "test1=test2",
+			expectedFields:      "test1=readUnstructuredFromK8s",
 			expectedFingerprint: "9369bac4ce5d012a79110117b871e20bb3484dab079d1471ee5981da42fb4a30",
 			ignored:             []string{"ignore.this"},
 			expectedDrift:       false,
@@ -599,18 +599,18 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 			// Ensure ignored sub fields are skipped
 			description: "Simple map with string ignore nested fields",
 			userProvided: map[string]interface{}{
-				"test1": "test2",
+				"test1": "readUnstructuredFromK8s",
 				"ignore": map[string]string{
 					"this": "5432",
 				},
 			},
 			liveManifest: map[string]interface{}{
-				"test1": "test2",
+				"test1": "readUnstructuredFromK8s",
 				"ignore": map[string]string{
 					"this": "1245",
 				},
 			},
-			expectedFields:      "test1=test2",
+			expectedFields:      "test1=readUnstructuredFromK8s",
 			expectedFingerprint: "9369bac4ce5d012a79110117b871e20bb3484dab079d1471ee5981da42fb4a30",
 			ignored:             []string{"ignore"},
 			expectedDrift:       false,
@@ -619,13 +619,13 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 			// Ensure ignored sub fields are skipped
 			description: "Simple map with string ignore highly nested fields",
 			userProvided: map[string]interface{}{
-				"test1": "test2",
+				"test1": "readUnstructuredFromK8s",
 				"ignore": map[string]string{
 					"this": "5432",
 				},
 			},
 			liveManifest: map[string]interface{}{
-				"test1": "test2",
+				"test1": "readUnstructuredFromK8s",
 				"ignore": map[string]interface{}{
 					"this": "1245",
 					"also": map[string]string{
@@ -633,7 +633,7 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 					},
 				},
 			},
-			expectedFields:      "test1=test2",
+			expectedFields:      "test1=readUnstructuredFromK8s",
 			expectedFingerprint: "9369bac4ce5d012a79110117b871e20bb3484dab079d1471ee5981da42fb4a30",
 			ignored:             []string{"ignore"},
 			expectedDrift:       false,
@@ -642,18 +642,18 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 			// Ensure nested `map[string]string` are supported
 			description: "Map with nested map[string]string",
 			userProvided: map[string]interface{}{
-				"test1": "test2",
+				"test1": "readUnstructuredFromK8s",
 				"nest": map[string]string{
 					"bob": "bill",
 				},
 			},
 			liveManifest: map[string]interface{}{
-				"test1": "test2",
+				"test1": "readUnstructuredFromK8s",
 				"nest": map[string]string{
 					"bob": "bill",
 				},
 			},
-			expectedFields:      "nest.bob=bill,test1=test2",
+			expectedFields:      "nest.bob=bill,test1=readUnstructuredFromK8s",
 			expectedFingerprint: "3101bf7d8f32b48993efa15e0fdd439237e63ef093d23e92deb9b8485e3faa03",
 			expectedDrift:       false,
 		},
@@ -661,7 +661,7 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 			// Ensure nested `map[string]string` with different ordering are supported
 			description: "Map with nested map[string]string with different ordering",
 			userProvided: map[string]interface{}{
-				"test1": "test2",
+				"test1": "readUnstructuredFromK8s",
 				"nest": map[string]string{
 					"bob1": "bill",
 					"bob2": "bill",
@@ -669,21 +669,21 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 				},
 			},
 			liveManifest: map[string]interface{}{
-				"test1": "test2",
+				"test1": "readUnstructuredFromK8s",
 				"nest": map[string]string{
 					"bob2": "bill",
 					"bob1": "bill",
 					"bob3": "bill",
 				},
 			},
-			expectedFields:      "nest.bob1=bill,nest.bob2=bill,nest.bob3=bill,test1=test2",
+			expectedFields:      "nest.bob1=bill,nest.bob2=bill,nest.bob3=bill,test1=readUnstructuredFromK8s",
 			expectedFingerprint: "0ad7f5a7682d24a2105a457f9093ab406d9a3c92a14d1e67e25ac0a1fea79ca9",
 			expectedDrift:       false,
 		},
 		{
 			description: "Map with nested map[string]string with nested slice",
 			userProvided: map[string]interface{}{
-				"test1": "test2",
+				"test1": "readUnstructuredFromK8s",
 				"nest": map[string]interface{}{
 					"bob1": []interface{}{
 						"a",
@@ -693,7 +693,7 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 				},
 			},
 			liveManifest: map[string]interface{}{
-				"test1": "test2",
+				"test1": "readUnstructuredFromK8s",
 				"nest": map[string]interface{}{
 					"bob1": []interface{}{
 						"c",
@@ -702,14 +702,14 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 					},
 				},
 			},
-			expectedFields:      "nest.bob1.#=3,nest.bob1.0=c,nest.bob1.1=b,nest.bob1.2=a,test1=test2",
+			expectedFields:      "nest.bob1.#=3,nest.bob1.0=c,nest.bob1.1=b,nest.bob1.2=a,test1=readUnstructuredFromK8s",
 			expectedFingerprint: "7c234055ab3af4bfc4541b4f11ebe41f089f65ff2276454783fd066c4e890bb9",
 			expectedDrift:       true,
 		},
 		{
 			description: "Map with nested map[string]string with nested array and nested map",
 			userProvided: map[string]interface{}{
-				"test1": "test2",
+				"test1": "readUnstructuredFromK8s",
 				"nest": map[string]interface{}{
 					"bob1": []interface{}{
 						map[string]string{
@@ -726,7 +726,7 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 				},
 			},
 			liveManifest: map[string]interface{}{
-				"test1": "test2",
+				"test1": "readUnstructuredFromK8s",
 				"nest": map[string]interface{}{
 					"bob1": []interface{}{
 						map[string]string{
@@ -742,7 +742,7 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 					},
 				},
 			},
-			expectedFields:      "nest.bob1.#=2,nest.bob1.0.1=1,nest.bob1.0.2=2,nest.bob1.0.3=3,nest.bob1.1.1=1,nest.bob1.1.2=2,nest.bob1.1.3=3,test1=test2",
+			expectedFields:      "nest.bob1.#=2,nest.bob1.0.1=1,nest.bob1.0.2=2,nest.bob1.0.3=3,nest.bob1.1.1=1,nest.bob1.1.2=2,nest.bob1.1.3=3,test1=readUnstructuredFromK8s",
 			expectedFingerprint: "f3efd8721cbfa6421a4230c6fffdac94d63a51e57097a45979972e6654a992da",
 			expectedDrift:       false,
 		},
@@ -750,14 +750,14 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 			// Ensure ordering of the fields doesn't affect matching
 			description: "Different Ordering",
 			userProvided: map[string]interface{}{
-				"ztest1": "test2",
-				"afield": "test2",
+				"ztest1": "readUnstructuredFromK8s",
+				"afield": "readUnstructuredFromK8s",
 			},
 			liveManifest: map[string]interface{}{
-				"afield": "test2",
-				"ztest1": "test2",
+				"afield": "readUnstructuredFromK8s",
+				"ztest1": "readUnstructuredFromK8s",
 			},
-			expectedFields:      "afield=test2,ztest1=test2",
+			expectedFields:      "afield=readUnstructuredFromK8s,ztest1=readUnstructuredFromK8s",
 			expectedFingerprint: "6ddd159d93a55b78442c74cacfff5a2afb04ead770f87ac0af1b7471e71ddead",
 			expectedDrift:       false,
 		},
@@ -768,15 +768,15 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 				"ztest1": []string{
 					"1", "2",
 				},
-				"afield": "test2",
+				"afield": "readUnstructuredFromK8s",
 			},
 			liveManifest: map[string]interface{}{
-				"afield": "test2",
+				"afield": "readUnstructuredFromK8s",
 				"ztest1": []string{
 					"1", "2",
 				},
 			},
-			expectedFields:      "afield=test2,ztest1.#=2,ztest1.0=1,ztest1.1=2",
+			expectedFields:      "afield=readUnstructuredFromK8s,ztest1.#=2,ztest1.0=1,ztest1.1=2",
 			expectedFingerprint: "d09ba05ec3c744be7174243acfd2370a6d0dabfbe7980bc5ee02c0790d383960",
 			expectedDrift:       false,
 		},
@@ -784,15 +784,15 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 			// Ensure fields added to the `liveManifest` which aren't present in the `originl` are ignored
 			description: "Ignore additional fields",
 			userProvided: map[string]interface{}{
-				"afield": "test2",
+				"afield": "readUnstructuredFromK8s",
 			},
 			liveManifest: map[string]interface{}{
-				"afield": "test2",
+				"afield": "readUnstructuredFromK8s",
 				"ztest1": []string{
 					"1", "2",
 				},
 			},
-			expectedFields:      "afield=test2",
+			expectedFields:      "afield=readUnstructuredFromK8s",
 			expectedFingerprint: "18cf5c716095e42b64da5d4929c605022b6799fb3866bf9f1d12f4e30d40c185",
 			expectedDrift:       false,
 		},
@@ -800,13 +800,13 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 			// Ensure that fields present in the `userProvided` but missing in the `liveManifest` are skipped
 			description: "Handle removed fields",
 			userProvided: map[string]interface{}{
-				"afield":   "test2",
-				"igetlost": "test2",
+				"afield":   "readUnstructuredFromK8s",
+				"igetlost": "readUnstructuredFromK8s",
 			},
 			liveManifest: map[string]interface{}{
-				"afield": "test2",
+				"afield": "readUnstructuredFromK8s",
 			},
-			expectedFields:      "afield=test2",
+			expectedFields:      "afield=readUnstructuredFromK8s",
 			expectedFingerprint: "18cf5c716095e42b64da5d4929c605022b6799fb3866bf9f1d12f4e30d40c185",
 			expectedDrift:       true,
 		},
@@ -839,7 +839,7 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 			// Ensure that the updated value fo the `liveManifest` object is taken for the `willchange` field
 			description: "Map with nested map[string]string with updated field",
 			userProvided: map[string]interface{}{
-				"test1": "test2",
+				"test1": "readUnstructuredFromK8s",
 				"nest": map[string]string{
 					"willchange": "bill",
 				},

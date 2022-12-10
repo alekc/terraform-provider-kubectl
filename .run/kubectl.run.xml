@@ -1,0 +1,12 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="kubectl" type="GoApplicationRunConfiguration" factoryName="Go Application">
+    <module name="terraform-provider-kubectl" />
+    <working_directory value="$PROJECT_DIR$" />
+    <parameters value="get po vault-0 " />
+    <kind value="PACKAGE" />
+    <package value="github.com/alekc/terraform-provider-kubectl/cmd/kubectl" />
+    <directory value="$PROJECT_DIR$" />
+    <filePath value="$PROJECT_DIR$/cmd/kubectl/main.go" />
+    <method v="2" />
+  </configuration>
+</component>

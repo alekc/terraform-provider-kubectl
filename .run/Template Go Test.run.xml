@@ -4,7 +4,7 @@
     <working_directory value="$PROJECT_DIR$" />
     <envs>
       <env name="TF_ACC" value="1" />
-      <env name="KUBECONFIG" value="$PROJECT_DIR$/scripts/kubeconfig.yaml" />
+      <env name="KUBECONFIG" value="$USER_HOME$/.kube/config" />
     </envs>
     <kind value="DIRECTORY" />
     <package value="github.com/alekc/terraform-provider-kubectl" />

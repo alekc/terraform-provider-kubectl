@@ -1,0 +1,18 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="TestAccKubectl_Patch" type="GoTestRunConfiguration" factoryName="Go Test">
+    <module name="terraform-provider-kubectl" />
+    <working_directory value="$PROJECT_DIR$/kubernetes" />
+    <envs>
+      <env name="KUBECONFIG" value="$USER_HOME$/.kube/config" />
+      <env name="TF_ACC" value="1" />
+    </envs>
+    <root_directory value="$PROJECT_DIR$" />
+    <kind value="PACKAGE" />
+    <package value="github.com/alekc/terraform-provider-kubectl/kubernetes" />
+    <directory value="$PROJECT_DIR$" />
+    <filePath value="$PROJECT_DIR$" />
+    <framework value="gotest" />
+    <pattern value="^\QTestAccKubectl_Patch\E$" />
+    <method v="2" />
+  </configuration>
+</component>
