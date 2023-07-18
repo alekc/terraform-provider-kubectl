@@ -14,12 +14,13 @@ jobs:
   get_version_matrix:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - id: get_version_matrix
         shell: bash
         run: scripts/get-version-matrix.sh
     outputs:
-      version_matrix: ${{ steps.get_version_matrix.outputs.matrix }}
+      terraform_versions: ${{ steps.get_version_matrix.outputs.terraform_versions }}
+      k8s_versions: ${{ steps.get_version_matrix.outputs.k8s_versions }}
   unit_test:
     runs-on: ubuntu-latest
     steps:
@@ -39,17 +40,19 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        terraform_version:  ${{ fromJson(needs.get_version_matrix.outputs.version_matrix) }}
+        terraform_version:  ${{ fromJson(needs.get_version_matrix.outputs.terraform_versions) }}
+        k8s_version:  ${{ fromJson(needs.get_version_matrix.outputs.k8s_versions) }}
     steps:
-      - uses: actions/checkout@master
+      - uses: actions/checkout@v3
       - name: Set up Go
         uses: actions/setup-go@v3
         with:
           go-version-file: go.mod
-      - uses: helm/kind-action@v1.4.0
+      - uses: helm/kind-action@v1.8.0
         id: kind
         with:
           wait: 2m
+          node_image: kindest/node:v${{ matrix.k8s_version }}
       - name: Acceptance Tests
         env:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
