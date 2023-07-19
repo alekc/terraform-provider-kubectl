@@ -22,7 +22,7 @@ terraform {
 
   required_providers {
     kubectl = {
-      source  = "alekc/kubectl"
+      source  = "dfroberg/kubectl"
       version = ">= 2.0.0"
     }
   }
@@ -31,7 +31,7 @@ terraform {
 
 #### Install manually
 
-If you don't want to use the one-liner above, you can download a binary for your system from the [release page](https://github.com/alekc/terraform-provider-kubectl/releases), 
+If you don't want to use the one-liner above, you can download a binary for your system from the [release page](https://github.com/dfroberg/terraform-provider-kubectl/releases), 
 then either place it at the root of your Terraform folder or in the Terraform plugin folder on your system. 
 
 ## Configuration

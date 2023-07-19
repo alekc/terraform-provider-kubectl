@@ -2,7 +2,8 @@ package main
 
 import (
 	"flag"
-	"github.com/alekc/terraform-provider-kubectl/kubernetes"
+
+	"github.com/dfroberg/terraform-provider-kubectl/kubernetes"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/plugin"
 )
@@ -15,7 +16,7 @@ func main() {
 
 	opts := &plugin.ServeOpts{
 		Debug:        debug,
-		ProviderAddr: "registry.terraform.io/alekc/kubectl",
+		ProviderAddr: "registry.terraform.io/dfroberg/kubectl",
 		ProviderFunc: func() *schema.Provider {
 			return kubernetes.Provider()
 		},

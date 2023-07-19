@@ -1,4 +1,4 @@
-module github.com/alekc/terraform-provider-kubectl
+module github.com/dfroberg/terraform-provider-kubectl
 
 go 1.18
 
