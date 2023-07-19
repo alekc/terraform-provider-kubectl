@@ -2,6 +2,13 @@ name: "tests"
 on:
   workflow_dispatch:
   push:
+    paths-ignore:
+      - "docs/**"
+      - ".run/**"
+      - "templates/**"
+      - "scripts/**"
+      - "*.md"
+      - ".github/**"
     branches:
       - master
   pull_request:
