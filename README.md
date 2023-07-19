@@ -81,10 +81,10 @@ See [User Guide](https://registry.terraform.io/providers/froberg-co/kubectl/late
 
 When you used another fork of this provider in the past, it is possible to change the provider on all existing resources within your state. A common use-case of this is to switch from `gavinbunney/kubectl` towards this fork.
 
-Change the `required_providers` sections in your main code and in all used modules to reflect the usage of `alekc/kubectl` as shown above. Once this is done, use the `state replace-provider` to make the switch on all existing resources in your state.
+Change the `required_providers` sections in your main code and in all used modules to reflect the usage of `froberg-co/kubectl` as shown above. Once this is done, use the `state replace-provider` to make the switch on all existing resources in your state.
 
 ```
-terraform state replace-provider gavinbunney/kubectl alekc/kubectl
+terraform state replace-provider gavinbunney/kubectl froberg-co/kubectl
 ```
 
 You should then `terraform init`, and the next terraform actions will use this provider.
