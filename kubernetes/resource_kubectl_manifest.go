@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dfroberg/terraform-provider-kubectl/flatten"
-	"github.com/dfroberg/terraform-provider-kubectl/internal/types"
-	"github.com/dfroberg/terraform-provider-kubectl/yaml"
+	"github.com/froberg-co/terraform-provider-kubectl/flatten"
+	"github.com/froberg-co/terraform-provider-kubectl/internal/types"
+	"github.com/froberg-co/terraform-provider-kubectl/yaml"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	validate2 "github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"

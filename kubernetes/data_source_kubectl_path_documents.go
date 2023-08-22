@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dfroberg/terraform-provider-kubectl/yaml"
+	"github.com/froberg-co/terraform-provider-kubectl/yaml"
 	hcl "github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/ext/tryfunc"
 	"github.com/hashicorp/hcl/v2/hclsyntax"

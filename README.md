@@ -1,6 +1,6 @@
 # Kubernetes "kubectl" Provider 
 
-![Build Status](https://github.com/dfroberg/terraform-provider-kubectl/actions/workflows/tests.yml/badge.svg) [![user guide](https://img.shields.io/badge/-user%20guide-blue)](https://registry.terraform.io/providers/dfroberg/kubectl)
+![Build Status](https://github.com/froberg-co/terraform-provider-kubectl/actions/workflows/tests.yml/badge.svg) [![user guide](https://img.shields.io/badge/-user%20guide-blue)](https://registry.terraform.io/providers/froberg-co/kubectl)
 
 This provider is the best way of managing Kubernetes resources in Terraform, by allowing you to use the thing 
 Kubernetes loves best - yaml!
@@ -25,7 +25,7 @@ terraform {
 
   required_providers {
     kubectl = {
-      source  = "dfroberg/kubectl"
+      source  = "froberg-co/kubectl"
       version = ">= 2.0.0"
     }
   }
@@ -34,7 +34,7 @@ terraform {
 
 #### Install manually
 
-If you don't want to use the one-liner above, you can download a binary for your system from the [release page](https://github.com/dfroberg/terraform-provider-kubectl/releases), 
+If you don't want to use the one-liner above, you can download a binary for your system from the [release page](https://github.com/froberg-co/terraform-provider-kubectl/releases), 
 then either place it at the root of your Terraform folder or in the Terraform plugin folder on your system.
 
 ## Quick Start
@@ -76,7 +76,7 @@ YAML
 }
 ```
 
-See [User Guide](https://registry.terraform.io/providers/dfroberg/kubectl/latest) for details on installation and all the provided data and resource types.
+See [User Guide](https://registry.terraform.io/providers/froberg-co/kubectl/latest) for details on installation and all the provided data and resource types.
 
 ---
 
@@ -90,13 +90,13 @@ To compile the provider, run `make build`. This will build the provider and put 
 ### Building The Provider
 
 ```sh
-$ go get github.com/dfroberg/terraform-provider-kubectl
+$ go get github.com/froberg-co/terraform-provider-kubectl
 ```
 
 Enter the provider directory and build the provider
 
 ```sh
-$ cd $GOPATH/src/github.com/dfroberg/terraform-provider-kubectl
+$ cd $GOPATH/src/github.com/froberg-co/terraform-provider-kubectl
 $ make build
 ```
 
