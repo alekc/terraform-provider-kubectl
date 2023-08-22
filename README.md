@@ -88,6 +88,7 @@ terraform state replace-provider gavinbunney/kubectl froberg-co/kubectl
 ```
 
 You should then `terraform init`, and the next terraform actions will use this provider.
+See [User Guide](https://registry.terraform.io/providers/froberg-co/kubectl/latest) for details on installation and all the provided data and resource types.
 
 ---
 
@@ -128,6 +129,14 @@ If all went well, you should see a following message during the apply:
 │ The following provider development overrides are set in the CLI configuration:
 │  - froberg-co/kubectl in /Users/USERNAME/go/bin
 
+$ go get github.com/froberg-co/terraform-provider-kubectl
+```
+
+Enter the provider directory and build the provider
+
+```sh
+$ cd $GOPATH/src/github.com/froberg-co/terraform-provider-kubectl
+$ make build
 ```
 
 ### Testing
