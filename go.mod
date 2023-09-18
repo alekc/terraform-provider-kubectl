@@ -4,7 +4,7 @@ go 1.21.0
 
 require (
 	github.com/cenkalti/backoff/v4 v4.2.1
-	github.com/hashicorp/hcl/v2 v2.12.0
+	github.com/hashicorp/hcl/v2 v2.18.0
 	github.com/hashicorp/terraform v0.12.29
 	github.com/hashicorp/terraform-plugin-sdk/v2 v2.16.0
 	github.com/icza/dyno v0.0.0-20200205103839-49cb13720835
@@ -29,7 +29,6 @@ require (
 	github.com/MakeNowJust/heredoc v1.0.0 // indirect
 	github.com/agext/levenshtein v1.2.2 // indirect
 	github.com/apparentlymart/go-cidr v1.1.0 // indirect
-	github.com/apparentlymart/go-textseg/v13 v13.0.0 // indirect
 	github.com/apparentlymart/go-textseg/v15 v15.0.0 // indirect
 	github.com/bmatcuk/doublestar v1.1.5 // indirect
 	github.com/chai2010/gettext-go v1.0.2 // indirect
