@@ -1,6 +1,6 @@
 module github.com/froberg-co/terraform-provider-kubectl
 
-go 1.21
+go 1.21.0
 
 require (
 	github.com/cenkalti/backoff/v4 v4.2.1
