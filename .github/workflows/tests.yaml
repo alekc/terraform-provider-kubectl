@@ -1,8 +1,5 @@
 name: "tests"
 on:
-  push:
-    branches:
-      - master
   pull_request:
     branches:
       - master
