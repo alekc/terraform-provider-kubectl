@@ -11,7 +11,7 @@ jobs:
   get_version_matrix:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - id: get_version_matrix
         shell: bash
         run: scripts/get-version-matrix.sh
@@ -40,7 +40,7 @@ jobs:
         terraform_version:  ${{ fromJson(needs.get_version_matrix.outputs.terraform_versions) }}
         k8s_version:  ${{ fromJson(needs.get_version_matrix.outputs.k8s_versions) }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Set up Go
         uses: actions/setup-go@v3
         with:
