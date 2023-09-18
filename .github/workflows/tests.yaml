@@ -37,6 +37,7 @@ jobs:
     needs: get_version_matrix
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: true
       matrix:
         terraform_version:  ${{ fromJson(needs.get_version_matrix.outputs.terraform_versions) }}
         k8s_version:  ${{ fromJson(needs.get_version_matrix.outputs.k8s_versions) }}
