@@ -1,0 +1,20 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    labels: [ dependencies ]
+    assignees: [ alekc ]
+    reviewers: [ alekc ]
+    commit-message:
+      prefix: "*:"
+    schedule:
+      interval: daily
+  - package-ecosystem: "gomod"
+    directory: "/"
+    labels: [ dependencies ]
+    assignees: [ alekc ]
+    reviewers: [ alekc ]
+    commit-message:
+      prefix: "*:"
+    schedule:
+      interval: "daily"
