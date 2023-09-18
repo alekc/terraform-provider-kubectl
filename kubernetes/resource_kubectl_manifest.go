@@ -13,6 +13,7 @@ import (
 
 	"github.com/alekc/terraform-provider-kubectl/flatten"
 	"github.com/alekc/terraform-provider-kubectl/internal/types"
+
 	"github.com/alekc/terraform-provider-kubectl/yaml"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
@@ -25,6 +26,7 @@ import (
 	"k8s.io/kubectl/pkg/scheme"
 	"k8s.io/kubectl/pkg/validation"
 
+	apiMachineryTypes "k8s.io/apimachinery/pkg/types"
 	k8sresource "k8s.io/cli-runtime/pkg/resource"
 	apiregistration "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
 	"k8s.io/kubectl/pkg/cmd/apply"
@@ -498,8 +500,8 @@ func newApplyOptions(yamlBody string) *apply.ApplyOptions {
 		OpenAPIPatch: true,
 		Recorder:     genericclioptions.NoopRecorder{},
 
-		VisitedUids:       sets.NewString(),
-		VisitedNamespaces: sets.NewString(),
+		VisitedUids:       sets.New[apiMachineryTypes.UID](),
+		VisitedNamespaces: sets.New[string](),
 	}
 	return applyOptions
 }
