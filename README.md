@@ -2,16 +2,15 @@
 
 ![Build Status](https://github.com/froberg-co/terraform-provider-kubectl/actions/workflows/tests.yml/badge.svg) [![user guide](https://img.shields.io/badge/-user%20guide-blue)](https://registry.terraform.io/providers/froberg-co/kubectl)
 
-This provider is the best way of managing Kubernetes resources in Terraform, by allowing you to use the thing 
-Kubernetes loves best - yaml!
+This provider offers the most effective method for handling Kubernetes resources in Terraform. It empowers you to leverage what Kubernetes values most - YAML!
 
-This core of this provider is the `kubectl_manifest` resource, allowing free-form yaml to be processed and applied against Kubernetes.
-This yaml object is then tracked and handles creation, updates and deleted seamlessly - including drift detection!
+At the heart of this provider lies the kubectl_manifest resource, enabling the processing and application of free-form YAML directly to Kubernetes. This YAML object is meticulously monitored and manages the entire lifecycle, from creation and updates to seamless deletion, including drift detection.
 
-A set of helpful data resources to process directories of yaml files and inline templating is available.
+The terraform-provider-kubectl has gained widespread adoption in numerous extensive Kubernetes installations, serving as the primary tool for orchestrating the complete lifecycle of Kubernetes resources.
 
-This `terraform-provider-kubectl` provider has been used by many large Kubernetes installations to completely
-manage the lifecycle of Kubernetes resources. 
+## Supported Kubernetes and Terraform versions
+At the moment, the acceptance tests cover a combination of the last 7 Kubernetes releases and the last 4 stable 
+Terraform versions (plus 0.15). This doesn't necessarily mean it won't work with other combinations, but your mileage may vary
 
 ## Installation
 
@@ -26,7 +25,7 @@ terraform {
   required_providers {
     kubectl = {
       source  = "froberg-co/kubectl"
-      version = ">= 2.0.0"
+      version = "~> 2.0"
     }
   }
 }
@@ -89,15 +88,34 @@ To compile the provider, run `make build`. This will build the provider and put 
 
 ### Building The Provider
 
+You can build the master branch of the provider by running 
 ```sh
-$ go get github.com/froberg-co/terraform-provider-kubectl
+git clone github.com/froberg-co/terraform-provider-kubectl
+cd terraform-provider-kubectl
+make build
+```
+This will build an executable `terraform-provider-kubectl` in your `${GOPATH}/bin/` directory. 
+Now we need to tell Terraform to override remote versions with our local build. To do so create/edit `~/.terraformrc/` file and add following content to it:
+```hcl
+ provider_installation {
+  dev_overrides {
+    "froberg-co/kubectl" = "/Users/USERNAME/go/bin/"
+  }
+  direct {}
+}
 ```
 
-Enter the provider directory and build the provider
+change "/Users/USERNAME/go/bin/" with the path where your go has placed built executable. After that all you have to do is run 
+`terraform init` and you will be using the new version. 
 
-```sh
-$ cd $GOPATH/src/github.com/froberg-co/terraform-provider-kubectl
-$ make build
+If all went well, you should see a following message during the apply:
+```text
+╷
+│ Warning: Provider development overrides are in effect
+│ 
+│ The following provider development overrides are set in the CLI configuration:
+│  - froberg-co/kubectl in /Users/USERNAME/go/bin
+
 ```
 
 ### Testing
