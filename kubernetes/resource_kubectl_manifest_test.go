@@ -90,8 +90,40 @@ YAML
 	})
 }
 
-func TestAccKubectlUnknownNamespace(t *testing.T) {
+func TestAccInconsistentPlanning(t *testing.T) {
+	//See https://github.com/alekc/terraform-provider-kubectl/pull/46
+	config := `
+resource "kubectl_manifest" "secret" {
+  yaml_body = <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-secret
+stringData:
+  var: "${formatdate("YYYYMMDDhhmmss", timestamp())}"
+EOF
+}
+`
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckkubectlDestroy,
 
+		Steps: []resource.TestStep{
+			{
+				Config:             config,
+				ExpectNonEmptyPlan: true, // yaml_incluster is going to be constantly different
+			},
+			{
+				// used to crash out on the second run
+				Config:             config,
+				ExpectNonEmptyPlan: true,
+			},
+		},
+	})
+}
+
+func TestAccKubectlUnknownNamespace(t *testing.T) {
 	config := `
 resource "kubectl_manifest" "test" {
 	yaml_body = <<EOT
