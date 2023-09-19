@@ -6,7 +6,7 @@ updates:
     assignees: [ alekc ]
     reviewers: [ alekc ]
     commit-message:
-      prefix: "*:"
+      prefix: "Dependencies:"
     schedule:
       interval: daily
   - package-ecosystem: "gomod"
@@ -15,6 +15,6 @@ updates:
     assignees: [ alekc ]
     reviewers: [ alekc ]
     commit-message:
-      prefix: "*:"
+      prefix: "Dependencies:"
     schedule:
       interval: "daily"
