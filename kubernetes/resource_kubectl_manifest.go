@@ -267,7 +267,7 @@ metadata:
 			if hasSensitiveFields {
 				sensitiveFields = expandStringList(sensitiveFieldsRaw.([]interface{}))
 			} else if parsedYaml.GetKind() == "Secret" && parsedYaml.GetAPIVersion() == "v1" {
-				sensitiveFields = []string{"data"}
+				sensitiveFields = []string{"data", "stringData"}
 			}
 
 			for _, s := range sensitiveFields {
