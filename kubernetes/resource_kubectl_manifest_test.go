@@ -6,6 +6,7 @@ import (
 	"github.com/alekc/terraform-provider-kubectl/yaml"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"log"
@@ -115,6 +116,68 @@ EOF
 			},
 			{
 				// used to crash out on the second run
+				Config:             config,
+				ExpectNonEmptyPlan: true,
+			},
+		},
+	})
+}
+func TestAccInconsistentPlanning2(t *testing.T) {
+	//See https://github.com/alekc/terraform-provider-kubectl/issues/49
+	//language=hcl
+	config := `
+provider "kubernetes" {
+  config_path = "~/.kube/config"
+}
+
+resource "kubernetes_namespace" "test" {
+  metadata {
+    name = "terraform-test"
+    labels = {
+      "test" = formatdate("YYYYMMDDhhmmss", timestamp())
+    }
+  }
+}
+
+resource "kubectl_manifest" "secret" {
+  yaml_body = <<-EOT
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: test-secret
+    stringData:
+      var: "${kubernetes_namespace.test.metadata.0.resource_version}"
+  EOT
+  override_namespace = kubernetes_namespace.test.metadata.0.name
+}
+`
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() { testAccPreCheck(t) },
+		//Providers:    testAccProviders,
+		CheckDestroy: testAccCheckkubectlDestroy,
+		ProviderFactories: map[string]func() (*schema.Provider, error){
+			"kubectl": func() (*schema.Provider, error) {
+				return testAccProvider, nil
+			},
+		},
+		ExternalProviders: map[string]resource.ExternalProvider{
+			"kubernetes": {
+				VersionConstraint: "2.23.0",
+				Source:            "registry.terraform.io/hashicorp/kubernetes",
+			},
+		},
+
+		Steps: []resource.TestStep{
+			{
+				Config:             config,
+				ExpectNonEmptyPlan: true, // yaml_incluster is going to be constantly different
+			},
+			{
+				Config:             config,
+				ExpectNonEmptyPlan: true,
+			},
+			{
+				// used to crash out on the third run
 				Config:             config,
 				ExpectNonEmptyPlan: true,
 			},
