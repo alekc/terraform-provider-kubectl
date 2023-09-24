@@ -28,8 +28,9 @@ func dataSourceKubectlPathDocuments() *schema.Resource {
 		ReadContext: dataSourceKubectlPathDocumentsRead,
 		Schema: map[string]*schema.Schema{
 			"pattern": &schema.Schema{
-				Type:     schema.TypeString,
-				Required: true,
+				Type:        schema.TypeString,
+				Required:    true,
+				Description: "Glob pattern to search for",
 			},
 			"documents": &schema.Schema{
 				Type:     schema.TypeList,
