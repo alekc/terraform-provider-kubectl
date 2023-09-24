@@ -1,6 +1,7 @@
 # Data Source: kubectl_path_documents
 
-This provider provides a `data` resource `kubectl_path_documents` to enable ease of splitting multi-document yaml content, from a collection of matching files.
+This provider provides a `data` resource `kubectl_path_documents` to enable ease of splitting multi-document yaml content, 
+from a collection of matching files.
 Think of is as a combination of both `kubectl_filename_list` and `kubectl_file_documents`
 
 `kubectl_path_documents` also supports rendering of Terraform Templates (similar to the template provider).
@@ -8,25 +9,25 @@ This gives you the flexibility of parameterizing your manifests, and loading & t
 
 ## Example Usage
 
-### Load all manifest documents via for_each (recommended)
+### Load all manifest documents from a folder via for_each (recommended)
 
 The recommended approach is to use the `manifests` attribute and a `for_each` expression to apply the found manifests.
 This ensures that any additional yaml documents or removals do not cause a large amount of terraform changes.
 
 ```hcl
-data "kubectl_path_documents" "docs" {
-    pattern = "./manifests/*.yaml"
+data "kubectl_path_documents" "manifests-directory-yaml" {
+  pattern = "./manifests/*.yaml"
 }
-
-resource "kubectl_manifest" "test" {
-    for_each  = toset(data.kubectl_path_documents.docs.documents)
-    yaml_body = each.value
+resource "kubectl_manifest" "directory-yaml" {
+  for_each  = data.kubectl_path_documents.manifests-directory-yaml.manifests
+  yaml_body = each.value
 }
 ```
 
 ### Load all manifest documents via count
 
-Raw documents can also be accessed via the `documents` attribute.
+Raw documents can also be accessed via the `documents` attribute. Not that if the document order is changed (i.e. a new file is added), 
+then it would trigger destruction and recreation of related documents. 
 
 ```hcl
 data "kubectl_path_documents" "docs" {
@@ -163,7 +164,6 @@ metadata:
 ## Argument Reference
 
 * `pattern` - Required. Glob pattern to search for.
-* `force_new` - Optional. Forces delete & create of resources if the `yaml_body` changes. Default `false`.
 * `vars` - Optional. Map of variables to use when rendering the loaded documents as templates. Currently only strings are supported.
 * `sensitive_vars` - Optional. Map of sensitive variables to use when rendering the loaded documents as templates. Merged with the `vars` attribute. Currently only strings are supported.
 * `disable_template` - Optional. Flag to disable template parsing of the loaded documents.
