@@ -89,6 +89,35 @@ YAML
 	})
 }
 
+func TestAccKubect_Debug(t *testing.T) {
+	//language=hcl
+	config := `
+resource "kubectl_manifest" "test" {
+	yaml_body = <<YAML
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-secret
+stringData:
+  var: "${formatdate("YYYYMMDDhhmmss", timestamp())}"
+YAML
+}
+`
+
+	//start := time.Now()
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckkubectlDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				//todo: improve checking
+			},
+		},
+	})
+}
+
 func TestAccInconsistentPlanning(t *testing.T) {
 	//See https://github.com/alekc/terraform-provider-kubectl/pull/46
 	config := `

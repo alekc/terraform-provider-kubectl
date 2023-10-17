@@ -3,7 +3,10 @@ package kubernetes
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
+	"k8s.io/cli-runtime/pkg/genericiooptions"
+	k8sdelete "k8s.io/kubectl/pkg/cmd/delete"
 	"log"
 	"os"
 	"regexp"
@@ -26,14 +29,12 @@ import (
 	"k8s.io/kubectl/pkg/scheme"
 	"k8s.io/kubectl/pkg/validation"
 
+	backoff "github.com/cenkalti/backoff/v4"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	apiMachineryTypes "k8s.io/apimachinery/pkg/types"
 	k8sresource "k8s.io/cli-runtime/pkg/resource"
 	apiregistration "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
 	"k8s.io/kubectl/pkg/cmd/apply"
-	k8sdelete "k8s.io/kubectl/pkg/cmd/delete"
-
-	backoff "github.com/cenkalti/backoff/v4"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 
 	apps_v1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -55,39 +56,35 @@ func resourceKubectlManifest() *schema.Resource {
 
 	return &schema.Resource{
 		CreateContext: func(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
+			// if there is no retry required, perform a simple apply
+			if kubectlApplyRetryCount == 0 {
+				if applyErr := resourceKubectlManifestApply(ctx, d, meta); applyErr != nil {
+					return diag.FromErr(applyErr)
+				}
+			}
+			// retry count is not 0, so we need to leverage exponential backoff and multiple retries
 			exponentialBackoffConfig := backoff.NewExponentialBackOff()
 			exponentialBackoffConfig.InitialInterval = 3 * time.Second
 			exponentialBackoffConfig.MaxInterval = 30 * time.Second
 
-			if kubectlApplyRetryCount > 0 {
-				retryConfig := backoff.WithMaxRetries(exponentialBackoffConfig, kubectlApplyRetryCount)
-				retryErr := backoff.Retry(func() error {
-					err := resourceKubectlManifestApply(ctx, d, meta)
-					if err != nil {
-						log.Printf("[ERROR] creating manifest failed: %+v", err)
-					}
-
-					return err
-				}, retryConfig)
-
-				if retryErr != nil {
-					return diag.FromErr(retryErr)
+			retryConfig := backoff.WithMaxRetries(exponentialBackoffConfig, kubectlApplyRetryCount)
+			retryErr := backoff.Retry(func() error {
+				err := resourceKubectlManifestApply(ctx, d, meta)
+				if err != nil {
+					log.Printf("[ERROR] creating manifest failed: %+v", err)
 				}
+				return err
+			}, retryConfig)
 
-				return nil
-			} else {
-				if applyErr := resourceKubectlManifestApply(ctx, d, meta); applyErr != nil {
-					return diag.FromErr(applyErr)
-				}
-
-				return nil
+			if retryErr != nil {
+				return diag.FromErr(retryErr)
 			}
+			return nil
 		},
 		ReadContext: func(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 			if err := resourceKubectlManifestRead(ctx, d, meta); err != nil {
 				return diag.FromErr(err)
 			}
-
 			return nil
 		},
 		DeleteContext: func(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
@@ -488,11 +485,12 @@ var (
 	}
 )
 
+// newApplyOptions defines flags and other configuration parameters for the `apply` command
 func newApplyOptions(yamlBody string) *apply.ApplyOptions {
 	applyOptions := &apply.ApplyOptions{
 		PrintFlags: genericclioptions.NewPrintFlags("created").WithTypeSetter(scheme.Scheme),
 
-		IOStreams: genericclioptions.IOStreams{
+		IOStreams: genericiooptions.IOStreams{
 			In:     strings.NewReader(yamlBody),
 			Out:    log.Writer(),
 			ErrOut: log.Writer(),
@@ -508,8 +506,9 @@ func newApplyOptions(yamlBody string) *apply.ApplyOptions {
 	return applyOptions
 }
 func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, meta interface{}) error {
-
 	yamlBody := d.Get("yaml_body").(string)
+
+	// convert hcl into an unstructured object
 	manifest, err := yaml.ParseYAML(yamlBody)
 	if err != nil {
 		return fmt.Errorf("failed to parse kubernetes resource: %+v", err)
@@ -539,31 +538,25 @@ func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, m
 	_ = tmpfile.Close()
 
 	applyOptions := newApplyOptions(yamlBody)
-
 	applyOptions.Builder = k8sresource.NewBuilder(k8sresource.RESTClientGetter(meta.(*KubeProvider)))
 	applyOptions.DeleteOptions = &k8sdelete.DeleteOptions{
 		FilenameOptions: k8sresource.FilenameOptions{
 			Filenames: []string{tmpfile.Name()},
 		},
 	}
-
 	applyOptions.ToPrinter = func(string) (printers.ResourcePrinter, error) {
 		return printers.NewDiscardingPrinter(), nil
 	}
-
 	if !d.Get("validate_schema").(bool) {
 		applyOptions.Validator = validation.NullSchema{}
 	}
-
 	if d.Get("server_side_apply").(bool) {
 		applyOptions.ServerSideApply = true
 		applyOptions.FieldManager = d.Get("field_manager").(string)
 	}
-
 	if d.Get("force_conflicts").(bool) {
 		applyOptions.ForceConflicts = true
 	}
-
 	if manifest.HasNamespace() {
 		applyOptions.Namespace = manifest.GetNamespace()
 	}
@@ -571,7 +564,7 @@ func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, m
 	log.Printf("[INFO] %s perform apply of manifest", manifest)
 
 	err = applyOptions.Run()
-	_ = os.Remove(tmpfile.Name())
+	//_ = os.Remove(tmpfile.Name())
 	if err != nil {
 		return fmt.Errorf("%v failed to run apply: %+v", manifest, err)
 	}
@@ -583,7 +576,7 @@ func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, m
 	if err != nil {
 		return fmt.Errorf("%v failed to fetch resource from kubernetes: %+v", manifest, err)
 	}
-
+	// set a wrapper from unstructured raw manifest
 	response := yaml.NewFromUnstructured(rawResponse)
 
 	d.SetId(response.GetSelfLink())
@@ -602,14 +595,15 @@ func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, m
 	if d.Get("wait_for_rollout").(bool) {
 		timeout := d.Timeout(schema.TimeoutCreate)
 
-		if manifest.GetKind() == "Deployment" {
+		switch {
+		case manifest.GetKind() == "Deployment":
 			log.Printf("[INFO] %v waiting for deployment rollout for %vmin", manifest, timeout.Minutes())
 			err = resource.RetryContext(ctx, timeout,
 				waitForDeploymentReplicasFunc(ctx, meta.(*KubeProvider), manifest.GetNamespace(), manifest.GetName()))
 			if err != nil {
 				return err
 			}
-		} else if manifest.GetKind() == "APIService" && manifest.GetAPIVersion() == "apiregistration.k8s.io/v1" {
+		case manifest.GetKind() == "APIService" && manifest.GetAPIVersion() == "apiregistration.k8s.io/v1":
 			log.Printf("[INFO] %v waiting for APIService rollout for %vmin", manifest, timeout.Minutes())
 			err = resource.RetryContext(ctx, timeout,
 				waitForAPIServiceAvailableFunc(ctx, meta.(*KubeProvider), manifest.GetName()))
@@ -633,6 +627,8 @@ func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, m
 		}
 	}
 
+	// So far we have set (live_)uid and (live_)yaml_incluster.
+	// Perform the full read of the object
 	return resourceKubectlManifestReadUsingClient(ctx, d, meta, restClient.ResourceInterface, manifest)
 }
 
@@ -663,20 +659,20 @@ func resourceKubectlManifestRead(ctx context.Context, d *schema.ResourceData, me
 	return resourceKubectlManifestReadUsingClient(ctx, d, meta, restClient.ResourceInterface, manifest)
 }
 
+// resourceKubectlManifestReadUsingClient reads the object data from the cluster based on it's UID
+// and sets live_uid and live_manifest_incluster to the latest values
 func resourceKubectlManifestReadUsingClient(ctx context.Context, d *schema.ResourceData, meta interface{}, client dynamic.ResourceInterface, manifest *yaml.Manifest) error {
 
 	log.Printf("[DEBUG] %v fetch from kubernetes", manifest)
 
 	// Get the resource from Kubernetes
 	metaObjLiveRaw, err := client.Get(ctx, manifest.GetName(), meta_v1.GetOptions{})
-	resourceGone := errors.IsGone(err) || errors.IsNotFound(err)
-	if resourceGone {
-		log.Printf("[WARN] kubernetes resource (%s) not found, removing from state", d.Id())
-		d.SetId("")
-		return nil
-	}
-
 	if err != nil {
+		if errors.IsGone(err) || errors.IsNotFound(err) {
+			log.Printf("[WARN] kubernetes resource (%s) not found, removing from state", d.Id())
+			d.SetId("")
+			return nil
+		}
 		return fmt.Errorf("%v failed to get resource from kubernetes: %+v", manifest, err)
 	}
 
@@ -786,6 +782,7 @@ func RestClientResultFromInvalidTypeErr(err error) *RestClientResult {
 	}
 }
 
+// getRestClientFromUnstructured creates a dynamic k8s client based on the provided manifest
 func getRestClientFromUnstructured(manifest *yaml.Manifest, provider *KubeProvider) *RestClientResult {
 
 	doGetRestClientFromUnstructured := func(manifest *yaml.Manifest, provider *KubeProvider) *RestClientResult {
@@ -821,15 +818,21 @@ func getRestClientFromUnstructured(manifest *yaml.Manifest, provider *KubeProvid
 			}
 		}
 
-		resourceStruct := k8sschema.GroupVersionResource{Group: apiResource.Group, Version: apiResource.Version, Resource: apiResource.Name}
+		resourceStruct := k8sschema.GroupVersionResource{
+			Group:    apiResource.Group,
+			Version:  apiResource.Version,
+			Resource: apiResource.Name,
+		}
 		// For core services (ServiceAccount, Service etc) the group is incorrectly parsed.
 		// "v1" should be empty group and "v1" for version
 		if resourceStruct.Group == "v1" && resourceStruct.Version == "" {
 			resourceStruct.Group = ""
 			resourceStruct.Version = "v1"
 		}
+		// get dynamic client based on the found resource struct
 		client := dynamic.NewForConfigOrDie(&provider.RestConfig).Resource(resourceStruct)
 
+		// if the resource is namespaced and doesn't have a namespace defined, set it to default
 		if apiResource.Namespaced {
 			if !manifest.HasNamespace() {
 				manifest.SetNamespace("default")
@@ -863,20 +866,22 @@ func getRestClientFromUnstructured(manifest *yaml.Manifest, provider *KubeProvid
 // checks there is a resource for the APIVersion and Kind defined in the 'resource'
 // if found it returns true and the APIResource which matched
 func checkAPIResourceIsPresent(available []*meta_v1.APIResourceList, resource meta_v1_unstruct.Unstructured) (*meta_v1.APIResource, bool) {
+	resourceGroupVersionKind := resource.GroupVersionKind()
 	for _, rList := range available {
 		if rList == nil {
 			continue
 		}
 		group := rList.GroupVersion
 		for _, r := range rList.APIResources {
-			if group == resource.GroupVersionKind().GroupVersion().String() && r.Kind == resource.GetKind() {
-				r.Group = resource.GroupVersionKind().Group
-				r.Version = resource.GroupVersionKind().Version
-				r.Kind = resource.GroupVersionKind().Kind
+			if group == resourceGroupVersionKind.GroupVersion().String() && r.Kind == resource.GetKind() {
+				r.Group = resourceGroupVersionKind.Group
+				r.Version = resourceGroupVersionKind.Version
+				r.Kind = resourceGroupVersionKind.Kind
 				return &r, true
 			}
 		}
 	}
+	log.Printf("[ERROR] Could not find a valid ApiResource for this manifest %s/%s/%s", resourceGroupVersionKind.Group, resourceGroupVersionKind.Version, resourceGroupVersionKind.Kind)
 	return nil, false
 }
 
@@ -1000,18 +1005,14 @@ func expandStringList(configured []interface{}) []string {
 }
 
 func getLiveManifestFingerprint(d *schema.ResourceData, userProvided *yaml.Manifest, liveManifest *yaml.Manifest) string {
-	fields := getLiveManifestFields(d, userProvided, liveManifest)
-	return getFingerprint(fields)
-}
-
-func getLiveManifestFields(d *schema.ResourceData, userProvided *yaml.Manifest, liveManifest *yaml.Manifest) string {
 	var ignoreFields []string = nil
 	ignoreFieldsRaw, hasIgnoreFields := d.GetOk("ignore_fields")
 	if hasIgnoreFields {
 		ignoreFields = expandStringList(ignoreFieldsRaw.([]interface{}))
 	}
 
-	return getLiveManifestFields_WithIgnoredFields(ignoreFields, userProvided, liveManifest)
+	fields := getLiveManifestFields_WithIgnoredFields(ignoreFields, userProvided, liveManifest)
+	return getFingerprint(fields)
 }
 
 func getFingerprint(s string) string {
@@ -1022,15 +1023,26 @@ func getFingerprint(s string) string {
 
 func getLiveManifestFields_WithIgnoredFields(ignoredFields []string, userProvided *yaml.Manifest, liveManifest *yaml.Manifest) string {
 
+	// there is a special user case for secrets.
+	// If they are defined as manifests with StringData, it will always provide a non-empty plan
+	// so we will do a small lifehack here
+	if userProvided.GetKind() == "Secret" && userProvided.GetAPIVersion() == "v1" {
+		if stringData, found := userProvided.Raw.Object["stringData"]; found {
+			// move all stringdata values to the data
+			for k, v := range stringData.(map[string]interface{}) {
+				encodedString := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%v", v)))
+				meta_v1_unstruct.SetNestedField(userProvided.Raw.Object, encodedString, "data", k)
+			}
+			// and unset the stringData entirely
+			meta_v1_unstruct.RemoveNestedField(userProvided.Raw.Object, "stringData")
+		}
+	}
+
 	flattenedUser := flatten.Flatten(userProvided.Raw.Object)
 	flattenedLive := flatten.Flatten(liveManifest.Raw.Object)
 
 	// remove any fields from the user provided set or control fields that we want to ignore
-	fieldsToTrim := append([]string(nil), kubernetesControlFields...)
-	if len(ignoredFields) > 0 {
-		fieldsToTrim = append(fieldsToTrim, ignoredFields...)
-	}
-
+	fieldsToTrim := append(kubernetesControlFields, ignoredFields...)
 	for _, field := range fieldsToTrim {
 		delete(flattenedUser, field)
 
@@ -1044,7 +1056,7 @@ func getLiveManifestFields_WithIgnoredFields(ignoredFields []string, userProvide
 
 	// update the user provided flattened string with the live versions of the keys
 	// this implicitly excludes anything that the user didn't provide as it was added by kubernetes runtime (annotations/mutations etc)
-	userKeys := []string{}
+	var userKeys []string
 	for userKey, userValue := range flattenedUser {
 		normalizedUserValue := strings.TrimSpace(userValue)
 
@@ -1083,4 +1095,5 @@ var kubernetesControlFields = []string{
 	"metadata.resourceVersion",
 	"metadata.uid",
 	"metadata.annotations.kubectl.kubernetes.io/last-applied-configuration",
+	"metadata.managedFields",
 }
