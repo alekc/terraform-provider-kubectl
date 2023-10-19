@@ -19,7 +19,7 @@ require (
 	k8s.io/apimachinery v0.28.3
 	k8s.io/cli-runtime v0.28.3
 	k8s.io/client-go v0.28.3
-	k8s.io/kube-aggregator v0.28.2
+	k8s.io/kube-aggregator v0.28.3
 	k8s.io/kubectl v0.28.3
 	sigs.k8s.io/yaml v1.3.0
 )
