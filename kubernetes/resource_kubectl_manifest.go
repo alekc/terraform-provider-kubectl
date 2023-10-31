@@ -564,7 +564,7 @@ func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, m
 	log.Printf("[INFO] %s perform apply of manifest", manifest)
 
 	err = applyOptions.Run()
-	//_ = os.Remove(tmpfile.Name())
+	_ = os.Remove(tmpfile.Name())
 	if err != nil {
 		return fmt.Errorf("%v failed to run apply: %+v", manifest, err)
 	}
