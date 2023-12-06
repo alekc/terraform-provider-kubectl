@@ -120,6 +120,12 @@ func Provider() *schema.Provider {
 				DefaultFunc: schema.EnvDefaultFunc("KUBE_TOKEN", ""),
 				Description: "Token to authentifcate an service account",
 			},
+			"proxy_url": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "URL to the proxy to be used for all API requests",
+				DefaultFunc: schema.EnvDefaultFunc("KUBE_PROXY_URL", ""),
+			},
 			"load_config_file": {
 				Type:        schema.TypeBool,
 				Optional:    true,
@@ -373,6 +379,9 @@ func initializeConfiguration(d *schema.ResourceData) (*restclient.Config, error)
 	}
 	if v, ok := d.GetOk("token"); ok {
 		overrides.AuthInfo.Token = v.(string)
+	}
+	if v, ok := d.GetOk("proxy_url"); ok {
+		overrides.ClusterDefaults.ProxyURL = v.(string)
 	}
 
 	cc := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loader, overrides)
