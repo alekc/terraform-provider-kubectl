@@ -132,6 +132,12 @@ func Provider() *schema.Provider {
 				DefaultFunc: schema.EnvDefaultFunc("KUBE_LOAD_CONFIG_FILE", true),
 				Description: "Load local kubeconfig.",
 			},
+			"tls_server_name": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "Server name passed to the server for SNI and is used in the client to check server certificates against.",
+				DefaultFunc: schema.EnvDefaultFunc("KUBE_TLS_SERVER_NAME", ""),
+			},
 			"exec": {
 				Type:     schema.TypeList,
 				Optional: true,
@@ -382,6 +388,9 @@ func initializeConfiguration(d *schema.ResourceData) (*restclient.Config, error)
 	}
 	if v, ok := d.GetOk("proxy_url"); ok {
 		overrides.ClusterDefaults.ProxyURL = v.(string)
+	}
+	if v, ok := d.GetOk("tls_server_name"); ok {
+		overrides.ClusterInfo.TLSServerName = v.(string)
 	}
 
 	cc := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loader, overrides)
