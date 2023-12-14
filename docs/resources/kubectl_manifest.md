@@ -119,8 +119,8 @@ Optional:
 * `namespace` - Extracted object namespace from `yaml_body`.
 * `uid` - Kubernetes unique identifier from last run.
 * `live_uid` - Current uuid from Kubernetes.
-* `yaml_incluster` - Current yaml within Kubernetes.
-* `live_manifest_incluster` - Current manifest within Kubernetes.
+* `yaml_incluster` - A fingerprint of the current yaml within Kubernetes.
+* `live_manifest_incluster` - A fingerprint of the current manifest within Kubernetes.
 
 ## Sensitive Fields
 
