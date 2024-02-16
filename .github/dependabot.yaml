@@ -3,8 +3,8 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     labels: [ dependencies ]
-    assignees: [ alekc ]
-    reviewers: [ alekc ]
+    assignees: [ dfroberg ]
+    reviewers: [ dfroberg ]
     commit-message:
       prefix: "Dependencies:"
     schedule:
@@ -12,8 +12,8 @@ updates:
   - package-ecosystem: "gomod"
     directory: "/"
     labels: [ dependencies ]
-    assignees: [ alekc ]
-    reviewers: [ alekc ]
+    assignees: [ dfroberg ]
+    reviewers: [ dfroberg ]
     commit-message:
       prefix: "Dependencies:"
     schedule:
