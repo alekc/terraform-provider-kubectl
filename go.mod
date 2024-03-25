@@ -13,7 +13,7 @@ require (
 	github.com/sergi/go-diff v1.3.1
 	github.com/stretchr/testify v1.9.0
 	github.com/thedevsaddam/gojsonq/v2 v2.5.2
-	github.com/zclconf/go-cty v1.14.3
+	github.com/zclconf/go-cty v1.14.4
 	github.com/zclconf/go-cty-yaml v1.0.3
 	gopkg.in/yaml.v2 v2.4.0
 	k8s.io/api v0.28.4
