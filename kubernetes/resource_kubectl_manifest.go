@@ -1031,13 +1031,17 @@ func getLiveManifestFields_WithIgnoredFields(ignoredFields []string, userProvide
 	// so we will do a small lifehack here
 	if userProvided.GetKind() == "Secret" && userProvided.GetAPIVersion() == "v1" {
 		if stringData, found := userProvided.Raw.Object["stringData"]; found {
-			// move all stringdata values to the data
-			for k, v := range stringData.(map[string]interface{}) {
-				encodedString := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%v", v)))
-				meta_v1_unstruct.SetNestedField(userProvided.Raw.Object, encodedString, "data", k)
+			// there is an edge case where stringData might be nil and not a map[string]interface{}
+			// in this case we will just ignore it
+			if stringData, ok := stringData.(map[string]interface{}); ok {
+				// move all stringdata values to the data
+				for k, v := range stringData {
+					encodedString := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%v", v)))
+					meta_v1_unstruct.SetNestedField(userProvided.Raw.Object, encodedString, "data", k)
+				}
+				// and unset the stringData entirely
+				meta_v1_unstruct.RemoveNestedField(userProvided.Raw.Object, "stringData")
 			}
-			// and unset the stringData entirely
-			meta_v1_unstruct.RemoveNestedField(userProvided.Raw.Object, "stringData")
 		}
 	}
 
