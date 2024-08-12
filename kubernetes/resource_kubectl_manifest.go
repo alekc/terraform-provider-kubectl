@@ -460,11 +460,31 @@ var (
 			MaxItems:    1,
 			Elem: &schema.Resource{
 				Schema: map[string]*schema.Schema{
+					"condition": {
+						Type:        schema.TypeList,
+						MinItems:    0,
+						Description: "Condition criteria for a Status Condition",
+						Optional:    true,
+						Elem: &schema.Resource{
+							Schema: map[string]*schema.Schema{
+								"type": {
+									Type:        schema.TypeString,
+									Description: "Type as expected from the resulting Condition object",
+									Required:    true,
+								},
+								"status": {
+									Type:        schema.TypeString,
+									Description: "Status to wait for in the resulting Condition object",
+									Required:    true,
+								},
+							},
+						},
+					},
 					"field": {
 						Type:        schema.TypeList,
-						MinItems:    1,
+						MinItems:    0,
 						Description: "Condition criteria for a field",
-						Required:    true,
+						Optional:    true,
 						Elem: &schema.Resource{
 							Schema: map[string]*schema.Schema{
 								"key": {
@@ -633,9 +653,12 @@ func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, m
 		if err := mapstructure.Decode((v.([]interface{}))[0], &waitFor); err != nil {
 			return fmt.Errorf("cannot decode wait for conditions %v", err)
 		}
+		if len(waitFor.Field) == 0 && len(waitFor.Condition) == 0 {
+			return fmt.Errorf("at least one of `field` or `condition` must be provided in `wait_for` block")
+		}
 		log.Printf("[INFO] %v waiting for wait conditions for %vmin", manifest, timeout.Minutes())
 		err = resource.RetryContext(ctx, timeout,
-			waitForFields(ctx, restClient, waitFor.Field, manifest.GetNamespace(), manifest.GetName()))
+			waitForConditions(ctx, restClient, waitFor.Field, waitFor.Condition, manifest.GetNamespace(), manifest.GetName()))
 		if err != nil {
 			return err
 		}
@@ -940,7 +963,7 @@ func GetDeploymentCondition(status apps_v1.DeploymentStatus, condType apps_v1.De
 	return nil
 }
 
-func waitForFields(ctx context.Context, provider *RestClientResult, conditions []types.WaitForField, ns, name string) resource.RetryFunc {
+func waitForConditions(ctx context.Context, provider *RestClientResult, fields []types.WaitForField, conditions []types.WaitForStatusCondition, ns, name string) resource.RetryFunc {
 	return func() *resource.RetryError {
 		rawResponse, err := provider.ResourceInterface.Get(ctx, name, meta_v1.GetOptions{})
 		if err != nil {
@@ -953,7 +976,7 @@ func waitForFields(ctx context.Context, provider *RestClientResult, conditions [
 			return resource.NonRetryableError(err)
 		}
 		gq := gojsonq.New().FromString(string(yamlJson))
-		for _, c := range conditions {
+		for _, c := range fields {
 			//find the key
 			v := gq.Reset().Find(c.Key)
 			if v == nil {
@@ -976,6 +999,14 @@ func waitForFields(ctx context.Context, provider *RestClientResult, conditions [
 				if stringVal != c.Value {
 					return resource.RetryableError(fmt.Errorf("%s key %s value was not equal to expected. Got %s, want %s", name, c.Key, stringVal, c.Value))
 				}
+			}
+		}
+
+		for _, c := range conditions {
+			//find the conditions by status and type
+			v := gq.Reset().From("status.conditions").Where("type", "=", c.Type).Where("status", "=", c.Status)
+			if v == nil {
+				return resource.RetryableError(fmt.Errorf("key %s was not found in the resource %s", c.Status, name))
 			}
 		}
 		return nil
