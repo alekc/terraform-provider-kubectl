@@ -33,7 +33,9 @@ jobs:
           make test
           make vet
   acc_test:
-    needs: get_version_matrix
+    needs:
+      - get_version_matrix
+      - unit_test
     runs-on: ubuntu-latest
     strategy:
       fail-fast: true

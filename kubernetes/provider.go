@@ -222,7 +222,9 @@ func (p *KubeProvider) ToRESTMapper() (meta.RESTMapper, error) {
 	discoveryClient, _ := p.ToDiscoveryClient()
 	if discoveryClient != nil {
 		mapper := restmapper.NewDeferredDiscoveryRESTMapper(discoveryClient)
-		expander := restmapper.NewShortcutExpander(mapper, discoveryClient)
+		expander := restmapper.NewShortcutExpander(mapper, discoveryClient, func(msg string) {
+			log.Printf("[WARN] error in expander: %s", msg)
+		})
 		return expander, nil
 	}
 
@@ -277,7 +279,7 @@ func initializeConfiguration(d *schema.ResourceData) (*restclient.Config, error)
 	overrides := &clientcmd.ConfigOverrides{}
 	loader := &clientcmd.ClientConfigLoadingRules{}
 
-	configPaths := []string{}
+	var configPaths []string
 
 	if v, ok := d.Get("config_path").(string); ok && v != "" {
 		configPaths = []string{v}
