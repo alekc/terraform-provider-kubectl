@@ -37,6 +37,7 @@ YAML
 > Note: When the kind is a Deployment, this provider will wait for the deployment to be rolled out automatically for you!
 
 ### With explicit `wait_for`
+
 If `wait_for` is specified, upon applying the resource, provider will wait for **all** conditions to become true before proceeding further. 
 
 ```hcl
@@ -88,23 +89,21 @@ YAML
 * `validate_schema` - Optional. Setting to `false` will mimic `kubectl apply --validate=false` mode. Default `true`.
 * `wait` - Optional. Set this flag to wait or not for finalized to complete for deleted objects. Default `false`.
 * `wait_for_rollout` - Optional. Set this flag to wait or not for Deployments and APIService to complete rollout. Default `true`.
-* `wait_for`- Optional. If set, will wait until either all conditions are satisfied, or until timeout is reached (see [below for nested schema](#nestedblock--wait_for)). Under the hood [gojsonq](https://github.com/thedevsaddam/gojsonq) is used for querying, see the related syntax and examples
+* `wait_for` - Optional. If set, will wait until either all conditions are satisfied, or until timeout is reached (see [below for nested schema](#wait_for)). Under the hood [gojsonq](https://github.com/thedevsaddam/gojsonq) is used for querying, see the related syntax and examples.
+* `delete_cascade` - Optional; `Background` or `Foreground` are valid options. If set this overrides the default provider behaviour which is to use `Background` unless `wait` is `true` when `Foreground` will be used. To duplicate the default behaviour of `kubectl` this should be explicitly set to `Background`.
 
-### Nested schemas
-<a id="nestedblock--wait_for"></a>
-### Nested Schema for `wait_for`
-
-Required:
-
-- `field` (Block List, Min: 1) Condition criteria for a field (see [below for nested schema](#nestedblock--wait_for--field))
-
-<a id="nestedblock--wait_for--field"></a>
-### Nested Schema for `wait_for.field`
+### `wait_for`
 
 Required:
 
-- `key` (String) Key which should be matched from resulting object
-- `value` (String) Value to wait for
+* `field` (Block List, Min: 1) Condition criteria for a field (see [below for nested schema](#wait_forfield))
+
+### `wait_for.field`
+
+Required:
+
+* `key` (String) Key which should be matched from resulting object
+* `value` (String) Value to wait for
 
 Optional:
 
@@ -151,7 +150,6 @@ YAML
 ```
 
 > Note: Only Map values are supported to be made sensitive. If you need to make a value from a list (or sub-list) sensitive, you can set the high-level key as sensitive to suppress the entire tree output.
-
 
 ## Ignore Manifest Fields
 
@@ -219,7 +217,7 @@ You can disable this behavior by setting the `wait_for_rollout` field to `false`
 
 This provider supports importing existing resources. The ID format expected uses a double `//` as a deliminator (as apiVersion can have a forward-slash):
 
-```
+```shell
 # Import the my-namespace Namespace
 terraform import kubectl_manifest.my-namespace v1//Namespace//my-namespace
 

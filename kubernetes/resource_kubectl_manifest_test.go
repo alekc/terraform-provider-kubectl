@@ -3,15 +3,16 @@ package kubernetes
 import (
 	"bytes"
 	"fmt"
+	"log"
+	"os"
+	"regexp"
+	"testing"
+
 	"github.com/alekc/terraform-provider-kubectl/yaml"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"log"
-	"os"
-	"regexp"
-	"testing"
 )
 
 func TestKubectlManifest_RetryOnFailure(t *testing.T) {
@@ -33,6 +34,191 @@ YAML
 			{
 				ExpectError: expectedError,
 				Config:      config,
+			},
+		},
+	})
+}
+
+func TestAccKubectl(t *testing.T) {
+	//language=hcl
+	config := `
+resource "kubectl_manifest" "test" {
+  wait = true
+	yaml_body = <<YAML
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.14.2
+    readinessProbe:
+      httpGet:
+        path: "/"
+        port: 80
+      initialDelaySeconds: 10
+YAML
+}
+`
+
+	//start := time.Now()
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckkubectlDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+			},
+		},
+	})
+}
+
+func TestAccKubectl_Wait(t *testing.T) {
+	//language=hcl
+	config := `
+resource "kubectl_manifest" "test" {
+	wait = true
+	yaml_body = <<YAML
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.14.2
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: "/"
+              port: 80
+            initialDelaySeconds: 10
+YAML
+}
+`
+
+	//start := time.Now()
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckkubectlDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+			},
+		},
+	})
+}
+
+func TestAccKubectl_WaitForeground(t *testing.T) {
+	//language=hcl
+	config := `
+resource "kubectl_manifest" "test" {
+	wait = true
+  delete_cascade = "Foreground"
+	yaml_body = <<YAML
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.14.2
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: "/"
+              port: 80
+            initialDelaySeconds: 10
+YAML
+}
+`
+
+	//start := time.Now()
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckkubectlDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+			},
+		},
+	})
+}
+
+func TestAccKubectl_WaitBackground(t *testing.T) {
+	//language=hcl
+	config := `
+resource "kubectl_manifest" "test" {
+	wait = true
+  delete_cascade = "Background"
+	yaml_body = <<YAML
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.14.2
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: "/"
+              port: 80
+            initialDelaySeconds: 10
+YAML
+}
+`
+
+	//start := time.Now()
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckkubectlDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
 			},
 		},
 	})
@@ -69,7 +255,7 @@ spec:
     readinessProbe:
       httpGet:
         path: "/"
-        port: 80			
+        port: 80
       initialDelaySeconds: 10
 YAML
 }
@@ -171,7 +357,7 @@ spec:
         backend:
           service:
             name: test
-            port: 
+            port:
               number: 80
 	EOT
 		}
@@ -198,7 +384,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: mysecret
-  namespace: prod 
+  namespace: prod
 type: Opaque
 data:
 `
@@ -424,7 +610,7 @@ spec:
         backend:
           service:
             name: test
-            port: 
+            port:
               number: 80`
 
 	config := fmt.Sprintf(`
@@ -480,7 +666,7 @@ spec:
         backend:
           service:
             name: test
-            port: 
+            port:
               number: 80`
 
 	config := fmt.Sprintf(`
@@ -546,7 +732,7 @@ spec:
         backend:
           service:
             name: test
-            port: 
+            port:
               number: 80`
 
 	config := fmt.Sprintf(`
