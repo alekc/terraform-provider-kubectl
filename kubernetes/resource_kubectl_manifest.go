@@ -5,15 +5,16 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
-	"github.com/sergi/go-diff/diffmatchpatch"
-	"k8s.io/cli-runtime/pkg/genericiooptions"
-	k8sdelete "k8s.io/kubectl/pkg/cmd/delete"
 	"log"
 	"os"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/sergi/go-diff/diffmatchpatch"
+	"k8s.io/cli-runtime/pkg/genericiooptions"
+	k8sdelete "k8s.io/kubectl/pkg/cmd/delete"
 
 	"github.com/alekc/terraform-provider-kubectl/flatten"
 	"github.com/alekc/terraform-provider-kubectl/internal/types"
@@ -24,7 +25,9 @@ import (
 	validate2 "github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
 	"github.com/mitchellh/mapstructure"
 	"github.com/thedevsaddam/gojsonq/v2"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/cli-runtime/pkg/printers"
 	"k8s.io/kubectl/pkg/scheme"
@@ -411,7 +414,7 @@ var (
 		},
 		"field_manager": {
 			Type:        schema.TypeString,
-			Description: "Override the default field manager name. This is only relevent when using server-side apply.",
+			Description: "Override the default field manager name. This is only relevant when using server-side apply.",
 			Optional:    true,
 			Default:     "kubectl",
 		},
@@ -486,6 +489,12 @@ var (
 					},
 				},
 			},
+		},
+		"delete_cascade": {
+			Type:             schema.TypeString,
+			Description:      "Cascade mode for delete operations, explicitly setting this to Background to match kubectl is recommended. Default is Background unless wait has been set when it will be Foreground.",
+			Optional:         true,
+			ValidateDiagFunc: validate2.ToDiagFunc(validate2.StringInSlice([]string{string(meta_v1.DeletePropagationBackground), string(meta_v1.DeletePropagationForeground)}, false)),
 		},
 	}
 )
@@ -719,29 +728,58 @@ func resourceKubectlManifestDelete(ctx context.Context, d *schema.ResourceData, 
 
 	log.Printf("[INFO] %s perform delete of manifest", manifest)
 
-	propagationPolicy := meta_v1.DeletePropagationBackground
 	waitForDelete := d.Get("wait").(bool)
-	if waitForDelete {
+
+	var propagationPolicy meta_v1.DeletionPropagation
+	cascadeInput := d.Get("delete_cascade").(string)
+	if len(cascadeInput) > 0 {
+		propagationPolicy = meta_v1.DeletionPropagation(cascadeInput)
+	} else if waitForDelete {
 		propagationPolicy = meta_v1.DeletePropagationForeground
+	} else {
+		propagationPolicy = meta_v1.DeletePropagationBackground
 	}
+
+	var resourceVersion string
+	if waitForDelete {
+		rawResponse, err := restClient.ResourceInterface.Get(ctx, manifest.GetName(), meta_v1.GetOptions{})
+		if err != nil {
+			return err
+		}
+
+		response := yaml.NewFromUnstructured(rawResponse)
+		resourceVersion = response.GetResourceVersion()
+	}
+
 	err = restClient.ResourceInterface.Delete(ctx, manifest.GetName(), meta_v1.DeleteOptions{PropagationPolicy: &propagationPolicy})
 	resourceGone := errors.IsGone(err) || errors.IsNotFound(err)
 	if err != nil && !resourceGone {
 		return fmt.Errorf("%v failed to delete kubernetes resource: %+v", manifest, err)
 	}
-	// at the moment the foreground propagation policy does not behave as expected (it won't block waiting for deletion
-	// and it's up to us to check that the object has been successfully deleted.
-	for waitForDelete {
-		_, err := restClient.ResourceInterface.Get(ctx, manifest.GetName(), meta_v1.GetOptions{})
-		resourceGone = errors.IsGone(err) || errors.IsNotFound(err)
+
+	// The rest client doesn't wait for the delete so we need custom logic
+	if waitForDelete {
+		log.Printf("[INFO] %s waiting for delete of manifest to complete", manifest)
+
+		watcher, err := restClient.ResourceInterface.Watch(ctx, meta_v1.ListOptions{Watch: true, FieldSelector: fields.OneTermEqualSelector("metadata.name", manifest.GetName()).String(), ResourceVersion: resourceVersion})
 		if err != nil {
-			if resourceGone {
-				break
-			}
-			return fmt.Errorf("%v failed to delete kubernetes resource: %+v", manifest, err)
+			return err
 		}
-		log.Printf("[DEBUG] %v waiting for deletion of the resource:\n%s", manifest, yamlBody)
-		time.Sleep(time.Second * 10)
+
+		defer watcher.Stop()
+
+		deleted := false
+		for !deleted {
+			select {
+			case event := <-watcher.ResultChan():
+				if event.Type == watch.Deleted {
+					deleted = true
+				}
+
+			case <-ctx.Done():
+				return fmt.Errorf("%s failed to delete kubernetes resource", manifest)
+			}
+		}
 	}
 
 	// Success remove it from state
