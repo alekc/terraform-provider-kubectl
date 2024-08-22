@@ -224,6 +224,156 @@ YAML
 	})
 }
 
+func TestAccKubectl_WaitForRolloutDeployment(t *testing.T) {
+	//language=hcl
+	config := `
+resource "kubectl_manifest" "test" {
+  wait_for_rollout = true
+	yaml_body = <<YAML
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+  labels:
+    app: nginx
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.14.2
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: "/"
+              port: 80
+            initialDelaySeconds: 10
+YAML
+}
+`
+
+	//start := time.Now()
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckkubectlDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+			},
+		},
+	})
+}
+
+func TestAccKubectl_WaitForRolloutDaemonSet(t *testing.T) {
+	//language=hcl
+	config := `
+resource "kubectl_manifest" "test" {
+  wait_for_rollout = true
+	yaml_body = <<YAML
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nginx
+  labels:
+    app: nginx
+spec:
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.14.2
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: "/"
+              port: 80
+            initialDelaySeconds: 10
+YAML
+}
+`
+
+	//start := time.Now()
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckkubectlDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+			},
+		},
+	})
+}
+
+func TestAccKubectl_WaitForRolloutStatefulSet(t *testing.T) {
+	//language=hcl
+	config := `
+resource "kubectl_manifest" "test" {
+  wait_for_rollout = true
+	yaml_body = <<YAML
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nginx
+  labels:
+    app: nginx
+spec:
+  updateStrategy:
+    type: RollingUpdate
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.14.2
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: "/"
+              port: 80
+            initialDelaySeconds: 10
+YAML
+}
+`
+
+	//start := time.Now()
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckkubectlDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+			},
+		},
+	})
+}
+
 func TestAccKubectl_RequireWaitForFieldOrCondition(t *testing.T) {
 	//language=hcl
 	config := `
@@ -255,14 +405,13 @@ YAML
 		CheckDestroy: testAccCheckkubectlDestroy,
 		Steps: []resource.TestStep{
 			{
-				Config: config,
+				Config:      config,
 				ExpectError: expectedError,
 				//todo: improve checking
 			},
 		},
 	})
 }
-
 
 func TestAccKubectl_WaitForField(t *testing.T) {
 	//language=hcl
@@ -315,7 +464,6 @@ YAML
 	})
 }
 
-
 func TestAccKubectl_WaitForConditions(t *testing.T) {
 	//language=hcl
 	config := `
@@ -342,7 +490,7 @@ spec:
     readinessProbe:
       httpGet:
         path: "/"
-        port: 80			
+        port: 80
       initialDelaySeconds: 10
 YAML
 }
@@ -401,7 +549,7 @@ spec:
     readinessProbe:
       httpGet:
         path: "/"
-        port: 80			
+        port: 80
       initialDelaySeconds: 10
 YAML
 }
@@ -420,7 +568,6 @@ YAML
 		},
 	})
 }
-
 
 //func TestAccKubect_Debug(t *testing.T) {
 //	//language=hcl
