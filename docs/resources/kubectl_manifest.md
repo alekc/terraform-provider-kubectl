@@ -38,7 +38,7 @@ YAML
 
 ### With explicit `wait_for`
 
-If `wait_for` is specified, upon applying the resource, provider will wait for **all** conditions to become true before proceeding further. 
+If `wait_for` is specified, upon applying the resource, provider will wait for **all** conditions to become true before proceeding further.  
 
 ```hcl
 resource "kubectl_manifest" "test" {
@@ -55,6 +55,14 @@ resource "kubectl_manifest" "test" {
       key = "status.podIP"
       value = "^(\\d+(\\.|$)){4}"
       value_type = "regex"
+    }
+    condition {
+      type = "ContainersReady"
+      status = "True"
+    }
+    condition {
+      type = "Ready"
+      status = "True"
     }
   }
   yaml_body = <<YAML
@@ -94,9 +102,10 @@ YAML
 
 ### `wait_for`
 
-Required:
+Required, at least one of:
 
-* `field` (Block List, Min: 1) Condition criteria for a field (see [below for nested schema](#wait_forfield))
+* `field` (Block List, Min: 0) Condition criteria for a field (see [below for nested schema](#wait_forfield))
+* `condition` (Block List, Min: 0) Condition criteria for a condition (see [below for nested schema](#wait_forcondition))
 
 ### `wait_for.field`
 
@@ -108,6 +117,13 @@ Required:
 Optional:
 
 - `value_type` (String) Value type. Can be either a `eq` (equivalent) or `regex`
+
+### `wait_for.condition`
+
+Required:
+
+* `type` (String) Type as expected from the resulting Condition object
+* `status` (String) Status to wait for in the resulting Condition object
 
 ## Attribute Reference
 
