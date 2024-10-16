@@ -413,6 +413,40 @@ YAML
 	})
 }
 
+func TestAccKubectl_WaitForNS(t *testing.T) {
+	//language=hcl
+	config := `
+resource "kubectl_manifest" "test_wait_for" {
+  timeouts {
+    create = "200s"
+  }
+  yaml_body = <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-wait-for
+EOF
+
+  wait_for {
+    field {
+      key = "status.phase"
+      value = "Active"
+    }
+  }
+}` //start := time.Now()
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckkubectlDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				//todo: improve checking
+			},
+		},
+	})
+	log.Println(config)
+}
 func TestAccKubectl_WaitForField(t *testing.T) {
 	//language=hcl
 	config := `

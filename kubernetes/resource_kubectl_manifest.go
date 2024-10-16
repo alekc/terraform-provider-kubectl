@@ -1198,18 +1198,25 @@ func waitForApiService(ctx context.Context, provider *KubeProvider, name string,
 func waitForConditions(ctx context.Context, restClient *RestClientResult, waitFields []types.WaitForField, waitConditions []types.WaitForStatusCondition, name string, resourceVersion string, timeout time.Duration) error {
 	timeoutSeconds := int64(timeout.Seconds())
 
-	watcher, err := restClient.ResourceInterface.Watch(ctx, meta_v1.ListOptions{Watch: true, TimeoutSeconds: &timeoutSeconds, FieldSelector: fields.OneTermEqualSelector("metadata.name", name).String(), ResourceVersion: resourceVersion})
+	watcher, err := restClient.ResourceInterface.Watch(
+		ctx,
+		meta_v1.ListOptions{
+			Watch:          true,
+			TimeoutSeconds: &timeoutSeconds,
+			FieldSelector:  fields.OneTermEqualSelector("metadata.name", name).String(),
+		},
+	)
 	if err != nil {
 		return err
 	}
-
 	defer watcher.Stop()
 
 	done := false
 	for !done {
 		select {
 		case event := <-watcher.ResultChan():
-			if event.Type == watch.Modified {
+			log.Printf("[TRACE] Received event type %s for %s", event.Type, name)
+			if event.Type == watch.Modified || event.Type == watch.Added {
 				rawResponse, ok := event.Object.(*meta_v1_unstruct.Unstructured)
 				if !ok {
 					return fmt.Errorf("%s could not cast resource to unstructured", name)
@@ -1224,7 +1231,9 @@ func waitForConditions(ctx context.Context, restClient *RestClientResult, waitFi
 
 				for _, c := range waitConditions {
 					// Find the conditions by status and type
-					v := gq.Reset().From("status.conditions").Where("type", "=", c.Type).Where("status", "=", c.Status)
+					v := gq.Reset().From("status.conditions").
+						Where("type", "=", c.Type).
+						Where("status", "=", c.Status)
 					if v == nil {
 						continue
 					}
