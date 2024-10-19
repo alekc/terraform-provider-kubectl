@@ -1222,6 +1222,9 @@ func waitForConditions(ctx context.Context, restClient *RestClientResult, waitFi
 					return fmt.Errorf("%s could not cast resource to unstructured", name)
 				}
 
+				totalConditions := len(waitConditions) + len(waitFields)
+				totalMatches := 0
+
 				yamlJson, err := rawResponse.MarshalJSON()
 				if err != nil {
 					return err
@@ -1243,6 +1246,7 @@ func waitForConditions(ctx context.Context, restClient *RestClientResult, waitFi
 					// Find the key
 					v := gq.Reset().Find(c.Key)
 					if v == nil {
+						log.Printf("[TRACE] Key %s not found in %s", c.Key, name)
 						continue
 					}
 
@@ -1256,17 +1260,27 @@ func waitForConditions(ctx context.Context, restClient *RestClientResult, waitFi
 						}
 
 						if !matched {
+							log.Printf("[TRACE] Value %s does not match regex %s in %s (key %s)", stringVal, c.Value, name, c.Key)
 							continue
 						}
+
+						log.Printf("[TRACE] Value %s matches regex %s in %s (key %s)", stringVal, c.Value, name, c.Key)
+						totalMatches++
 
 					case "eq", "":
 						if stringVal != c.Value {
+							log.Printf("[TRACE] Value %s does not match %s in %s (key %s)", stringVal, c.Value, name, c.Key)
 							continue
 						}
+						log.Printf("[TRACE] Value %s matches %s in %s (key %s)", stringVal, c.Value, name, c.Key)
+						totalMatches++
 					}
 				}
-
-				done = true
+				if totalMatches == totalConditions {
+					log.Printf("[TRACE] All conditions met for %s", name)
+					done = true
+				}
+				log.Printf("[TRACE] %d/%d conditions met for %s. Waiting for next ", totalMatches, totalConditions, name)
 			}
 
 		case <-ctx.Done():

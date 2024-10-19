@@ -412,6 +412,43 @@ YAML
 		},
 	})
 }
+func TestAccKubectl_WaitForNegativeCondition(t *testing.T) {
+	//language=hcl
+	config := `
+resource "kubectl_manifest" "test_wait_for" {
+  timeouts {
+    create = "10s"
+  }
+  yaml_body = <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-wait-for
+EOF
+
+  wait_for {
+    field {
+      key = "status.phase"
+      value = "Activez"
+    }
+  }
+}` //start := time.Now()
+	// atm the actual error is being hidden by the wait context being deleted. Fix this at some point
+	//errorRegex, _ := regexp.Compile(".*failed to wait for resource*")
+	errorRegex, _ := regexp.Compile(".*Wait returned an error*")
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckkubectlDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config:      config,
+				ExpectError: errorRegex,
+			},
+		},
+	})
+	log.Println(config)
+}
 
 func TestAccKubectl_WaitForNS(t *testing.T) {
 	//language=hcl
