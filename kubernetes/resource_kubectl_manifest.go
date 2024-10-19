@@ -1222,6 +1222,9 @@ func waitForConditions(ctx context.Context, restClient *RestClientResult, waitFi
 					return fmt.Errorf("%s could not cast resource to unstructured", name)
 				}
 
+				totalConditions := len(waitConditions) + len(waitFields)
+				totalMatches := 0
+
 				yamlJson, err := rawResponse.MarshalJSON()
 				if err != nil {
 					return err
@@ -1231,18 +1234,22 @@ func waitForConditions(ctx context.Context, restClient *RestClientResult, waitFi
 
 				for _, c := range waitConditions {
 					// Find the conditions by status and type
-					v := gq.Reset().From("status.conditions").
+					count := gq.Reset().From("status.conditions").
 						Where("type", "=", c.Type).
-						Where("status", "=", c.Status)
-					if v == nil {
+						Where("status", "=", c.Status).Count()
+					if count == 0 {
+						log.Printf("[TRACE] Condition %s with status %s not found in %s", c.Type, c.Status, name)
 						continue
 					}
+					log.Printf("[TRACE] Condition %s with status %s found in %s", c.Type, c.Status, name)
+					totalMatches++
 				}
 
 				for _, c := range waitFields {
 					// Find the key
 					v := gq.Reset().Find(c.Key)
 					if v == nil {
+						log.Printf("[TRACE] Key %s not found in %s", c.Key, name)
 						continue
 					}
 
@@ -1256,17 +1263,28 @@ func waitForConditions(ctx context.Context, restClient *RestClientResult, waitFi
 						}
 
 						if !matched {
+							log.Printf("[TRACE] Value %s does not match regex %s in %s (key %s)", stringVal, c.Value, name, c.Key)
 							continue
 						}
+
+						log.Printf("[TRACE] Value %s matches regex %s in %s (key %s)", stringVal, c.Value, name, c.Key)
+						totalMatches++
 
 					case "eq", "":
 						if stringVal != c.Value {
+							log.Printf("[TRACE] Value %s does not match %s in %s (key %s)", stringVal, c.Value, name, c.Key)
 							continue
 						}
+						log.Printf("[TRACE] Value %s matches %s in %s (key %s)", stringVal, c.Value, name, c.Key)
+						totalMatches++
 					}
 				}
-
-				done = true
+				if totalMatches == totalConditions {
+					log.Printf("[TRACE] All conditions met for %s", name)
+					done = true
+					continue
+				}
+				log.Printf("[TRACE] %d/%d conditions met for %s. Waiting for next ", totalMatches, totalConditions, name)
 			}
 
 		case <-ctx.Done():
