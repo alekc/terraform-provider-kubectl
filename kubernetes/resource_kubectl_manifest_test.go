@@ -412,7 +412,7 @@ YAML
 		},
 	})
 }
-func TestAccKubectl_WaitForNegativeCondition(t *testing.T) {
+func TestAccKubectl_WaitForNegativeField(t *testing.T) {
 	//language=hcl
 	config := `
 resource "kubectl_manifest" "test_wait_for" {
@@ -432,6 +432,49 @@ EOF
       value = "Activez"
     }
   }
+}` //start := time.Now()
+	// atm the actual error is being hidden by the wait context being deleted. Fix this at some point
+	//errorRegex, _ := regexp.Compile(".*failed to wait for resource*")
+	errorRegex, _ := regexp.Compile(".*Wait returned an error*")
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckkubectlDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config:      config,
+				ExpectError: errorRegex,
+			},
+		},
+	})
+	log.Println(config)
+}
+
+func TestAccKubectl_WaitForNegativeCondition(t *testing.T) {
+	//language=hcl
+	config := `
+resource "kubectl_manifest" "test" {
+	timeouts {
+		create = "20s"
+	}
+
+	wait_for {
+		condition {
+			type = "ContainersReady"
+			status = "Never"
+		}
+	}
+	yaml_body = <<YAML
+apiVersion: v1
+kind: Pod
+metadata:
+  name: busybox-sleep
+spec:
+  containers:
+  - name: busybox
+    image: busybox
+    command: ["sleep", "30"]  
+YAML
 }` //start := time.Now()
 	// atm the actual error is being hidden by the wait context being deleted. Fix this at some point
 	//errorRegex, _ := regexp.Compile(".*failed to wait for resource*")
