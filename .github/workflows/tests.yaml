@@ -4,6 +4,10 @@ on:
     branches:
       - master
 
+concurrency:
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   KUBECONFIG: ${{ github.workspace }}/.kube/config
 
