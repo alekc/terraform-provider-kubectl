@@ -668,18 +668,8 @@ func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, m
 			return fmt.Errorf("at least one of `field` or `condition` must be provided in `wait_for` block")
 		}
 
-		rawResponse, err := restClient.ResourceInterface.List(ctx, meta_v1.ListOptions{FieldSelector: fields.OneTermEqualSelector("metadata.name", manifest.GetName()).String()})
-		if err != nil {
-			return err
-		}
-
-		resourceVersion, _, err := unstructured.NestedString(rawResponse.Object, "metadata", "resourceVersion")
-		if err != nil {
-			return err
-		}
-
 		log.Printf("[INFO] %v waiting for wait conditions for %vmin", manifest, timeout.Minutes())
-		err = waitForConditions(ctx, restClient, waitFor.Field, waitFor.Condition, manifest.GetName(), resourceVersion, timeout)
+		err = waitForConditions(ctx, restClient, waitFor.Field, waitFor.Condition, manifest.GetName(), timeout)
 		if err != nil {
 			return err
 		}
@@ -784,19 +774,6 @@ func resourceKubectlManifestDelete(ctx context.Context, d *schema.ResourceData, 
 		propagationPolicy = meta_v1.DeletePropagationBackground
 	}
 
-	var resourceVersion string
-	if wait {
-		rawResponse, err := restClient.ResourceInterface.List(ctx, meta_v1.ListOptions{FieldSelector: fields.OneTermEqualSelector("metadata.name", manifest.GetName()).String()})
-		if err != nil {
-			return err
-		}
-
-		resourceVersion, _, err = unstructured.NestedString(rawResponse.Object, "metadata", "resourceVersion")
-		if err != nil {
-			return err
-		}
-	}
-
 	err = restClient.ResourceInterface.Delete(ctx, manifest.GetName(), meta_v1.DeleteOptions{PropagationPolicy: &propagationPolicy})
 	resourceGone := errors.IsGone(err) || errors.IsNotFound(err)
 	if err != nil && !resourceGone {
@@ -804,12 +781,12 @@ func resourceKubectlManifestDelete(ctx context.Context, d *schema.ResourceData, 
 	}
 
 	// The rest client doesn't wait for the delete so we need custom logic
-	if wait {
+	if wait && !resourceGone {
 		log.Printf("[INFO] %s waiting for delete of manifest to complete", manifest)
 
 		timeout := d.Timeout(schema.TimeoutDelete)
 
-		err = waitForDelete(ctx, restClient, manifest.GetName(), resourceVersion, timeout)
+		err = waitForDelete(ctx, restClient, manifest.GetName(), timeout)
 		if err != nil {
 			return err
 		}
@@ -961,26 +938,46 @@ func checkAPIResourceIsPresent(available []*meta_v1.APIResourceList, resource me
 	return nil, false
 }
 
-func waitForDelete(ctx context.Context, restClient *RestClientResult, name string, resourceVersion string, timeout time.Duration) error {
+func waitForDelete(ctx context.Context, restClient *RestClientResult, name string, timeout time.Duration) error {
 	timeoutSeconds := int64(timeout.Seconds())
 
-	watcher, err := restClient.ResourceInterface.Watch(ctx, meta_v1.ListOptions{Watch: true, TimeoutSeconds: &timeoutSeconds, FieldSelector: fields.OneTermEqualSelector("metadata.name", name).String(), ResourceVersion: resourceVersion})
-	if err != nil {
+	rawResponse, err := restClient.ResourceInterface.Get(ctx, name, meta_v1.GetOptions{})
+	resourceGone := errors.IsGone(err) || errors.IsNotFound(err)
+	if err != nil && !resourceGone {
 		return err
 	}
 
-	defer watcher.Stop()
+	if !resourceGone {
+		resourceVersion, _, err := unstructured.NestedString(rawResponse.Object, "metadata", "resourceVersion")
+		if err != nil {
+			return err
+		}
 
-	deleted := false
-	for !deleted {
-		select {
-		case event := <-watcher.ResultChan():
-			if event.Type == watch.Deleted {
-				deleted = true
+		watcher, err := restClient.ResourceInterface.Watch(
+			ctx,
+			meta_v1.ListOptions{
+				Watch:           true,
+				TimeoutSeconds:  &timeoutSeconds,
+				FieldSelector:   fields.OneTermEqualSelector("metadata.name", name).String(),
+				ResourceVersion: resourceVersion,
+			})
+		if err != nil {
+			return err
+		}
+
+		defer watcher.Stop()
+
+		deleted := false
+		for !deleted {
+			select {
+			case event := <-watcher.ResultChan():
+				if event.Type == watch.Deleted {
+					deleted = true
+				}
+
+			case <-ctx.Done():
+				return fmt.Errorf("%s failed to delete resource", name)
 			}
-
-		case <-ctx.Done():
-			return fmt.Errorf("%s failed to delete resource", name)
 		}
 	}
 
@@ -1195,7 +1192,7 @@ func waitForApiService(ctx context.Context, provider *KubeProvider, name string,
 	return nil
 }
 
-func waitForConditions(ctx context.Context, restClient *RestClientResult, waitFields []types.WaitForField, waitConditions []types.WaitForStatusCondition, name string, resourceVersion string, timeout time.Duration) error {
+func waitForConditions(ctx context.Context, restClient *RestClientResult, waitFields []types.WaitForField, waitConditions []types.WaitForStatusCondition, name string, timeout time.Duration) error {
 	timeoutSeconds := int64(timeout.Seconds())
 
 	watcher, err := restClient.ResourceInterface.Watch(

@@ -473,7 +473,7 @@ spec:
   containers:
   - name: busybox
     image: busybox
-    command: ["sleep", "30"]  
+    command: ["sleep", "30"]
 YAML
 }` //start := time.Now()
 	// atm the actual error is being hidden by the wait context being deleted. Fix this at some point
