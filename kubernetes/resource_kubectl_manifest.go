@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sergi/go-diff/diffmatchpatch"
 	"k8s.io/cli-runtime/pkg/genericiooptions"
 	k8sdelete "k8s.io/kubectl/pkg/cmd/delete"
 
@@ -308,10 +307,11 @@ metadata:
 			liveStateYaml := d.Get("live_manifest_incluster").(string)
 			if stateYaml != liveStateYaml {
 				log.Printf("[TRACE] DETECTED YAML STATE DIFFERENCE %s vs %s", stateYaml, liveStateYaml)
-				dmp := diffmatchpatch.New()
-				patches := dmp.PatchMake(stateYaml, liveStateYaml)
-				patchText := dmp.PatchToText(patches)
-				log.Printf("[DEBUG] DETECTED YAML INCLUSTER STATE DIFFERENCE. Patch diff: %s", patchText)
+				// disabled due to a bug in go-diff library. See https://github.com/alekc/terraform-provider-kubectl/issues/181
+				//dmp := diffmatchpatch.New()
+				//patches := dmp.PatchMake(stateYaml, liveStateYaml)
+				//patchText := dmp.PatchToText(patches)
+				//log.Printf("[DEBUG] DETECTED YAML INCLUSTER STATE DIFFERENCE. Patch diff: %s", patchText)
 				_ = d.SetNewComputed("yaml_incluster")
 			}
 
