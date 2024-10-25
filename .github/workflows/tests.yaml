@@ -15,19 +15,29 @@ jobs:
   get_version_matrix:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: imjasonh/setup-crane@31b88efe9de28ae0ffa220711af4b60be9435f6e # v0.4
       - id: get_version_matrix
         shell: bash
-        run: scripts/get-version-matrix.sh
+        run: |
+          set -euo pipefail
+
+          k8s_cycles="$(curl -sSfL https://endoflife.date/api/kubernetes.json | jq -rc '[sort_by(.releaseDate) | reverse | .[0:4] | .[].cycle]')"
+          kind_versions="$(crane ls docker.io/kindest/node | jq -sRrc --argjson cycles "${k8s_cycles}" 'split("\n") | [.[] | match("^v((\\d+\\.\\d+)\\.\\d+)$").captures | {cycle: .[1].string, version: .[0].string}] | group_by(.cycle) | [.[] | .[-1] | {(.cycle): {"version": .version}}] | reduce .[] as $item ({}; . *= $item) | . as $versions | [$cycles | .[] | $versions[.].version]')"
+
+          {
+            echo "terraform_versions=$(curl -sSfL https://endoflife.date/api/terraform.json | jq -rc '[sort_by(.releaseDate) | reverse | .[0:4] | .[].latest] + ["1.5.7"]')"
+            echo "k8s_versions=${kind_versions}"
+          } >> "${GITHUB_OUTPUT}"
     outputs:
       terraform_versions: ${{ steps.get_version_matrix.outputs.terraform_versions }}
       k8s_versions: ${{ steps.get_version_matrix.outputs.k8s_versions }}
   unit_test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@master
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed # v5.1.0
         with:
           go-version-file: go.mod
       - name: Unit tests
@@ -47,12 +57,12 @@ jobs:
         terraform_version:  ${{ fromJson(needs.get_version_matrix.outputs.terraform_versions) }}
         k8s_version:  ${{ fromJson(needs.get_version_matrix.outputs.k8s_versions) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed # v5.1.0
         with:
           go-version-file: go.mod
-      - uses: helm/kind-action@v1.10.0
+      - uses: helm/kind-action@0025e74a8c7512023d06dc019c617aa3cf561fde # v1.10.0
         id: kind
         with:
           wait: 2m

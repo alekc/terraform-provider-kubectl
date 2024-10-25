@@ -2,19 +2,33 @@ version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
-    labels: [ dependencies ]
-    assignees: [ alekc ]
-    reviewers: [ alekc ]
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    labels: [dependencies]
+    assignees: [alekc]
+    reviewers: [alekc]
     commit-message:
       prefix: "Dependencies:"
     schedule:
       interval: daily
-  - package-ecosystem: "gomod"
-    directory: "/"
-    labels: [ dependencies ]
-    assignees: [ alekc ]
-    reviewers: [ alekc ]
+  - package-ecosystem: gomod
+    directory: /
+    groups:
+      gomod:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    labels: [dependencies]
+    assignees: [alekc]
+    reviewers: [alekc]
     commit-message:
       prefix: "Dependencies:"
     schedule:
-      interval: "daily"
+      interval: daily
