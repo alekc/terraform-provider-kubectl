@@ -71,6 +71,6 @@ jobs:
         env:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
           TF_ACC_TERRAFORM_VERSION: ${{ matrix.terraform_version }}
-          TESTARGS: "-parallel 1"
+          TESTARGS: "-race "
         run: |
           make testacc
