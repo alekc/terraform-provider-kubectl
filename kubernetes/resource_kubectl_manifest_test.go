@@ -28,7 +28,7 @@ YAML
 	`
 
 	expectedError, _ := regexp.Compile(".*failed to create kubernetes.*")
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		Providers: testAccProviders,
 		Steps: []resource.TestStep{
 			{
@@ -39,7 +39,7 @@ YAML
 	})
 }
 
-func TestAccKubectl(t *testing.T) {
+func TestAccKubectl_SinglePod(t *testing.T) {
 	//language=hcl
 	config := `
 resource "kubectl_manifest" "test" {
@@ -48,11 +48,11 @@ resource "kubectl_manifest" "test" {
 apiVersion: v1
 kind: Pod
 metadata:
-  name: nginx
+  name: caddy-single-pod
 spec:
   containers:
-  - name: nginx
-    image: nginx:1.14.2
+  - name: caddy
+    image: caddy:2.8.4-alpine
     readinessProbe:
       httpGet:
         path: "/"
@@ -62,8 +62,7 @@ YAML
 }
 `
 
-	//start := time.Now()
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -84,22 +83,22 @@ resource "kubectl_manifest" "test" {
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: nginx-deployment
+  name: caddy-wait
   labels:
-    app: nginx
+    app: caddy
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: nginx
+      app: caddy
   template:
     metadata:
       labels:
-        app: nginx
+        app: caddy
     spec:
       containers:
-        - name: nginx
-          image: nginx:1.14.2
+        - name: caddy
+          image: caddy:2.8.4-alpine
           ports:
             - containerPort: 80
           readinessProbe:
@@ -111,8 +110,7 @@ YAML
 }
 `
 
-	//start := time.Now()
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -134,22 +132,22 @@ resource "kubectl_manifest" "test" {
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: nginx-deployment
+  name: caddy-wait-foreground
   labels:
-    app: nginx
+    app: caddy
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: nginx
+      app: caddy
   template:
     metadata:
       labels:
-        app: nginx
+        app: caddy
     spec:
       containers:
-        - name: nginx
-          image: nginx:1.14.2
+        - name: caddy
+          image: caddy:2.8.4-alpine
           ports:
             - containerPort: 80
           readinessProbe:
@@ -161,8 +159,7 @@ YAML
 }
 `
 
-	//start := time.Now()
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -184,22 +181,22 @@ resource "kubectl_manifest" "test" {
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: nginx-deployment
+  name: caddy-wait-background
   labels:
-    app: nginx
+    app: caddy
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: nginx
+      app: caddy
   template:
     metadata:
       labels:
-        app: nginx
+        app: caddy
     spec:
       containers:
-        - name: nginx
-          image: nginx:1.14.2
+        - name: caddy
+          image: caddy:2.8.4-alpine
           ports:
             - containerPort: 80
           readinessProbe:
@@ -211,8 +208,7 @@ YAML
 }
 `
 
-	//start := time.Now()
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -233,22 +229,22 @@ resource "kubectl_manifest" "test" {
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: nginx
+  name: caddy-wait-for-rollout-dp
   labels:
-    app: nginx
+    app: caddy
 spec:
   replicas: 3
   selector:
     matchLabels:
-      app: nginx
+      app: caddy
   template:
     metadata:
       labels:
-        app: nginx
+        app: caddy
     spec:
       containers:
-        - name: nginx
-          image: nginx:1.14.2
+        - name: caddy
+          image: caddy:2.8.4-alpine
           ports:
             - containerPort: 80
           readinessProbe:
@@ -260,8 +256,7 @@ YAML
 }
 `
 
-	//start := time.Now()
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -282,23 +277,23 @@ resource "kubectl_manifest" "test" {
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: nginx
+  name: caddy-wait-for-rollout-ds
   labels:
-    app: nginx
+    app: caddy
 spec:
   updateStrategy:
     type: RollingUpdate
   selector:
     matchLabels:
-      app: nginx
+      app: caddy
   template:
     metadata:
       labels:
-        app: nginx
+        app: caddy
     spec:
       containers:
-        - name: nginx
-          image: nginx:1.14.2
+        - name: caddy
+          image: caddy:2.8.4-alpine
           ports:
             - containerPort: 80
           readinessProbe:
@@ -310,8 +305,7 @@ YAML
 }
 `
 
-	//start := time.Now()
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -332,37 +326,37 @@ resource "kubectl_manifest" "test" {
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: nginx
+  name: caddy-wait-for-rollout-ss
   labels:
-    app: nginx
+    app: caddy
 spec:
   updateStrategy:
     type: RollingUpdate
   replicas: 3
   selector:
     matchLabels:
-      app: nginx
+      app: caddy
   template:
     metadata:
       labels:
-        app: nginx
+        app: caddy
     spec:
       containers:
-        - name: nginx
-          image: nginx:1.14.2
+        - name: caddy
+          image: caddy:2.8.4-alpine
           ports:
             - containerPort: 80
           readinessProbe:
             httpGet:
               path: "/"
               port: 80
-            initialDelaySeconds: 10
+            initialDelaySeconds: 5
 YAML
 }
 `
 
 	//start := time.Now()
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -383,11 +377,11 @@ resource "kubectl_manifest" "test" {
 apiVersion: v1
 kind: Pod
 metadata:
-  name: nginx
+  name: caddy
 spec:
   containers:
-  - name: nginx
-    image: nginx:1.14.2
+  - name: caddy
+    image: caddy:2.8.4-alpine
     readinessProbe:
       httpGet:
         path: "/"
@@ -397,9 +391,8 @@ YAML
 }
 `
 
-	//start := time.Now()
 	expectedError, _ := regexp.Compile(".*at least one of `field` or `condition` must be provided in `wait_for` block.*")
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -423,7 +416,7 @@ resource "kubectl_manifest" "test_wait_for" {
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: test-wait-for
+  name: test-wait-for-negative
 EOF
 
   wait_for {
@@ -432,11 +425,11 @@ EOF
       value = "Activez"
     }
   }
-}` //start := time.Now()
+}`
 	// atm the actual error is being hidden by the wait context being deleted. Fix this at some point
 	//errorRegex, _ := regexp.Compile(".*failed to wait for resource*")
 	errorRegex, _ := regexp.Compile(".*Wait returned an error*")
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -447,7 +440,6 @@ EOF
 			},
 		},
 	})
-	log.Println(config)
 }
 
 func TestAccKubectl_WaitForNegativeCondition(t *testing.T) {
@@ -468,18 +460,18 @@ resource "kubectl_manifest" "test" {
 apiVersion: v1
 kind: Pod
 metadata:
-  name: busybox-sleep
+  name: busybox-sleep-wait-for-negative
 spec:
   containers:
   - name: busybox
     image: busybox
     command: ["sleep", "30"]
 YAML
-}` //start := time.Now()
+}`
 	// atm the actual error is being hidden by the wait context being deleted. Fix this at some point
 	//errorRegex, _ := regexp.Compile(".*failed to wait for resource*")
 	errorRegex, _ := regexp.Compile(".*Wait returned an error*")
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -514,7 +506,7 @@ EOF
     }
   }
 }` //start := time.Now()
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -551,11 +543,11 @@ resource "kubectl_manifest" "test" {
 apiVersion: v1
 kind: Pod
 metadata:
-  name: nginx
+  name: caddy-wait-for-field
 spec:
   containers:
-  - name: nginx
-    image: nginx:1.14.2
+  - name: caddy
+    image: caddy:2.8.4-alpine
     readinessProbe:
       httpGet:
         path: "/"
@@ -565,8 +557,7 @@ YAML
 }
 `
 
-	//start := time.Now()
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -597,11 +588,11 @@ resource "kubectl_manifest" "test" {
 apiVersion: v1
 kind: Pod
 metadata:
-  name: nginx
+  name: caddy-wait-for-conditions
 spec:
   containers:
-  - name: nginx
-    image: nginx:1.14.2
+  - name: caddy
+    image: caddy:2.8.4-alpine
     readinessProbe:
       httpGet:
         path: "/"
@@ -611,8 +602,7 @@ YAML
 }
 `
 
-	//start := time.Now()
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -656,11 +646,11 @@ resource "kubectl_manifest" "test" {
 apiVersion: v1
 kind: Pod
 metadata:
-  name: nginx
+  name: caddy-wait-for-field-and-conditions
 spec:
   containers:
-  - name: nginx
-    image: nginx:1.14.2
+  - name: caddy
+    image: caddy:2.8.4-alpine
     readinessProbe:
       httpGet:
         path: "/"
@@ -671,7 +661,7 @@ YAML
 `
 
 	//start := time.Now()
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -693,22 +683,22 @@ resource "kubectl_manifest" "test" {
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: nginx-deployment
+  name: caddy-wait-for-condition-update
   labels:
-    app: nginx
+    app: caddy
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: nginx
+      app: caddy
   template:
     metadata:
       labels:
-        app: nginx
+        app: caddy
     spec:
       containers:
-        - name: nginx
-          image: nginx:1.27.0
+        - name: caddy
+          image: caddy:2.8.4-alpine
           ports:
             - containerPort: 80
           readinessProbe:
@@ -720,6 +710,7 @@ YAML
 }
 `
 
+	//language=hcl
 	updateConfig := `
 resource "kubectl_manifest" "test" {
   wait_for_rollout = false
@@ -733,22 +724,22 @@ resource "kubectl_manifest" "test" {
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: nginx-deployment
+  name: caddy-wait-for-condition-update
   labels:
-    app: nginx
+    app: caddy
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: nginx
+      app: caddy
   template:
     metadata:
       labels:
-        app: nginx
+        app: caddy
     spec:
       containers:
-        - name: nginx
-          image: nginx:1.27.2
+        - name: caddy
+          image: caddy:2.8.1-alpine
           ports:
             - containerPort: 80
           readinessProbe:
@@ -760,8 +751,7 @@ YAML
 }
 `
 
-	//start := time.Now()
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -785,22 +775,22 @@ resource "kubectl_manifest" "test" {
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: nginx-deployment
+  name: caddy-wait-for-field
   labels:
-    app: nginx
+    app: caddy
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: nginx
+      app: caddy
   template:
     metadata:
       labels:
-        app: nginx
+        app: caddy
     spec:
       containers:
-        - name: nginx
-          image: nginx:1.27.0
+        - name: caddy
+          image: caddy:2.8.4-alpine
           ports:
             - containerPort: 80
           readinessProbe:
@@ -812,6 +802,7 @@ YAML
 }
 `
 
+	// language=hcl
 	updateConfig := `
 resource "kubectl_manifest" "test" {
   wait_for_rollout = false
@@ -825,22 +816,22 @@ resource "kubectl_manifest" "test" {
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: nginx-deployment
+  name: caddy-wait-for-field
   labels:
-    app: nginx
+    app: caddy
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: nginx
+      app: caddy
   template:
     metadata:
       labels:
-        app: nginx
+        app: caddy
     spec:
       containers:
-        - name: nginx
-          image: nginx:1.27.2
+        - name: caddy
+          image: caddy:2.8.1-alpine
           ports:
             - containerPort: 80
           readinessProbe:
@@ -853,7 +844,7 @@ YAML
 `
 
 	//start := time.Now()
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -884,7 +875,7 @@ YAML
 //`
 //
 //	//start := time.Now()
-//	resource.Test(t, resource.TestCase{
+//	resource.ParallelTest(t, resource.TestCase{
 //		PreCheck:     func() { testAccPreCheck(t) },
 //		Providers:    testAccProviders,
 //		CheckDestroy: testAccCheckkubectlDestroy,
@@ -897,21 +888,23 @@ YAML
 //	})
 //}
 
-func TestAccInconsistentPlanning(t *testing.T) {
+func TestAccKubectl_InconsistentPlanning(t *testing.T) {
+
 	//See https://github.com/alekc/terraform-provider-kubectl/pull/46
+	// language=hcl
 	config := `
 resource "kubectl_manifest" "secret" {
   yaml_body = <<EOF
 apiVersion: v1
 kind: Secret
 metadata:
-  name: test-secret
+  name: test-secret-inconsistent
 stringData:
   var: "${formatdate("YYYYMMDDhhmmss", timestamp())}"
 EOF
 }
 `
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -930,17 +923,18 @@ EOF
 	})
 }
 
-func TestAccKubectlUnknownNamespace(t *testing.T) {
+func TestAccKubectl_UnknownNamespace(t *testing.T) {
+	// language=hcl
 	config := `
 resource "kubectl_manifest" "test" {
 	yaml_body = <<EOT
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: name-here
+  name: unknown-ns
   namespace: this-doesnt-exist
 spec:
-  ingressClassName: "nginx"
+  ingressClassName: "caddy"
   rules:
   - host: "*.example.com"
     http:
@@ -956,7 +950,7 @@ spec:
 		}
 `
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -969,19 +963,22 @@ spec:
 	})
 }
 
-func TestAccKubectlOverrideNamespace(t *testing.T) {
+func TestAccKubectl_OverrideNamespace(t *testing.T) {
 
 	namespace := "dev-" + acctest.RandString(10)
+
+	//language=yaml
 	yaml_body := `
 apiVersion: v1
 kind: Secret
 metadata:
-  name: mysecret
+  name: override-ns
   namespace: prod
 type: Opaque
 data:
 `
 
+	//language=hcl
 	config := fmt.Sprintf(`
 resource "kubectl_manifest" "ns" {
 	yaml_body = <<EOT
@@ -1001,7 +998,7 @@ resource "kubectl_manifest" "test" {
 		}
 `, namespace, namespace, yaml_body)
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -1016,7 +1013,7 @@ resource "kubectl_manifest" "test" {
 data: (sensitive value)
 kind: Secret
 metadata:
-  name: mysecret
+  name: override-ns
   namespace: %s
 type: Opaque
 `, namespace)),
@@ -1026,18 +1023,21 @@ type: Opaque
 	})
 }
 
-func TestAccKubectlSetNamespace(t *testing.T) {
+func TestAccKubectl_SetNamespace(t *testing.T) {
 
 	namespace := "dev-" + acctest.RandString(10)
+
+	//language=yaml
 	yaml_body := `
 apiVersion: v1
 kind: Secret
 metadata:
-  name: mysecret
+  name: set-ns
 type: Opaque
 data:
 `
 
+	//language=hcl
 	config := fmt.Sprintf(`
 resource "kubectl_manifest" "ns" {
 	yaml_body = <<EOT
@@ -1057,7 +1057,7 @@ resource "kubectl_manifest" "test" {
 		}
 `, namespace, namespace, yaml_body)
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -1065,7 +1065,7 @@ resource "kubectl_manifest" "test" {
 			{
 				Config: config,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("kubectl_manifest.test", "id", "/api/v1/namespaces/"+namespace+"/secrets/mysecret"),
+					resource.TestCheckResourceAttr("kubectl_manifest.test", "id", "/api/v1/namespaces/"+namespace+"/secrets/set-ns"),
 					resource.TestCheckResourceAttr("kubectl_manifest.test", "namespace", namespace),
 					resource.TestCheckResourceAttr("kubectl_manifest.test", "override_namespace", namespace),
 					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body", yaml_body+"\n"),
@@ -1073,7 +1073,7 @@ resource "kubectl_manifest" "test" {
 data: (sensitive value)
 kind: Secret
 metadata:
-  name: mysecret
+  name: set-ns
   namespace: %s
 type: Opaque
 `, namespace)),
@@ -1083,10 +1083,12 @@ type: Opaque
 	})
 }
 
-func TestAccKubectlSetNamespace_nonnamespaced_resource(t *testing.T) {
+func TestAccKubectl_SetNamespace_nonnamespaced_resource(t *testing.T) {
 
-	namespace := "dev-" + acctest.RandString(10)
-	yaml_body := fmt.Sprintf(`
+	randomStr := "dev-" + acctest.RandString(10)
+
+	//language=yaml
+	yamlBody := fmt.Sprintf(`
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -1095,7 +1097,7 @@ rules:
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["get", "watch", "list"]
-`, namespace)
+`, randomStr)
 
 	config := fmt.Sprintf(`
 resource "kubectl_manifest" "test" {
@@ -1104,9 +1106,9 @@ resource "kubectl_manifest" "test" {
 %s
 	EOT
 		}
-`, namespace, yaml_body)
+`, randomStr, yamlBody)
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -1114,9 +1116,9 @@ resource "kubectl_manifest" "test" {
 			{
 				Config: config,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("kubectl_manifest.test", "namespace", namespace),
-					resource.TestCheckResourceAttr("kubectl_manifest.test", "override_namespace", namespace),
-					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body", yaml_body+"\n"),
+					resource.TestCheckResourceAttr("kubectl_manifest.test", "namespace", randomStr),
+					resource.TestCheckResourceAttr("kubectl_manifest.test", "override_namespace", randomStr),
+					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body", yamlBody+"\n"),
 					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body_parsed", fmt.Sprintf(`apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -1131,20 +1133,21 @@ rules:
   - get
   - watch
   - list
-`, namespace, namespace)),
+`, randomStr, randomStr)),
 				),
 			},
 		},
 	})
 }
 
-func TestAccKubectlSensitiveFields_secret(t *testing.T) {
+func TestAccKubectl_SensitiveFieldsSecret(t *testing.T) {
 
-	yaml_body := `
+	// language=yaml
+	yamlBody := `
 apiVersion: v1
 kind: Secret
 metadata:
-  name: mysecret
+  name: mysecret-sensitive-fields
   namespace: default
 type: Opaque
 data:
@@ -1158,9 +1161,9 @@ resource "kubectl_manifest" "test" {
 %s
 	EOT
 		}
-`, yaml_body)
+`, yamlBody)
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -1170,12 +1173,12 @@ resource "kubectl_manifest" "test" {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("kubectl_manifest.test", "namespace", "default"),
 					resource.TestCheckNoResourceAttr("kubectl_manifest.test", "override_namespace"),
-					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body", yaml_body+"\n"),
+					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body", yamlBody+"\n"),
 					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body_parsed", `apiVersion: v1
 data: (sensitive value)
 kind: Secret
 metadata:
-  name: mysecret
+  name: mysecret-sensitive-fields
   namespace: default
 type: Opaque
 `),
@@ -1185,15 +1188,16 @@ type: Opaque
 	})
 }
 
-func TestAccKubectlSensitiveFields_slice(t *testing.T) {
+func TestAccKubectl_SensitiveFieldsSlice(t *testing.T) {
 
-	yaml_body := `
+	//language=yaml
+	yamlBody := `
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: name-here
+  name: sensitive-fields-slice
 spec:
-  ingressClassName: "nginx"
+  ingressClassName: "caddy"
   rules:
   - host: "*.example.com"
     http:
@@ -1216,9 +1220,9 @@ resource "kubectl_manifest" "test" {
 %s
 	EOT
 		}
-`, yaml_body)
+`, yamlBody)
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -1226,13 +1230,13 @@ resource "kubectl_manifest" "test" {
 			{
 				Config: config,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body", yaml_body+"\n"),
+					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body", yamlBody+"\n"),
 					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body_parsed", `apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: name-here
+  name: sensitive-fields-slice
 spec:
-  ingressClassName: nginx
+  ingressClassName: caddy
   rules: (sensitive value)
 `),
 				),
@@ -1241,15 +1245,16 @@ spec:
 	})
 }
 
-func TestAccKubectlSensitiveFields_unknown_field(t *testing.T) {
+func TestAccKubectl_SensitiveFieldsUnknownField(t *testing.T) {
 
-	yaml_body := `
+	//language=yaml
+	yamlBody := `
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: name-here
+  name: sensitive-field-unknown
 spec:
-  ingressClassName: "nginx"
+  ingressClassName: "caddy"
   rules:
   - host: "*.example.com"
     http:
@@ -1272,9 +1277,9 @@ resource "kubectl_manifest" "test" {
 %s
 	EOT
 		}
-`, yaml_body)
+`, yamlBody)
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -1282,13 +1287,13 @@ resource "kubectl_manifest" "test" {
 			{
 				Config: config,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body", yaml_body+"\n"),
+					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body", yamlBody+"\n"),
 					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body_parsed", `apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: name-here
+  name: sensitive-field-unknown
 spec:
-  ingressClassName: nginx
+  ingressClassName: caddy
   rules:
   - host: '*.example.com'
     http:
@@ -1307,15 +1312,16 @@ spec:
 	})
 }
 
-func TestAccKubectlWithoutValidation(t *testing.T) {
+func TestAccKubectl_WithoutValidation(t *testing.T) {
 
-	yaml_body := `
+	// language=yaml
+	yamlBody := `
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: name-here
+  name: without-validation
 spec:
-  ingressClassName: "nginx"
+  ingressClassName: "caddy"
   rules:
   - host: "*.example.com"
     http:
@@ -1336,9 +1342,9 @@ resource "kubectl_manifest" "test" {
 %s
 	EOT
 		}
-`, yaml_body)
+`, yamlBody)
 
-	resource.Test(t, resource.TestCase{
+	resource.ParallelTest(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
@@ -1346,7 +1352,7 @@ resource "kubectl_manifest" "test" {
 			{
 				Config: config,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body", yaml_body+"\n"),
+					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body", yamlBody+"\n"),
 					resource.TestCheckResourceAttr("kubectl_manifest.test", "validate_schema", "false"),
 				),
 			},
@@ -1807,15 +1813,16 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 	}
 }
 
-func TestAccKubectlServerSideValidationFailure(t *testing.T) {
+func TestAccKubectl_ServerSideValidationFailure(t *testing.T) {
 
+	//language=HCL
 	config := `
 resource "kubectl_manifest" "test" {
   yaml_body = <<YAML
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: ingress
+  name: server-side-validation-failure
 spec:
   rules:
     - host: "test-a.proxypile.tk"
@@ -1825,14 +1832,14 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: nginx.test-a.svc.cluster.local
+                name: caddy.test-a.svc.cluster.local
                 port:
                   number: 8080
 YAML
 }
 `
-	expectedError, _ := regexp.Compile(".*Invalid value: \"nginx.test-a.svc.cluster.local\": a DNS-1035 label must consist of lower case alphanumeric characters.*")
-	resource.Test(t, resource.TestCase{
+	expectedError, _ := regexp.Compile(".*Invalid value: \"caddy.test-a.svc.cluster.local\": a DNS-1035 label must consist of lower case alphanumeric characters.*")
+	resource.ParallelTest(t, resource.TestCase{
 		Providers: testAccProviders,
 		Steps: []resource.TestStep{
 			{
@@ -1849,6 +1856,7 @@ func withAlteredField(manifest *yaml.Manifest, value interface{}, fields ...stri
 }
 
 func loadRealDeploymentManifest() *yaml.Manifest {
+	//language=YAML
 	manifest, _ := yaml.ParseYAML(`
 apiVersion: apps/v1
 kind: Deployment
