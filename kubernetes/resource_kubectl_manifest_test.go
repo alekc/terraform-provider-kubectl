@@ -1989,3 +1989,155 @@ status:
 
 	return manifest
 }
+
+// TestAccKubectl_UpgradeApiVersion_InPlaceUpdate verifies that changing the
+// apiVersion with upgrade_api_version=true updates the resource in-place
+// (preserving its UID) rather than forcing a delete and recreate.
+func TestAccKubectl_UpgradeApiVersion_InPlaceUpdate(t *testing.T) {
+	name := "test-upgrade-api-version-" + acctest.RandString(10)
+
+	configV1 := fmt.Sprintf(`
+resource "kubectl_manifest" "test" {
+	upgrade_api_version = true
+	yaml_body = <<YAML
+apiVersion: autoscaling/v1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: %s
+spec:
+  maxReplicas: 5
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: does-not-exist
+YAML
+}
+`, name)
+
+	configV2 := fmt.Sprintf(`
+resource "kubectl_manifest" "test" {
+	upgrade_api_version = true
+	yaml_body = <<YAML
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: %s
+spec:
+  maxReplicas: 5
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: does-not-exist
+YAML
+}
+`, name)
+
+	var uid string
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckkubectlDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: configV1,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("kubectl_manifest.test", "api_version", "autoscaling/v1"),
+					resource.TestCheckResourceAttr("kubectl_manifest.test", "upgrade_api_version", "true"),
+					// Capture the UID after initial creation
+					resource.TestCheckResourceAttrWith("kubectl_manifest.test", "uid", func(value string) error {
+						uid = value
+						return nil
+					}),
+				),
+			},
+			{
+				Config: configV2,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("kubectl_manifest.test", "api_version", "autoscaling/v2"),
+					resource.TestCheckResourceAttr("kubectl_manifest.test", "upgrade_api_version", "true"),
+					// Verify UID is unchanged — proves in-place update, not recreate
+					resource.TestCheckResourceAttrWith("kubectl_manifest.test", "uid", func(value string) error {
+						if value != uid {
+							return fmt.Errorf("resource was recreated: UID changed from %s to %s", uid, value)
+						}
+						return nil
+					}),
+				),
+			},
+		},
+	})
+}
+
+// TestAccKubectl_UpgradeApiVersion_ForceNewByDefault verifies that changing the
+// apiVersion WITHOUT upgrade_api_version (default false) forces a delete and
+// recreate, resulting in a new UID.
+func TestAccKubectl_UpgradeApiVersion_ForceNewByDefault(t *testing.T) {
+	name := "test-upgrade-api-version-" + acctest.RandString(10)
+
+	configV1 := fmt.Sprintf(`
+resource "kubectl_manifest" "test" {
+	yaml_body = <<YAML
+apiVersion: autoscaling/v1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: %s
+spec:
+  maxReplicas: 5
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: does-not-exist
+YAML
+}
+`, name)
+
+	configV2 := fmt.Sprintf(`
+resource "kubectl_manifest" "test" {
+	yaml_body = <<YAML
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: %s
+spec:
+  maxReplicas: 5
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: does-not-exist
+YAML
+}
+`, name)
+
+	var uid string
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckkubectlDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: configV1,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("kubectl_manifest.test", "api_version", "autoscaling/v1"),
+					resource.TestCheckResourceAttr("kubectl_manifest.test", "upgrade_api_version", "false"),
+					resource.TestCheckResourceAttrWith("kubectl_manifest.test", "uid", func(value string) error {
+						uid = value
+						return nil
+					}),
+				),
+			},
+			{
+				Config: configV2,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("kubectl_manifest.test", "api_version", "autoscaling/v2"),
+					// Verify UID changed — proves resource was recreated
+					resource.TestCheckResourceAttrWith("kubectl_manifest.test", "uid", func(value string) error {
+						if value == uid {
+							return fmt.Errorf("resource was NOT recreated: UID remained %s", uid)
+						}
+						return nil
+					}),
+				),
+			},
+		},
+	})
+}

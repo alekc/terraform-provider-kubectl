@@ -196,6 +196,7 @@ metadata:
 				_ = d.Set("force_new", false)
 				_ = d.Set("server_side_apply", false)
 				_ = d.Set("apply_only", false)
+				_ = d.Set("upgrade_api_version", false)
 
 				// clear out fields user can't set to try and get parity with yaml_body
 				meta_v1_unstruct.RemoveNestedField(metaObjLive.Raw.Object, "metadata", "creationTimestamp")
@@ -247,6 +248,13 @@ metadata:
 			_ = d.SetNew("kind", parsedYaml.GetKind())
 			_ = d.SetNew("namespace", parsedYaml.GetNamespace())
 			_ = d.SetNew("name", parsedYaml.GetName())
+
+			// If upgrade_api_version is not set, force recreation when api_version changes
+			// (preserving the default behavior). When upgrade_api_version is true, allow
+			// the api_version change to go through the update path instead.
+			if !d.Get("upgrade_api_version").(bool) && d.HasChange("api_version") {
+				_ = d.ForceNew("api_version")
+			}
 
 			// set the yaml_body_parsed field to provided value and obfuscate the yaml_body values manually
 			// this allows us to show a nice diff to the users with specific fields obfuscated, whilst storing the
@@ -362,7 +370,6 @@ var (
 		"api_version": {
 			Type:     schema.TypeString,
 			Computed: true,
-			ForceNew: true,
 		},
 		"kind": {
 			Type:     schema.TypeString,
@@ -403,6 +410,12 @@ var (
 		"force_new": {
 			Type:        schema.TypeBool,
 			Description: "Default to update in-place. Setting to true will delete and create the kubernetes instead.",
+			Optional:    true,
+			Default:     false,
+		},
+		"upgrade_api_version": {
+			Type:        schema.TypeBool,
+			Description: "When true, changing the api_version in yaml_body will update the resource in-place rather than forcing a delete and recreate. This leverages Kubernetes' ability to represent the same object across multiple API versions.",
 			Optional:    true,
 			Default:     false,
 		},
@@ -616,6 +629,9 @@ func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, m
 	d.SetId(response.GetSelfLink())
 	log.Printf("[DEBUG] %v fetched successfully, set id to: %v", manifest, d.Id())
 
+	// Preserve config-only computed fields in state
+	_ = d.Set("upgrade_api_version", d.Get("upgrade_api_version").(bool))
+
 	// Capture the UID at time of update
 	// this allows us to diff these against the actual values
 	// read in by the 'resourceKubectlManifestRead'
@@ -732,6 +748,9 @@ func resourceKubectlManifestReadUsingClient(ctx context.Context, d *schema.Resou
 
 	// Capture the UID from the cluster at the current time
 	_ = d.Set("live_uid", metaObjLive.GetUID())
+
+	// Preserve config-only computed fields in state
+	_ = d.Set("upgrade_api_version", d.Get("upgrade_api_version").(bool))
 
 	liveManifestFingerprint := getLiveManifestFingerprint(d, manifest, metaObjLive)
 	_ = d.Set("live_manifest_incluster", liveManifestFingerprint)

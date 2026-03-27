@@ -88,6 +88,7 @@ YAML
 * `yaml_body` - Required. YAML to apply to kubernetes.
 * `sensitive_fields` - Optional. List of fields (dot-syntax) which are sensitive and should be obfuscated in output. Defaults to `["data"]` for Secrets.
 * `force_new` - Optional. Forces delete & create of resources if the `yaml_body` changes. Default `false`.
+* `upgrade_api_version` - Optional. When `true`, changing the `apiVersion` in `yaml_body` will update the resource in-place rather than forcing a delete and recreate. This leverages Kubernetes' ability to represent the same object across multiple API versions. Default `false`.
 * `server_side_apply` - Optional. Allow using server-side-apply method. Default `false`.
 * `field_manager` - Optional. Override the default field manager name. This is only relevent when using server-side apply. Default `kubectl`.
 * `force_conflicts` - Optional. Allow using force_conflicts. Default `false`.
