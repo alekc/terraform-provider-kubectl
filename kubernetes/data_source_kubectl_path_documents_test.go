@@ -8,6 +8,8 @@ import (
 )
 
 func TestAccKubectlDataSourcePathDocuments_single(t *testing.T) {
+	t.Parallel()
+
 	path := "../_examples/manifests"
 	resource.Test(t, resource.TestCase{
 		PreCheck:  func() {},
@@ -27,6 +29,8 @@ func TestAccKubectlDataSourcePathDocuments_single(t *testing.T) {
 }
 
 func TestAccKubectlDataSourcePathDocuments_multiple(t *testing.T) {
+	t.Parallel()
+
 	path := "../_examples/manifests"
 	resource.Test(t, resource.TestCase{
 		PreCheck:  func() {},
@@ -48,6 +52,8 @@ func TestAccKubectlDataSourcePathDocuments_multiple(t *testing.T) {
 }
 
 func TestAccKubectlDataSourcePathDocuments_multiple_files(t *testing.T) {
+	t.Parallel()
+
 	path := "../_examples/manifests"
 	resource.Test(t, resource.TestCase{
 		PreCheck:  func() {},
@@ -92,6 +98,8 @@ data "kubectl_path_documents" "test" {
 }
 
 func TestAccKubectlDataSourcePathDocuments_multiple_files_duplicates(t *testing.T) {
+	t.Parallel()
+
 	expectedError, _ := regexp.Compile(".*duplicate manifest found with id: /apis/stable.example.com/v1/crontabs/name-here-crd.*")
 	path := "../_examples/manifests/duplicates"
 	resource.Test(t, resource.TestCase{
@@ -126,6 +134,8 @@ data "kubectl_path_documents" "test" {
 }
 
 func TestAccKubectlDataSourcePathDocuments_single_templated(t *testing.T) {
+	t.Parallel()
+
 	path := "../_examples/manifests"
 	resource.Test(t, resource.TestCase{
 		PreCheck:  func() {},
@@ -181,6 +191,8 @@ data "kubectl_path_documents" "test" {
 }
 
 func TestAccKubectlDataSourcePathDocuments_multiple_templated(t *testing.T) {
+	t.Parallel()
+
 	path := "../_examples/manifests"
 	resource.Test(t, resource.TestCase{
 		PreCheck:  func() {},
@@ -206,6 +218,8 @@ data "kubectl_path_documents" "test" {
 }
 
 func TestAccKubectlDataSourcePathDocuments_directives(t *testing.T) {
+	t.Parallel()
+
 	path := "../_examples/manifests"
 	resource.Test(t, resource.TestCase{
 		PreCheck:  func() {},
@@ -230,6 +244,8 @@ data "kubectl_path_documents" "test" {
 }
 
 func TestAccKubectlDataSourcePathDocuments_directives_without_var(t *testing.T) {
+	t.Parallel()
+
 	path := "../_examples/manifests"
 	resource.Test(t, resource.TestCase{
 		PreCheck:  func() {},
@@ -254,6 +270,8 @@ data "kubectl_path_documents" "test" {
 }
 
 func TestAccKubectlDataSourcePathDocuments_namespaces_looped(t *testing.T) {
+	t.Parallel()
+
 	path := "../_examples/manifests"
 	resource.Test(t, resource.TestCase{
 		PreCheck:  func() {},
@@ -331,6 +349,8 @@ metadata:
 }
 
 func TestAccKubectlDataSourcePathDocuments_disable_template(t *testing.T) {
+	t.Parallel()
+
 	path := "../_examples/manifests"
 	resource.Test(t, resource.TestCase{
 		PreCheck:  func() {},

@@ -970,6 +970,7 @@ spec:
 }
 
 func TestAccKubectlOverrideNamespace(t *testing.T) {
+	t.Parallel()
 
 	namespace := "dev-" + acctest.RandString(10)
 	yaml_body := `
@@ -1027,6 +1028,7 @@ type: Opaque
 }
 
 func TestAccKubectlSetNamespace(t *testing.T) {
+	t.Parallel()
 
 	namespace := "dev-" + acctest.RandString(10)
 	yaml_body := `
@@ -1084,6 +1086,7 @@ type: Opaque
 }
 
 func TestAccKubectlSetNamespace_nonnamespaced_resource(t *testing.T) {
+	t.Parallel()
 
 	namespace := "dev-" + acctest.RandString(10)
 	yaml_body := fmt.Sprintf(`
@@ -1994,6 +1997,8 @@ status:
 // apiVersion with upgrade_api_version=true updates the resource in-place
 // (preserving its UID) rather than forcing a delete and recreate.
 func TestAccKubectl_UpgradeApiVersion_InPlaceUpdate(t *testing.T) {
+	t.Parallel()
+
 	name := "test-upgrade-api-version-" + acctest.RandString(10)
 
 	configV1 := fmt.Sprintf(`
@@ -2072,6 +2077,8 @@ YAML
 // apiVersion WITHOUT upgrade_api_version (default false) forces a delete and
 // recreate, resulting in a new UID.
 func TestAccKubectl_UpgradeApiVersion_ForceNewByDefault(t *testing.T) {
+	t.Parallel()
+
 	name := "test-upgrade-api-version-" + acctest.RandString(10)
 
 	configV1 := fmt.Sprintf(`
