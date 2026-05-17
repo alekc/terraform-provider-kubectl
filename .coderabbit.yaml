@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit configuration. Reviews are opt-in only — they do NOT trigger on
+# PR open or on subsequent pushes. To request a review, comment on the PR:
+#
+#   @coderabbitai review            # incremental review of changes since last
+#   @coderabbitai full review       # re-review the whole PR from scratch
+#
+# See https://docs.coderabbit.ai/guides/commands for the full command list.
+
+language: en
+
+reviews:
+  auto_review:
+    enabled: false
+    auto_incremental_review: false
