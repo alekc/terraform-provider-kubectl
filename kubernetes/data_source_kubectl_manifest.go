@@ -76,7 +76,10 @@ func dataSourceKubectlManifest() *schema.Resource {
 }
 
 func dataSourceKubectlManifestRead(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	provider := meta.(*KubeProvider)
+	provider, ok := meta.(*KubeProvider)
+	if !ok || provider == nil {
+		return diag.Errorf("kubectl_manifest: provider not configured (expected *KubeProvider, got %T)", meta)
+	}
 
 	apiVersion := d.Get("api_version").(string)
 	kind := d.Get("kind").(string)
