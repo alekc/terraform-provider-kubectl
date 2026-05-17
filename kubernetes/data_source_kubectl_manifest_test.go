@@ -128,7 +128,7 @@ data "kubectl_manifest" "cr" {
 }
 
 // TestAccKubectlDataSourceManifest_arrayIndex verifies gojsonq array-index
-// paths work end-to-end (`spec.template.spec.containers.0.image`).
+// paths work end-to-end (`spec.template.spec.containers.[0].image`).
 func TestAccKubectlDataSourceManifest_arrayIndex(t *testing.T) {
 	name := fmt.Sprintf("acc-test-dep-%s", acctest.RandString(8))
 	cfg := fmt.Sprintf(`
@@ -164,7 +164,7 @@ data "kubectl_manifest" "read" {
   namespace   = "default"
   fields = {
     replicas    = "spec.replicas"
-    first_image = "spec.template.spec.containers.0.image"
+    first_image = "spec.template.spec.containers.[0].image"
   }
 }
 `, name, name, name, name)

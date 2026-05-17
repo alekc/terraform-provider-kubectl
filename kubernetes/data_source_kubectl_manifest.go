@@ -45,7 +45,8 @@ func dataSourceKubectlManifest() *schema.Resource {
 				Optional: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 				Description: "Map of result-key to gojsonq dot-path expressions to extract from the fetched " +
-					"object (e.g. `replicas = \"spec.replicas\"`, `image = \"spec.template.spec.containers.0.image\"`). " +
+					"object (e.g. `replicas = \"spec.replicas\"`, `image = \"spec.template.spec.containers.[0].image\"`). " +
+					"Array indices use the `[N]` form, e.g. `containers.[0]`. " +
 					"Each path must resolve; missing paths produce an error.",
 			},
 

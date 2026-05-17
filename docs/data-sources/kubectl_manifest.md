@@ -46,7 +46,8 @@ data "kubectl_manifest" "ns" {
 ### Read a CRD object and walk a nested array
 
 `fields` paths use [gojsonq](https://github.com/thedevsaddam/gojsonq)
-dot-notation. Array elements are addressed by zero-based index.
+dot-notation. Array elements are addressed with the `[N]` form
+(`containers.[0]`, not `containers.0`).
 
 ```hcl
 data "kubectl_manifest" "dep" {
@@ -57,7 +58,7 @@ data "kubectl_manifest" "dep" {
 
   fields = {
     replicas        = "spec.replicas"
-    first_image     = "spec.template.spec.containers.0.image"
+    first_image     = "spec.template.spec.containers.[0].image"
     labels          = "metadata.labels"
   }
 }
