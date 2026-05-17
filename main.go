@@ -1,25 +1,37 @@
 package main
 
 import (
+	"context"
 	"flag"
-	"github.com/alekc/terraform-provider-kubectl/kubernetes"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/plugin"
+	"log"
+
+	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
+	"github.com/hashicorp/terraform-plugin-go/tfprotov6/tf6server"
+
+	"github.com/alekc/terraform-provider-kubectl/internal/mux"
+)
+
+const (
+	providerAddr = "registry.terraform.io/alekc/kubectl"
+	version      = "dev"
 )
 
 func main() {
-	var debug bool
-
-	flag.BoolVar(&debug, "debug", false, "set to true to run the provider with support for debuggers like delve")
+	debug := flag.Bool("debug", false, "set to true to run the provider with support for debuggers like delve")
 	flag.Parse()
 
-	opts := &plugin.ServeOpts{
-		Debug:        debug,
-		ProviderAddr: "registry.terraform.io/alekc/kubectl",
-		ProviderFunc: func() *schema.Provider {
-			return kubernetes.Provider()
-		},
+	ctx := context.Background()
+	muxer, err := mux.MuxServer(ctx, version)
+	if err != nil {
+		log.Fatalf("failed to build mux server: %v", err)
 	}
 
-	plugin.Serve(opts)
+	opts := []tf6server.ServeOpt{}
+	if *debug {
+		opts = append(opts, tf6server.WithManagedDebug())
+	}
+
+	if err := tf6server.Serve(providerAddr, func() tfprotov6.ProviderServer { return muxer }, opts...); err != nil {
+		log.Fatalf("failed to serve provider: %v", err)
+	}
 }

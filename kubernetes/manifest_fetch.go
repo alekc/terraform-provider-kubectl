@@ -1,0 +1,130 @@
+package kubernetes
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/thedevsaddam/gojsonq/v2"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	meta_v1_unstruct "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/alekc/terraform-provider-kubectl/yaml"
+)
+
+// ManifestFetchResult is the serialized form of a Kubernetes object plus any
+// user-requested field extractions, returned by FetchManifest.
+type ManifestFetchResult struct {
+	YAML    string
+	JSON    string
+	UID     string
+	Results map[string]string
+}
+
+// ErrManifestNotFound is returned by FetchManifest when the target object
+// does not exist on the cluster. Callers should surface this as a diag error
+// (data sources) or open-time error (ephemeral resources).
+var ErrManifestNotFound = fmt.Errorf("manifest not found")
+
+// FetchManifest fetches a single Kubernetes object by GVK + name (+ namespace)
+// and optionally extracts user-supplied dot-path fields into a string map.
+// Shared by the SDK v2 data source and the plugin-framework ephemeral resource.
+//
+// namespace may be empty. The underlying client helper defaults namespaced
+// resources to "default" and ignores the namespace for cluster-scoped kinds.
+//
+// fields maps a user-chosen key to a gojsonq dot-path (e.g. "spec.replicas",
+// "spec.template.spec.containers.0.image"). Missing paths cause FetchManifest
+// to return an error naming the offending key.
+func FetchManifest(
+	ctx context.Context,
+	provider *KubeProvider,
+	apiVersion, kind, name, namespace string,
+	fields map[string]string,
+) (*ManifestFetchResult, error) {
+	lookup := &meta_v1_unstruct.Unstructured{}
+	lookup.SetAPIVersion(apiVersion)
+	lookup.SetKind(kind)
+	lookup.SetName(name)
+	if namespace != "" {
+		lookup.SetNamespace(namespace)
+	}
+	manifest := yaml.NewFromUnstructured(lookup)
+
+	clientResult := getRestClientFromUnstructured(manifest, provider)
+	if clientResult.Error != nil {
+		return nil, clientResult.Error
+	}
+
+	obj, err := clientResult.ResourceInterface.Get(ctx, name, meta_v1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: %s/%s %s/%s", ErrManifestNotFound, apiVersion, kind, namespace, name)
+		}
+		return nil, fmt.Errorf("failed to read %s/%s %s/%s: %w", apiVersion, kind, namespace, name, err)
+	}
+
+	jsonBytes, err := obj.MarshalJSON()
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal fetched object to JSON: %w", err)
+	}
+
+	yamlStr, err := yaml.NewFromUnstructured(obj).AsYAML()
+	if err != nil {
+		return nil, fmt.Errorf("failed to render fetched object as YAML: %w", err)
+	}
+
+	results, err := extractFields(string(jsonBytes), fields)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ManifestFetchResult{
+		YAML:    yamlStr,
+		JSON:    string(jsonBytes),
+		UID:     string(obj.GetUID()),
+		Results: results,
+	}, nil
+}
+
+// extractFields runs each user-supplied gojsonq path against the JSON body
+// and stringifies the value. Missing paths produce an error naming the
+// offending key. Scalars become their natural string form; maps and slices
+// are JSON-encoded so callers can `jsondecode()` to recover structure.
+func extractFields(jsonBody string, fields map[string]string) (map[string]string, error) {
+	if len(fields) == 0 {
+		return map[string]string{}, nil
+	}
+
+	out := make(map[string]string, len(fields))
+	gq := gojsonq.New().FromString(jsonBody)
+
+	for key, path := range fields {
+		value := gq.Reset().Find(path)
+		if value == nil {
+			return nil, fmt.Errorf("fields[%q]: path %q not found in fetched object", key, path)
+		}
+		s, err := stringifyValue(value)
+		if err != nil {
+			return nil, fmt.Errorf("fields[%q]: %w", key, err)
+		}
+		out[key] = s
+	}
+	return out, nil
+}
+
+func stringifyValue(v interface{}) (string, error) {
+	switch t := v.(type) {
+	case string:
+		return t, nil
+	case bool, float64, float32, int, int32, int64, uint, uint32, uint64:
+		return fmt.Sprintf("%v", t), nil
+	default:
+		b, err := json.Marshal(t)
+		if err != nil {
+			return "", fmt.Errorf("failed to JSON-encode value: %w", err)
+		}
+		return string(b), nil
+	}
+}
