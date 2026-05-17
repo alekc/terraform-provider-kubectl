@@ -92,6 +92,41 @@ data "kubectl_manifest" "ns" {
 	})
 }
 
+// TestAccKubectlDataSourceManifest_clusterScopedClusterRole reads a second
+// cluster-scoped kind (ClusterRole) to ensure the cluster-scope detection
+// is not implicitly relying on `Namespace` being a special-case GVK.
+// `cluster-admin` ships in every kubeadm/kind/eks/gke cluster.
+func TestAccKubectlDataSourceManifest_clusterScopedClusterRole(t *testing.T) {
+	cfg := `
+data "kubectl_manifest" "cr" {
+  api_version = "rbac.authorization.k8s.io/v1"
+  kind        = "ClusterRole"
+  name        = "cluster-admin"
+  fields = {
+    api_version = "apiVersion"
+    kind        = "kind"
+  }
+}
+`
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:  func() { testAccPreCheck(t) },
+		Providers: testAccProviders,
+		Steps: []resource.TestStep{
+			{
+				Config: cfg,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("data.kubectl_manifest.cr", "kind", "ClusterRole"),
+					resource.TestCheckResourceAttr("data.kubectl_manifest.cr", "namespace", ""),
+					resource.TestCheckResourceAttr("data.kubectl_manifest.cr", "results.kind", "ClusterRole"),
+					resource.TestCheckResourceAttr("data.kubectl_manifest.cr", "results.api_version", "rbac.authorization.k8s.io/v1"),
+					resource.TestCheckResourceAttrSet("data.kubectl_manifest.cr", "uid"),
+				),
+			},
+		},
+	})
+}
+
 // TestAccKubectlDataSourceManifest_arrayIndex verifies gojsonq array-index
 // paths work end-to-end (`spec.template.spec.containers.0.image`).
 func TestAccKubectlDataSourceManifest_arrayIndex(t *testing.T) {
