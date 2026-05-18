@@ -40,365 +40,97 @@ YAML
 }
 
 func TestAccKubectl(t *testing.T) {
-	//language=hcl
-	config := `
-resource "kubectl_manifest" "test" {
-  wait = true
-	yaml_body = <<YAML
-apiVersion: v1
-kind: Pod
-metadata:
-  name: nginx
-spec:
-  containers:
-  - name: nginx
-    image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
-    readinessProbe:
-      httpGet:
-        path: "/"
-        port: 80
-      initialDelaySeconds: 10
-YAML
-}
-`
+	t.Parallel()
 
-	//start := time.Now()
+	config, _ := nginxPodConfig(`  wait = true`)
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
 		Steps: []resource.TestStep{
-			{
-				Config: config,
-			},
+			{Config: config},
 		},
 	})
 }
 
 func TestAccKubectl_Wait(t *testing.T) {
-	//language=hcl
-	config := `
-resource "kubectl_manifest" "test" {
-	wait = true
-	yaml_body = <<YAML
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: nginx-deployment
-  labels:
-    app: nginx
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: nginx
-  template:
-    metadata:
-      labels:
-        app: nginx
-    spec:
-      containers:
-        - name: nginx
-          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
-          ports:
-            - containerPort: 80
-          readinessProbe:
-            httpGet:
-              path: "/"
-              port: 80
-            initialDelaySeconds: 10
-YAML
-}
-`
+	t.Parallel()
 
-	//start := time.Now()
+	config, _ := nginxDeploymentConfig(`  wait = true`)
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
 		Steps: []resource.TestStep{
-			{
-				Config: config,
-			},
-		},
-	})
-}
-
-func TestAccKubectl_WaitForeground(t *testing.T) {
-	//language=hcl
-	config := `
-resource "kubectl_manifest" "test" {
-	wait = true
-  delete_cascade = "Foreground"
-	yaml_body = <<YAML
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: nginx-deployment
-  labels:
-    app: nginx
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: nginx
-  template:
-    metadata:
-      labels:
-        app: nginx
-    spec:
-      containers:
-        - name: nginx
-          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
-          ports:
-            - containerPort: 80
-          readinessProbe:
-            httpGet:
-              path: "/"
-              port: 80
-            initialDelaySeconds: 10
-YAML
-}
-`
-
-	//start := time.Now()
-	resource.Test(t, resource.TestCase{
-		PreCheck:     func() { testAccPreCheck(t) },
-		Providers:    testAccProviders,
-		CheckDestroy: testAccCheckkubectlDestroy,
-		Steps: []resource.TestStep{
-			{
-				Config: config,
-			},
+			{Config: config},
 		},
 	})
 }
 
 func TestAccKubectl_WaitBackground(t *testing.T) {
-	//language=hcl
-	config := `
-resource "kubectl_manifest" "test" {
-	wait = true
-  delete_cascade = "Background"
-	yaml_body = <<YAML
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: nginx-deployment
-  labels:
-    app: nginx
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: nginx
-  template:
-    metadata:
-      labels:
-        app: nginx
-    spec:
-      containers:
-        - name: nginx
-          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
-          ports:
-            - containerPort: 80
-          readinessProbe:
-            httpGet:
-              path: "/"
-              port: 80
-            initialDelaySeconds: 10
-YAML
-}
-`
+	t.Parallel()
 
-	//start := time.Now()
+	config, _ := nginxDeploymentConfig(`
+  wait = true
+  delete_cascade = "Background"
+`)
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
 		Steps: []resource.TestStep{
-			{
-				Config: config,
-			},
+			{Config: config},
 		},
 	})
 }
 
 func TestAccKubectl_WaitForRolloutDeployment(t *testing.T) {
-	//language=hcl
-	config := `
-resource "kubectl_manifest" "test" {
-  wait_for_rollout = true
-	yaml_body = <<YAML
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: nginx
-  labels:
-    app: nginx
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: nginx
-  template:
-    metadata:
-      labels:
-        app: nginx
-    spec:
-      containers:
-        - name: nginx
-          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
-          ports:
-            - containerPort: 80
-          readinessProbe:
-            httpGet:
-              path: "/"
-              port: 80
-            initialDelaySeconds: 10
-YAML
-}
-`
+	t.Parallel()
 
-	//start := time.Now()
+	config, _ := nginxDeploymentConfigReplicas(`  wait_for_rollout = true`, 3)
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
 		Steps: []resource.TestStep{
-			{
-				Config: config,
-			},
+			{Config: config},
 		},
 	})
 }
 
 func TestAccKubectl_WaitForRolloutDaemonSet(t *testing.T) {
-	//language=hcl
-	config := `
-resource "kubectl_manifest" "test" {
-  wait_for_rollout = true
-	yaml_body = <<YAML
-apiVersion: apps/v1
-kind: DaemonSet
-metadata:
-  name: nginx
-  labels:
-    app: nginx
-spec:
-  updateStrategy:
-    type: RollingUpdate
-  selector:
-    matchLabels:
-      app: nginx
-  template:
-    metadata:
-      labels:
-        app: nginx
-    spec:
-      containers:
-        - name: nginx
-          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
-          ports:
-            - containerPort: 80
-          readinessProbe:
-            httpGet:
-              path: "/"
-              port: 80
-            initialDelaySeconds: 10
-YAML
-}
-`
+	t.Parallel()
 
-	//start := time.Now()
+	config, _ := nginxDaemonSetConfig(`  wait_for_rollout = true`)
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
 		Steps: []resource.TestStep{
-			{
-				Config: config,
-			},
+			{Config: config},
 		},
 	})
 }
 
 func TestAccKubectl_WaitForRolloutStatefulSet(t *testing.T) {
-	//language=hcl
-	config := `
-resource "kubectl_manifest" "test" {
-  wait_for_rollout = true
-	yaml_body = <<YAML
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: nginx
-  labels:
-    app: nginx
-spec:
-  updateStrategy:
-    type: RollingUpdate
-  replicas: 3
-  selector:
-    matchLabels:
-      app: nginx
-  template:
-    metadata:
-      labels:
-        app: nginx
-    spec:
-      containers:
-        - name: nginx
-          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
-          ports:
-            - containerPort: 80
-          readinessProbe:
-            httpGet:
-              path: "/"
-              port: 80
-            initialDelaySeconds: 10
-YAML
-}
-`
+	t.Parallel()
 
-	//start := time.Now()
+	config, _ := nginxStatefulSetConfig(`  wait_for_rollout = true`)
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
 		Steps: []resource.TestStep{
-			{
-				Config: config,
-			},
+			{Config: config},
 		},
 	})
 }
 
 func TestAccKubectl_RequireWaitForFieldOrCondition(t *testing.T) {
-	//language=hcl
-	config := `
-resource "kubectl_manifest" "test" {
-	wait_for { }
-	yaml_body = <<YAML
-apiVersion: v1
-kind: Pod
-metadata:
-  name: nginx
-spec:
-  containers:
-  - name: nginx
-    image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
-    readinessProbe:
-      httpGet:
-        path: "/"
-        port: 80
-      initialDelaySeconds: 10
-YAML
-}
-`
+	t.Parallel()
 
-	//start := time.Now()
-	expectedError, _ := regexp.Compile(".*at least one of `field` or `condition` must be provided in `wait_for` block.*")
+	config, _ := nginxPodConfig(`  wait_for { }`)
+	expectedError := regexp.MustCompile(".*at least one of `field` or `condition` must be provided in `wait_for` block.*")
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
@@ -407,14 +139,16 @@ YAML
 			{
 				Config:      config,
 				ExpectError: expectedError,
-				//todo: improve checking
 			},
 		},
 	})
 }
+
 func TestAccKubectl_WaitForNegativeField(t *testing.T) {
-	//language=hcl
-	config := `
+	t.Parallel()
+
+	ns := acctest.RandomWithPrefix("wait-for-neg-field")
+	config := fmt.Sprintf(`
 resource "kubectl_manifest" "test_wait_for" {
   timeouts {
     create = "10s"
@@ -423,7 +157,7 @@ resource "kubectl_manifest" "test_wait_for" {
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: test-wait-for
+  name: %s
 EOF
 
   wait_for {
@@ -432,10 +166,9 @@ EOF
       value = "Activez"
     }
   }
-}` //start := time.Now()
-	// atm the actual error is being hidden by the wait context being deleted. Fix this at some point
-	//errorRegex, _ := regexp.Compile(".*failed to wait for resource*")
-	errorRegex, _ := regexp.Compile(".*Wait returned an error*")
+}
+`, ns)
+	errorRegex := regexp.MustCompile(".*Wait returned an error*")
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
@@ -447,12 +180,13 @@ EOF
 			},
 		},
 	})
-	log.Println(config)
 }
 
 func TestAccKubectl_WaitForNegativeCondition(t *testing.T) {
-	//language=hcl
-	config := `
+	t.Parallel()
+
+	name := acctest.RandomWithPrefix("busybox-sleep")
+	config := fmt.Sprintf(`
 resource "kubectl_manifest" "test" {
 	timeouts {
 		create = "20s"
@@ -468,17 +202,16 @@ resource "kubectl_manifest" "test" {
 apiVersion: v1
 kind: Pod
 metadata:
-  name: busybox-sleep
+  name: %s
 spec:
   containers:
   - name: busybox
     image: busybox
     command: ["sleep", "30"]
 YAML
-}` //start := time.Now()
-	// atm the actual error is being hidden by the wait context being deleted. Fix this at some point
-	//errorRegex, _ := regexp.Compile(".*failed to wait for resource*")
-	errorRegex, _ := regexp.Compile(".*Wait returned an error*")
+}
+`, name)
+	errorRegex := regexp.MustCompile(".*Wait returned an error*")
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
@@ -490,12 +223,13 @@ YAML
 			},
 		},
 	})
-	log.Println(config)
 }
 
 func TestAccKubectl_WaitForNS(t *testing.T) {
-	//language=hcl
-	config := `
+	t.Parallel()
+
+	ns := acctest.RandomWithPrefix("wait-for-ns")
+	config := fmt.Sprintf(`
 resource "kubectl_manifest" "test_wait_for" {
   timeouts {
     create = "200s"
@@ -504,7 +238,7 @@ resource "kubectl_manifest" "test_wait_for" {
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: test-wait-for
+  name: %s
 EOF
 
   wait_for {
@@ -513,25 +247,22 @@ EOF
       value = "Active"
     }
   }
-}` //start := time.Now()
+}
+`, ns)
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
 		Steps: []resource.TestStep{
-			{
-				Config: config,
-				//todo: improve checking
-			},
+			{Config: config},
 		},
 	})
-	log.Println(config)
 }
 
 func TestAccKubectl_WaitForField(t *testing.T) {
-	//language=hcl
-	config := `
-resource "kubectl_manifest" "test" {
+	t.Parallel()
+
+	config, _ := nginxPodConfig(`
 	wait_for {
 		field {
 			key = "status.containerStatuses.[0].ready"
@@ -547,42 +278,21 @@ resource "kubectl_manifest" "test" {
 			value_type = "regex"
 		}
 	}
-	yaml_body = <<YAML
-apiVersion: v1
-kind: Pod
-metadata:
-  name: nginx-field-test
-spec:
-  containers:
-  - name: nginx
-    image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
-    readinessProbe:
-      httpGet:
-        path: "/"
-        port: 80
-      initialDelaySeconds: 10
-YAML
-}
-`
-
-	//start := time.Now()
+`)
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
 		Steps: []resource.TestStep{
-			{
-				Config: config,
-				//todo: improve checking
-			},
+			{Config: config},
 		},
 	})
 }
 
 func TestAccKubectl_WaitForConditions(t *testing.T) {
-	//language=hcl
-	config := `
-resource "kubectl_manifest" "test" {
+	t.Parallel()
+
+	config, _ := nginxPodConfig(`
 	wait_for {
 		condition {
 			type = "ContainersReady"
@@ -593,122 +303,49 @@ resource "kubectl_manifest" "test" {
 			status = "True"
 		}
 	}
-	yaml_body = <<YAML
-apiVersion: v1
-kind: Pod
-metadata:
-  name: nginx-conditions-test
-spec:
-  containers:
-  - name: nginx
-    image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
-    readinessProbe:
-      httpGet:
-        path: "/"
-        port: 80
-      initialDelaySeconds: 10
-YAML
-}
-`
-
-	//start := time.Now()
+`)
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
 		Steps: []resource.TestStep{
-			{
-				Config: config,
-				//todo: improve checking
-			},
+			{Config: config},
 		},
 	})
 }
 
-func TestAccKubectl_WaitForFieldAndCondition(t *testing.T) {
-	//language=hcl
-	config := `
+// deploymentUpdateConfig is a step-pair fixture for the Wait*Update tests:
+// both create and update configs target the SAME Deployment name (otherwise
+// step 2 would create a new Deployment, not update the existing one) and
+// share the same template. The caller supplies the kubectl_manifest-level
+// extra args for each step (e.g. wait_for_rollout = true on create, wait_for
+// { ... } block on update) and the desired replicas in the update step.
+func deploymentUpdateConfig(createExtra, updateExtra string, updateReplicas int) (createCfg, updateCfg string) {
+	name := acctest.RandomWithPrefix("nginx-deployment")
+	tmpl := func(extra string, replicas int) string {
+		return fmt.Sprintf(`
 resource "kubectl_manifest" "test" {
-	wait_for {
-		condition {
-			type = "ContainersReady"
-			status = "True"
-		}
-		condition {
-			type = "Ready"
-			status = "True"
-		}
-		field {
-			key = "status.containerStatuses.[0].ready"
-			value = "true"
-		}
-		field {
-			key = "status.phase"
-			value = "Running"
-		}
-		field {
-			key = "status.podIP"
-			value = "^(\\d+(\\.|$)){4}"
-			value_type = "regex"
-		}
-	}
-	yaml_body = <<YAML
-apiVersion: v1
-kind: Pod
-metadata:
-  name: nginx-fieldandcondition-test
-spec:
-  containers:
-  - name: nginx
-    image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
-    readinessProbe:
-      httpGet:
-        path: "/"
-        port: 80
-      initialDelaySeconds: 10
-YAML
-}
-`
-
-	//start := time.Now()
-	resource.Test(t, resource.TestCase{
-		PreCheck:     func() { testAccPreCheck(t) },
-		Providers:    testAccProviders,
-		CheckDestroy: testAccCheckkubectlDestroy,
-		Steps: []resource.TestStep{
-			{
-				Config: config,
-				//todo: improve checking
-			},
-		},
-	})
-}
-
-func TestAccKubectl_WaitForConditionUpdate(t *testing.T) {
-	//language=hcl
-	createConfig := `
-resource "kubectl_manifest" "test" {
-	wait_for_rollout = true
+%s
 	yaml_body = <<YAML
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: nginx-deployment
+  name: %s
   labels:
-    app: nginx
+    app: %s
 spec:
-  replicas: 1
+  replicas: %d
   selector:
     matchLabels:
-      app: nginx
+      app: %s
   template:
     metadata:
       labels:
-        app: nginx
+        app: %s
     spec:
       containers:
         - name: nginx
-          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
+          image: %s
           ports:
             - containerPort: 80
           readinessProbe:
@@ -718,10 +355,17 @@ spec:
             initialDelaySeconds: 10
 YAML
 }
-`
+`, extra, name, name, replicas, name, name, nginxImage)
+	}
+	return tmpl(createExtra, 1), tmpl(updateExtra, updateReplicas)
+}
 
-	updateConfig := `
-resource "kubectl_manifest" "test" {
+func TestAccKubectl_WaitForConditionUpdate(t *testing.T) {
+	t.Parallel()
+
+	createConfig, updateConfig := deploymentUpdateConfig(
+		`  wait_for_rollout = true`,
+		`
   wait_for_rollout = false
 	wait_for {
 		condition {
@@ -729,95 +373,29 @@ resource "kubectl_manifest" "test" {
 			status = "True"
 		}
 	}
-	yaml_body = <<YAML
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: nginx-deployment
-  labels:
-    app: nginx
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: nginx
-  template:
-    metadata:
-      labels:
-        app: nginx
-    spec:
-      containers:
-        - name: nginx
-          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
-          ports:
-            - containerPort: 80
-          readinessProbe:
-            httpGet:
-              path: "/"
-              port: 80
-            initialDelaySeconds: 10
-YAML
-}
-`
-
-	//start := time.Now()
+`,
+		1,
+	)
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
 		Steps: []resource.TestStep{
-			{
-				Config: createConfig,
-			},
-			{
-				Config: updateConfig,
-			},
+			{Config: createConfig},
+			{Config: updateConfig},
 		},
 	})
 }
 
 func TestAccKubectl_WaitForFieldUpdate(t *testing.T) {
-	//language=hcl
-	createConfig := `
-resource "kubectl_manifest" "test" {
-	wait_for_rollout = true
-	yaml_body = <<YAML
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: nginx-deployment
-  labels:
-    app: nginx
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: nginx
-  template:
-    metadata:
-      labels:
-        app: nginx
-    spec:
-      containers:
-        - name: nginx
-          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
-          ports:
-            - containerPort: 80
-          readinessProbe:
-            httpGet:
-              path: "/"
-              port: 80
-            initialDelaySeconds: 10
-YAML
-}
-`
+	t.Parallel()
 
-	// Bump `replicas: 1 -> 2` so the Deployment's spec actually changes
-	// between steps. Without a spec change Kubernetes does not bump
-	// metadata.generation, so status.observedGeneration stays at 1 and
-	// the wait_for.field match for "2" never succeeds.
-	updateConfig := `
-resource "kubectl_manifest" "test" {
+	// replicas: 1 -> 2 forces metadata.generation to bump so
+	// status.observedGeneration can reach "2" — without a spec change the
+	// wait_for.field match for "2" would never succeed.
+	createConfig, updateConfig := deploymentUpdateConfig(
+		`  wait_for_rollout = true`,
+		`
   wait_for_rollout = false
 	wait_for {
 		field {
@@ -825,49 +403,16 @@ resource "kubectl_manifest" "test" {
 			value = "2"
 		}
 	}
-	yaml_body = <<YAML
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: nginx-deployment
-  labels:
-    app: nginx
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: nginx
-  template:
-    metadata:
-      labels:
-        app: nginx
-    spec:
-      containers:
-        - name: nginx
-          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
-          ports:
-            - containerPort: 80
-          readinessProbe:
-            httpGet:
-              path: "/"
-              port: 80
-            initialDelaySeconds: 10
-YAML
-}
-`
-
-	//start := time.Now()
+`,
+		2,
+	)
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
 		Steps: []resource.TestStep{
-			{
-				Config: createConfig,
-			},
-			{
-				Config: updateConfig,
-			},
+			{Config: createConfig},
+			{Config: updateConfig},
 		},
 	})
 }
@@ -902,28 +447,30 @@ YAML
 //}
 
 func TestAccInconsistentPlanning(t *testing.T) {
-	//See https://github.com/alekc/terraform-provider-kubectl/pull/46
-	config := `
+	t.Parallel()
+
+	// See https://github.com/alekc/terraform-provider-kubectl/pull/46
+	name := acctest.RandomWithPrefix("inconsistent-secret")
+	config := fmt.Sprintf(`
 resource "kubectl_manifest" "secret" {
   yaml_body = <<EOF
 apiVersion: v1
 kind: Secret
 metadata:
-  name: test-secret
+  name: %s
 stringData:
   var: "${formatdate("YYYYMMDDhhmmss", timestamp())}"
 EOF
 }
-`
+`, name)
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
-
 		Steps: []resource.TestStep{
 			{
 				Config:             config,
-				ExpectNonEmptyPlan: true, // yaml_incluster is going to be constantly different
+				ExpectNonEmptyPlan: true, // yaml_incluster is constantly different
 			},
 			{
 				// used to crash out on the second run
@@ -935,13 +482,18 @@ EOF
 }
 
 func TestAccKubectlUnknownNamespace(t *testing.T) {
-	config := `
+	t.Parallel()
+
+	// The namespace is hardcoded as one that will never exist, so no
+	// collision with parallel tests.
+	name := acctest.RandomWithPrefix("ingress-unknown-ns")
+	config := fmt.Sprintf(`
 resource "kubectl_manifest" "test" {
 	yaml_body = <<EOT
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: name-here
+  name: %s
   namespace: this-doesnt-exist
 spec:
   ingressClassName: "nginx"
@@ -958,7 +510,7 @@ spec:
               number: 80
 	EOT
 		}
-`
+`, name)
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
@@ -1146,18 +698,20 @@ rules:
 }
 
 func TestAccKubectlSensitiveFields_secret(t *testing.T) {
+	t.Parallel()
 
-	yaml_body := `
+	name := acctest.RandomWithPrefix("sensitive-secret")
+	yaml_body := fmt.Sprintf(`
 apiVersion: v1
 kind: Secret
 metadata:
-  name: mysecret
+  name: %s
   namespace: default
 type: Opaque
 data:
   USER_NAME: YWRtaW4=
   PASSWORD: MWYyZDFlMmU2N2Rm
-`
+`, name)
 
 	config := fmt.Sprintf(`
 resource "kubectl_manifest" "test" {
@@ -1178,27 +732,30 @@ resource "kubectl_manifest" "test" {
 					resource.TestCheckResourceAttr("kubectl_manifest.test", "namespace", "default"),
 					resource.TestCheckNoResourceAttr("kubectl_manifest.test", "override_namespace"),
 					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body", yaml_body+"\n"),
-					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body_parsed", `apiVersion: v1
+					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body_parsed", fmt.Sprintf(`apiVersion: v1
 data: (sensitive value)
 kind: Secret
 metadata:
-  name: mysecret
+  name: %s
   namespace: default
 type: Opaque
-`),
+`, name)),
 				),
 			},
 		},
 	})
 }
 
-func TestAccKubectlSensitiveFields_slice(t *testing.T) {
-
-	yaml_body := `
+// ingressYAMLFixture renders an Ingress YAML fragment with a randomised name,
+// shared by the SensitiveFields_slice / _unknown_field and WithoutValidation
+// tests so each gets a unique cluster object.
+func ingressYAMLFixture(prefix string) (yaml, name string) {
+	name = acctest.RandomWithPrefix(prefix)
+	yaml = fmt.Sprintf(`
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: name-here
+  name: %s
 spec:
   ingressClassName: "nginx"
   rules:
@@ -1211,7 +768,14 @@ spec:
           service:
             name: test
             port:
-              number: 80`
+              number: 80`, name)
+	return
+}
+
+func TestAccKubectlSensitiveFields_slice(t *testing.T) {
+	t.Parallel()
+
+	yaml_body, name := ingressYAMLFixture("sensitive-slice")
 
 	config := fmt.Sprintf(`
 resource "kubectl_manifest" "test" {
@@ -1234,14 +798,14 @@ resource "kubectl_manifest" "test" {
 				Config: config,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body", yaml_body+"\n"),
-					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body_parsed", `apiVersion: networking.k8s.io/v1
+					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body_parsed", fmt.Sprintf(`apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: name-here
+  name: %s
 spec:
   ingressClassName: nginx
   rules: (sensitive value)
-`),
+`, name)),
 				),
 			},
 		},
@@ -1249,25 +813,9 @@ spec:
 }
 
 func TestAccKubectlSensitiveFields_unknown_field(t *testing.T) {
+	t.Parallel()
 
-	yaml_body := `
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: name-here
-spec:
-  ingressClassName: "nginx"
-  rules:
-  - host: "*.example.com"
-    http:
-      paths:
-      - path: "/testpath"
-        pathType: "Prefix"
-        backend:
-          service:
-            name: test
-            port:
-              number: 80`
+	yaml_body, name := ingressYAMLFixture("sensitive-unknown")
 
 	config := fmt.Sprintf(`
 resource "kubectl_manifest" "test" {
@@ -1290,10 +838,10 @@ resource "kubectl_manifest" "test" {
 				Config: config,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body", yaml_body+"\n"),
-					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body_parsed", `apiVersion: networking.k8s.io/v1
+					resource.TestCheckResourceAttr("kubectl_manifest.test", "yaml_body_parsed", fmt.Sprintf(`apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: name-here
+  name: %s
 spec:
   ingressClassName: nginx
   rules:
@@ -1307,7 +855,7 @@ spec:
               number: 80
         path: /testpath
         pathType: Prefix
-`),
+`, name)),
 				),
 			},
 		},
@@ -1315,25 +863,9 @@ spec:
 }
 
 func TestAccKubectlWithoutValidation(t *testing.T) {
+	t.Parallel()
 
-	yaml_body := `
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: name-here
-spec:
-  ingressClassName: "nginx"
-  rules:
-  - host: "*.example.com"
-    http:
-      paths:
-      - path: "/testpath"
-        pathType: "Prefix"
-        backend:
-          service:
-            name: test
-            port:
-              number: 80`
+	yaml_body, _ := ingressYAMLFixture("without-validation")
 
 	config := fmt.Sprintf(`
 resource "kubectl_manifest" "test" {
@@ -1815,14 +1347,20 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 }
 
 func TestAccKubectlServerSideValidationFailure(t *testing.T) {
+	t.Parallel()
 
-	config := `
+	// The Ingress is invalid (backend service name violates DNS-1035), so
+	// the server-side validation rejects it before any cluster object is
+	// created — randomising the Ingress name is purely defensive against
+	// future changes to the test.
+	name := acctest.RandomWithPrefix("invalid-ingress")
+	config := fmt.Sprintf(`
 resource "kubectl_manifest" "test" {
   yaml_body = <<YAML
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: ingress
+  name: %s
 spec:
   rules:
     - host: "test-a.proxypile.tk"
@@ -1837,8 +1375,8 @@ spec:
                   number: 8080
 YAML
 }
-`
-	expectedError, _ := regexp.Compile(".*Invalid value: \"nginx.test-a.svc.cluster.local\": a DNS-1035 label must consist of lower case alphanumeric characters.*")
+`, name)
+	expectedError := regexp.MustCompile(".*Invalid value: \"nginx.test-a.svc.cluster.local\": a DNS-1035 label must consist of lower case alphanumeric characters.*")
 	resource.Test(t, resource.TestCase{
 		Providers: testAccProviders,
 		Steps: []resource.TestStep{
