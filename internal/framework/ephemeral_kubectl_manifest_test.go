@@ -40,6 +40,8 @@ func testAccPreCheck(t *testing.T) {
 // `check` block that asserts on `phase`. A failing check produces a test
 // failure with a stable error message we can match.
 func TestAccKubectlEphemeralManifest_clusterScoped(t *testing.T) {
+	t.Parallel()
+
 	cfg := `
 ephemeral "kubectl_manifest" "ns" {
   api_version = "v1"
@@ -77,6 +79,8 @@ check "ns_active" {
 // Confirms the namespaced path through getRestClientFromUnstructured works
 // from the framework half too, not just cluster-scoped.
 func TestAccKubectlEphemeralManifest_namespacedConfigMap(t *testing.T) {
+	t.Parallel()
+
 	name := fmt.Sprintf("acc-ephemeral-cm-%s", acctest.RandString(8))
 	cfg := fmt.Sprintf(`
 resource "kubectl_manifest" "seed" {
@@ -128,6 +132,8 @@ check "region_ok" {
 // half surfaces the same error shape as the SDK v2 data source when a
 // gojsonq path under `fields` does not resolve.
 func TestAccKubectlEphemeralManifest_missingFieldPath(t *testing.T) {
+	t.Parallel()
+
 	cfg := `
 ephemeral "kubectl_manifest" "ns" {
   api_version = "v1"
@@ -163,6 +169,8 @@ check "stub" {
 // TestAccKubectlEphemeralManifest_notFound asserts the ephemeral resource
 // errors when the target object does not exist.
 func TestAccKubectlEphemeralManifest_notFound(t *testing.T) {
+	t.Parallel()
+
 	cfg := `
 ephemeral "kubectl_manifest" "missing" {
   api_version = "v1"
@@ -225,6 +233,8 @@ var _ statecheck.StateCheck = ephemeralNotInState{}
 // (The seed kubectl_manifest resource IS in state — that's expected and
 // distinct from the ephemeral block.)
 func TestAccKubectlEphemeralManifest_notInState(t *testing.T) {
+	t.Parallel()
+
 	name := fmt.Sprintf("acc-ephemeral-state-%s", acctest.RandString(8))
 	cfg := fmt.Sprintf(`
 resource "kubectl_manifest" "seed" {

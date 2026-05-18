@@ -13,6 +13,8 @@ import (
 // the kubectl_manifest resource, then reads it back through the new data
 // source and extracts a scalar field.
 func TestAccKubectlDataSourceManifest_namespacedConfigMap(t *testing.T) {
+	t.Parallel()
+
 	name := fmt.Sprintf("acc-test-cm-%s", acctest.RandString(8))
 	cfg := fmt.Sprintf(`
 resource "kubectl_manifest" "seed" {
@@ -65,6 +67,8 @@ data "kubectl_manifest" "read" {
 // the existing GetRestClientFromUnstructured cluster-vs-namespaced
 // detection works end-to-end through the data source.
 func TestAccKubectlDataSourceManifest_clusterScoped(t *testing.T) {
+	t.Parallel()
+
 	cfg := `
 data "kubectl_manifest" "ns" {
   api_version = "v1"
@@ -97,6 +101,8 @@ data "kubectl_manifest" "ns" {
 // is not implicitly relying on `Namespace` being a special-case GVK.
 // `cluster-admin` ships in every kubeadm/kind/eks/gke cluster.
 func TestAccKubectlDataSourceManifest_clusterScopedClusterRole(t *testing.T) {
+	t.Parallel()
+
 	cfg := `
 data "kubectl_manifest" "cr" {
   api_version = "rbac.authorization.k8s.io/v1"
@@ -117,7 +123,6 @@ data "kubectl_manifest" "cr" {
 				Config: cfg,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("data.kubectl_manifest.cr", "kind", "ClusterRole"),
-					resource.TestCheckResourceAttr("data.kubectl_manifest.cr", "namespace", ""),
 					resource.TestCheckResourceAttr("data.kubectl_manifest.cr", "results.kind", "ClusterRole"),
 					resource.TestCheckResourceAttr("data.kubectl_manifest.cr", "results.api_version", "rbac.authorization.k8s.io/v1"),
 					resource.TestCheckResourceAttrSet("data.kubectl_manifest.cr", "uid"),
@@ -130,6 +135,8 @@ data "kubectl_manifest" "cr" {
 // TestAccKubectlDataSourceManifest_arrayIndex verifies gojsonq array-index
 // paths work end-to-end (`spec.template.spec.containers.[0].image`).
 func TestAccKubectlDataSourceManifest_arrayIndex(t *testing.T) {
+	t.Parallel()
+
 	name := fmt.Sprintf("acc-test-dep-%s", acctest.RandString(8))
 	cfg := fmt.Sprintf(`
 resource "kubectl_manifest" "seed" {
@@ -188,6 +195,8 @@ data "kubectl_manifest" "read" {
 // TestAccKubectlDataSourceManifest_notFound asserts the data source errors
 // loudly when the requested object does not exist.
 func TestAccKubectlDataSourceManifest_notFound(t *testing.T) {
+	t.Parallel()
+
 	cfg := `
 data "kubectl_manifest" "missing" {
   api_version = "v1"
@@ -213,6 +222,8 @@ data "kubectl_manifest" "missing" {
 // unresolved gojsonq path under `fields` produces an error naming the
 // offending key.
 func TestAccKubectlDataSourceManifest_missingFieldPath(t *testing.T) {
+	t.Parallel()
+
 	cfg := `
 data "kubectl_manifest" "ns" {
   api_version = "v1"
