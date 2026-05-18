@@ -27,6 +27,59 @@ func TestProvider(t *testing.T) {
 	}
 }
 
+// TestProviderConfigure_ApplyRetryCountIsPerProvider pins the fix for issue
+// #265: apply_retry_count used to live in a package-level global, so the last
+// providerConfigure to run silently set the value for every other aliased
+// provider's resources. Each providerConfigure call must populate its own
+// *KubeProvider with the value the caller passed.
+func TestProviderConfigure_ApplyRetryCountIsPerProvider(t *testing.T) {
+	t.Setenv("KUBECTL_PROVIDER_APPLY_RETRY_COUNT", "")
+
+	raw := func(retry int) map[string]interface{} {
+		return map[string]interface{}{
+			"apply_retry_count": retry,
+			"load_config_file":  false,
+			"host":              "http://example.invalid",
+		}
+	}
+	schemaMap := Provider().Schema
+
+	metaA, diags := providerConfigure(schema.TestResourceDataRaw(t, schemaMap, raw(1)), "test")
+	if diags.HasError() {
+		t.Fatalf("provider A: %v", diags)
+	}
+	metaB, diags := providerConfigure(schema.TestResourceDataRaw(t, schemaMap, raw(42)), "test")
+	if diags.HasError() {
+		t.Fatalf("provider B: %v", diags)
+	}
+
+	if got := metaA.(*KubeProvider).ApplyRetryCount; got != 1 {
+		t.Errorf("provider A: ApplyRetryCount = %d, want 1", got)
+	}
+	if got := metaB.(*KubeProvider).ApplyRetryCount; got != 42 {
+		t.Errorf("provider B: ApplyRetryCount = %d, want 42 (was clobbered by provider B)", got)
+	}
+}
+
+// TestProviderConfigure_ApplyRetryCountEnvOverride verifies the env var still
+// wins over the schema value, and that the override is captured per-call.
+func TestProviderConfigure_ApplyRetryCountEnvOverride(t *testing.T) {
+	t.Setenv("KUBECTL_PROVIDER_APPLY_RETRY_COUNT", "7")
+
+	raw := map[string]interface{}{
+		"apply_retry_count": 1,
+		"load_config_file":  false,
+		"host":              "http://example.invalid",
+	}
+	meta, diags := providerConfigure(schema.TestResourceDataRaw(t, Provider().Schema, raw), "test")
+	if diags.HasError() {
+		t.Fatalf("providerConfigure: %v", diags)
+	}
+	if got := meta.(*KubeProvider).ApplyRetryCount; got != 7 {
+		t.Errorf("env override: ApplyRetryCount = %d, want 7", got)
+	}
+}
+
 func testAccCheckkubectlDestroy(s *terraform.State) error {
 	return testAccCheckkubectlStatus(s, false)
 }
