@@ -77,9 +77,25 @@ jobs:
         with:
           wait: 2m
           node_image: kindest/node:v${{ needs.get_version_matrix.outputs.latest_k8s_version }}
+      # Install Terraform up-front and hand its absolute path to the test
+      # framework via TF_ACC_TERRAFORM_PATH. Without this, the
+      # terraform-plugin-testing helper installs Terraform into a per-test
+      # temp dir and chmod-then-exec races under -parallel, producing
+      # `fork/exec /tmp/plugintest-terraform.../terraform: text file busy`.
+      # `terraform_wrapper: false` is required so the binary on PATH is the
+      # real Terraform, not the wrapping script setup-terraform installs by
+      # default.
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: ${{ needs.get_version_matrix.outputs.latest_terraform_version }}
+          terraform_wrapper: false
+      - name: Locate Terraform binary
+        id: tfpath
+        run: echo "path=$(which terraform)" >> "${GITHUB_OUTPUT}"
       - name: Acceptance Tests
         env:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+          TF_ACC_TERRAFORM_PATH: ${{ steps.tfpath.outputs.path }}
           TF_ACC_TERRAFORM_VERSION: ${{ needs.get_version_matrix.outputs.latest_terraform_version }}
           # Tests that opt into parallelism via `t.Parallel()` (Phase 1: all
           # file-only data sources + the resource tests that already use
@@ -123,9 +139,18 @@ jobs:
         with:
           wait: 2m
           node_image: kindest/node:v${{ matrix.k8s_version }}
+      # See acc_test_smoke for why TF_ACC_TERRAFORM_PATH is set.
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: ${{ matrix.terraform_version }}
+          terraform_wrapper: false
+      - name: Locate Terraform binary
+        id: tfpath
+        run: echo "path=$(which terraform)" >> "${GITHUB_OUTPUT}"
       - name: Acceptance Tests
         env:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+          TF_ACC_TERRAFORM_PATH: ${{ steps.tfpath.outputs.path }}
           TF_ACC_TERRAFORM_VERSION: ${{ matrix.terraform_version }}
           ACC_TESTARGS: "-parallel 4"
         run: |
