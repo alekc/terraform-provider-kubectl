@@ -66,7 +66,7 @@ func resourceKubectlManifest() *schema.Resource {
 			// surfaces as `client rate limiter Wait returned an error:
 			// context deadline exceeded`. See issue #228.
 			if kubectlApplyRetryCount == 0 {
-				if applyErr := resourceKubectlManifestApply(ctx, d, meta); applyErr != nil {
+				if applyErr := resourceKubectlManifestApply(ctx, d, meta, schema.TimeoutCreate); applyErr != nil {
 					return diag.FromErr(applyErr)
 				}
 				return nil
@@ -78,7 +78,7 @@ func resourceKubectlManifest() *schema.Resource {
 
 			retryConfig := backoff.WithMaxRetries(exponentialBackoffConfig, kubectlApplyRetryCount)
 			retryErr := backoff.Retry(func() error {
-				err := resourceKubectlManifestApply(ctx, d, meta)
+				err := resourceKubectlManifestApply(ctx, d, meta, schema.TimeoutCreate)
 				if err != nil {
 					log.Printf("[ERROR] creating manifest failed: %+v", err)
 				}
@@ -111,7 +111,7 @@ func resourceKubectlManifest() *schema.Resource {
 			if kubectlApplyRetryCount > 0 {
 				retryConfig := backoff.WithMaxRetries(exponentialBackoffConfig, kubectlApplyRetryCount)
 				retryErr := backoff.Retry(func() error {
-					err := resourceKubectlManifestApply(ctx, d, meta)
+					err := resourceKubectlManifestApply(ctx, d, meta, schema.TimeoutUpdate)
 					if err != nil {
 						log.Printf("[ERROR] updating manifest failed: %+v", err)
 					}
@@ -124,7 +124,7 @@ func resourceKubectlManifest() *schema.Resource {
 
 				return nil
 			} else {
-				if applyErr := resourceKubectlManifestApply(ctx, d, meta); applyErr != nil {
+				if applyErr := resourceKubectlManifestApply(ctx, d, meta, schema.TimeoutUpdate); applyErr != nil {
 					return diag.FromErr(applyErr)
 				}
 
@@ -133,6 +133,8 @@ func resourceKubectlManifest() *schema.Resource {
 		},
 		Timeouts: &schema.ResourceTimeout{
 			Create: schema.DefaultTimeout(10 * time.Minute),
+			Update: schema.DefaultTimeout(10 * time.Minute),
+			Delete: schema.DefaultTimeout(10 * time.Minute),
 		},
 		Importer: &schema.ResourceImporter{
 			StateContext: func(ctx context.Context, d *schema.ResourceData, meta interface{}) ([]*schema.ResourceData, error) {
@@ -558,7 +560,12 @@ func newApplyOptions(yamlBody string) *apply.ApplyOptions {
 	}
 	return applyOptions
 }
-func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, meta interface{}) error {
+// resourceKubectlManifestApply applies the manifest and (when configured)
+// waits for the resource's rollout to complete. The caller passes the
+// timeout key matching the active operation (schema.TimeoutCreate or
+// schema.TimeoutUpdate); it determines which user-configured `timeouts`
+// block governs the wait_for_rollout / wait_for loops.
+func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, meta interface{}, timeoutKey string) error {
 	yamlBody := d.Get("yaml_body").(string)
 
 	// convert hcl into an unstructured object
@@ -649,7 +656,7 @@ func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, m
 	_ = d.Set("live_manifest_incluster", liveManifestFingerprint)
 
 	if d.Get("wait_for_rollout").(bool) {
-		timeout := d.Timeout(schema.TimeoutCreate)
+		timeout := d.Timeout(timeoutKey)
 
 		switch {
 		case manifest.GetKind() == "Deployment":
@@ -680,7 +687,7 @@ func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, m
 	}
 
 	if v, ok := d.GetOk("wait_for"); ok {
-		timeout := d.Timeout(schema.TimeoutCreate)
+		timeout := d.Timeout(timeoutKey)
 
 		waitFor := types.WaitFor{}
 		if err := mapstructure.Decode((v.([]interface{}))[0], &waitFor); err != nil {
@@ -1009,56 +1016,86 @@ func waitForDelete(ctx context.Context, restClient *RestClientResult, name strin
 	return nil
 }
 
+// deploymentRolloutComplete reports whether the Deployment has finished
+// its current rollout. Mirrors kubectl's `rollout status deployment`
+// progression semantics. Same as the existing watch logic — extracted to
+// a pure predicate so we can probe both before and after opening the
+// Watch, closing the Get-then-Watch race that left wait_for_rollout
+// hanging until the operation timeout. See issue #226.
+func deploymentRolloutComplete(deployment *apps_v1.Deployment) bool {
+	if deployment.Generation > deployment.Status.ObservedGeneration {
+		return false
+	}
+	// Preserve the existing provider behaviour: a Progressing=False with
+	// reason=ProgressDeadlineExceeded is treated as "still waiting", not
+	// as a permanent failure. Callers rely on this to keep waiting while
+	// the controller retries.
+	if condition := getDeploymentCondition(deployment.Status, apps_v1.DeploymentProgressing); condition != nil && condition.Reason == TimedOutReason {
+		return false
+	}
+	if deployment.Spec.Replicas != nil && deployment.Status.UpdatedReplicas < *deployment.Spec.Replicas {
+		return false
+	}
+	if deployment.Status.Replicas > deployment.Status.UpdatedReplicas {
+		return false
+	}
+	if deployment.Status.AvailableReplicas < deployment.Status.UpdatedReplicas {
+		return false
+	}
+	return true
+}
+
 func waitForDeploymentRollout(ctx context.Context, provider *KubeProvider, ns string, name string, timeout time.Duration) error {
-	// Borrowed from: https://github.com/kubernetes/kubectl/blob/c4be63c54b7188502c1a63bb884a0b05fac51ebd/pkg/polymorphichelpers/rollout_status.go#L59
+	deploymentClient := provider.MainClientset.AppsV1().Deployments(ns)
+
+	// Probe current state and capture ResourceVersion before opening the
+	// Watch. A Watch opened with no ResourceVersion only delivers future
+	// events; if the controller settled the rollout between this Get and
+	// the Watch open, the watcher would sit idle until the operation
+	// timeout. See issue #226.
+	resourceVersion := ""
+	if current, err := deploymentClient.Get(ctx, name, meta_v1.GetOptions{}); err == nil {
+		if deploymentRolloutComplete(current) {
+			return nil
+		}
+		resourceVersion = current.ResourceVersion
+	}
 
 	timeoutSeconds := int64(timeout.Seconds())
-
-	watcher, err := provider.MainClientset.AppsV1().Deployments(ns).Watch(ctx, meta_v1.ListOptions{Watch: true, TimeoutSeconds: &timeoutSeconds, FieldSelector: fields.OneTermEqualSelector("metadata.name", name).String()})
+	watcher, err := deploymentClient.Watch(ctx, meta_v1.ListOptions{
+		Watch:           true,
+		TimeoutSeconds:  &timeoutSeconds,
+		FieldSelector:   fields.OneTermEqualSelector("metadata.name", name).String(),
+		ResourceVersion: resourceVersion,
+	})
 	if err != nil {
 		return err
 	}
-
 	defer watcher.Stop()
 
-	done := false
-	for !done {
+	for {
 		select {
-		case event := <-watcher.ResultChan():
-			if event.Type == watch.Modified {
-				deployment, ok := event.Object.(*apps_v1.Deployment)
-				if !ok {
-					return fmt.Errorf("%s could not cast to Deployment", name)
+		case event, ok := <-watcher.ResultChan():
+			if !ok {
+				if current, gerr := deploymentClient.Get(ctx, name, meta_v1.GetOptions{}); gerr == nil && deploymentRolloutComplete(current) {
+					return nil
 				}
-
-				if deployment.Generation <= deployment.Status.ObservedGeneration {
-					condition := getDeploymentCondition(deployment.Status, apps_v1.DeploymentProgressing)
-					if condition != nil && condition.Reason == TimedOutReason {
-						continue
-					}
-
-					if deployment.Spec.Replicas != nil && deployment.Status.UpdatedReplicas < *deployment.Spec.Replicas {
-						continue
-					}
-
-					if deployment.Status.Replicas > deployment.Status.UpdatedReplicas {
-						continue
-					}
-
-					if deployment.Status.AvailableReplicas < deployment.Status.UpdatedReplicas {
-						continue
-					}
-
-					done = true
-				}
+				return fmt.Errorf("%s watch channel closed before Deployment rollout completed", name)
 			}
-
+			if event.Type != watch.Modified {
+				continue
+			}
+			deployment, ok := event.Object.(*apps_v1.Deployment)
+			if !ok {
+				return fmt.Errorf("%s could not cast to Deployment", name)
+			}
+			if deploymentRolloutComplete(deployment) {
+				return nil
+			}
 		case <-ctx.Done():
 			return fmt.Errorf("%s failed to rollout Deployment", name)
 		}
 	}
-
-	return nil
 }
 
 func getDeploymentCondition(status apps_v1.DeploymentStatus, condType apps_v1.DeploymentConditionType) *apps_v1.DeploymentCondition {
@@ -1155,65 +1192,80 @@ func waitForDaemonSetRollout(ctx context.Context, provider *KubeProvider, ns str
 	}
 }
 
+// statefulSetRolloutComplete reports whether the StatefulSet has
+// finished its current rollout. Mirrors kubectl's `rollout status
+// statefulset` semantics, extracted from the original watch loop so we
+// can probe state before opening the Watch. See issue #226.
+func statefulSetRolloutComplete(sts *apps_v1.StatefulSet) bool {
+	if sts.Spec.UpdateStrategy.Type != apps_v1.RollingUpdateStatefulSetStrategyType {
+		return true
+	}
+	if sts.Status.ObservedGeneration == 0 || sts.Generation > sts.Status.ObservedGeneration {
+		return false
+	}
+	if sts.Spec.Replicas != nil && sts.Status.ReadyReplicas < *sts.Spec.Replicas {
+		return false
+	}
+	if sts.Spec.UpdateStrategy.RollingUpdate != nil {
+		if sts.Spec.Replicas != nil && sts.Spec.UpdateStrategy.RollingUpdate.Partition != nil {
+			if sts.Status.UpdatedReplicas < (*sts.Spec.Replicas - *sts.Spec.UpdateStrategy.RollingUpdate.Partition) {
+				return false
+			}
+		}
+		return true
+	}
+	if sts.Status.UpdateRevision != sts.Status.CurrentRevision {
+		return false
+	}
+	return true
+}
+
 func waitForStatefulSetRollout(ctx context.Context, provider *KubeProvider, ns string, name string, timeout time.Duration) error {
-	// Borrowed from: https://github.com/kubernetes/kubectl/blob/c4be63c54b7188502c1a63bb884a0b05fac51ebd/pkg/polymorphichelpers/rollout_status.go#L120
+	stsClient := provider.MainClientset.AppsV1().StatefulSets(ns)
+
+	resourceVersion := ""
+	if current, err := stsClient.Get(ctx, name, meta_v1.GetOptions{}); err == nil {
+		if statefulSetRolloutComplete(current) {
+			return nil
+		}
+		resourceVersion = current.ResourceVersion
+	}
 
 	timeoutSeconds := int64(timeout.Seconds())
-
-	watcher, err := provider.MainClientset.AppsV1().StatefulSets(ns).Watch(ctx, meta_v1.ListOptions{Watch: true, TimeoutSeconds: &timeoutSeconds, FieldSelector: fields.OneTermEqualSelector("metadata.name", name).String()})
+	watcher, err := stsClient.Watch(ctx, meta_v1.ListOptions{
+		Watch:           true,
+		TimeoutSeconds:  &timeoutSeconds,
+		FieldSelector:   fields.OneTermEqualSelector("metadata.name", name).String(),
+		ResourceVersion: resourceVersion,
+	})
 	if err != nil {
 		return err
 	}
-
 	defer watcher.Stop()
 
-	done := false
-	for !done {
+	for {
 		select {
-		case event := <-watcher.ResultChan():
-			if event.Type == watch.Modified {
-				sts, ok := event.Object.(*apps_v1.StatefulSet)
-				if !ok {
-					return fmt.Errorf("%s could not cast to StatefulSet", name)
+		case event, ok := <-watcher.ResultChan():
+			if !ok {
+				if current, gerr := stsClient.Get(ctx, name, meta_v1.GetOptions{}); gerr == nil && statefulSetRolloutComplete(current) {
+					return nil
 				}
-
-				if sts.Spec.UpdateStrategy.Type != apps_v1.RollingUpdateStatefulSetStrategyType {
-					done = true
-					continue
-				}
-
-				if sts.Status.ObservedGeneration == 0 || sts.Generation > sts.Status.ObservedGeneration {
-					continue
-				}
-
-				if sts.Spec.Replicas != nil && sts.Status.ReadyReplicas < *sts.Spec.Replicas {
-					continue
-				}
-
-				if sts.Spec.UpdateStrategy.Type == apps_v1.RollingUpdateStatefulSetStrategyType && sts.Spec.UpdateStrategy.RollingUpdate != nil {
-					if sts.Spec.Replicas != nil && sts.Spec.UpdateStrategy.RollingUpdate.Partition != nil {
-						if sts.Status.UpdatedReplicas < (*sts.Spec.Replicas - *sts.Spec.UpdateStrategy.RollingUpdate.Partition) {
-							continue
-						}
-					}
-
-					done = true
-					continue
-				}
-
-				if sts.Status.UpdateRevision != sts.Status.CurrentRevision {
-					continue
-				}
-
-				done = true
+				return fmt.Errorf("%s watch channel closed before StatefulSet rollout completed", name)
 			}
-
+			if event.Type != watch.Modified {
+				continue
+			}
+			sts, ok := event.Object.(*apps_v1.StatefulSet)
+			if !ok {
+				return fmt.Errorf("%s could not cast to StatefulSet", name)
+			}
+			if statefulSetRolloutComplete(sts) {
+				return nil
+			}
 		case <-ctx.Done():
 			return fmt.Errorf("%s failed to rollout StatefulSet", name)
 		}
 	}
-
-	return nil
 }
 
 func waitForApiService(ctx context.Context, provider *KubeProvider, name string, timeout time.Duration) error {

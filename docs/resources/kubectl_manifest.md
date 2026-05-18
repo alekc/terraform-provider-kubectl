@@ -230,6 +230,34 @@ More examples can be found in the provider tests.
 By default, this resource will wait for `Deployment`, `DaemonSet`, `StatefulSet` & `APIService` to complete their rollout before proceeding.
 You can disable this behavior by setting the `wait_for_rollout` field to `false`.
 
+## Timeouts
+
+The resource supports `create`, `update`, and `delete` timeouts via a standard Terraform
+`timeouts` block. Each defaults to **10 minutes** and bounds the corresponding
+`wait_for_rollout` / `wait_for` wait when that operation is in flight. Workloads that take
+longer than ten minutes to roll out (Windows images, large StatefulSets, anything pulling a
+multi-gigabyte image) should raise the relevant key.
+
+```hcl
+resource "kubectl_manifest" "my_deployment" {
+  timeouts {
+    create = "30m"
+    update = "30m"
+    delete = "5m"
+  }
+
+  yaml_body = <<YAML
+apiVersion: apps/v1
+kind: Deployment
+# ...
+YAML
+}
+```
+
+`update` covers in-place changes to the manifest (the most common case for long rollouts —
+scaling, image bumps, env tweaks). `create` covers the initial apply. `delete` bounds resource
+deletion.
+
 ## Import
 
 This provider supports importing existing resources. The ID format expected uses a double `//` as a deliminator (as apiVersion can have a forward-slash):

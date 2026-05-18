@@ -170,6 +170,67 @@ YAML
 	})
 }
 
+// TestAccKubectl_WaitForRolloutDeploymentUpdate is a regression test for
+// https://github.com/alekc/terraform-provider-kubectl/issues/226. Two
+// behaviours converged in that issue:
+//   - the resource schema only declared a `create` timeout, so users
+//     setting `timeouts { update = ... }` were silently ignored, and
+//   - `waitForDeploymentRollout` opened a Watch without an initial-state
+//     probe; an update whose rollout settled between the spec write and
+//     the Watch open then blocked until the operation timeout.
+//
+// This test exercises both: it creates a Deployment, then runs an
+// in-place update with an `update` timeout configured. The new code
+// path returns immediately once the rollout settles; the old path
+// hung 20 minutes and failed.
+func TestAccKubectl_WaitForRolloutDeploymentUpdate(t *testing.T) {
+	t.Parallel()
+
+	deploymentConfig := func(replicas int) string {
+		return fmt.Sprintf(`
+resource "kubectl_manifest" "test" {
+  wait_for_rollout = true
+  timeouts {
+    create = "60s"
+    update = "60s"
+    delete = "60s"
+  }
+  yaml_body = <<YAML
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: issue-226-deployment
+  labels:
+    app: issue-226
+spec:
+  replicas: %d
+  selector:
+    matchLabels:
+      app: issue-226
+  template:
+    metadata:
+      labels:
+        app: issue-226
+    spec:
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+YAML
+}
+`, replicas)
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckkubectlDestroy,
+		Steps: []resource.TestStep{
+			{Config: deploymentConfig(1)},
+			{Config: deploymentConfig(2)},
+		},
+	})
+}
+
 func TestAccKubectl_WaitForRolloutStatefulSet(t *testing.T) {
 	t.Parallel()
 
