@@ -8,7 +8,20 @@ This yaml object is then tracked and handles creation, updates and deleted seaml
 
 A set of helpful data resources to process directories of yaml files and inline templating is available.
 
-This `terraform-provider-kubectl` provider has been originally forked from `gavinbunney/kubectl` and followed a separate development path from the version 0.14
+This `terraform-provider-kubectl` provider has been originally forked from `gavinbunney/kubectl` and followed a separate development path from the version 0.14.
+
+## What's in this provider
+
+| Type               | Name                                                                       | Purpose                                                                                              |
+| ------------------ | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Resource           | [`kubectl_manifest`](./resources/kubectl_manifest.md)                      | Apply a raw YAML manifest to the cluster (full create / update / delete + drift detection).          |
+| Resource           | [`kubectl_server_version`](./resources/kubectl_server_version.md)          | Read API-server version info, with `triggers` for use in `depends_on` chains.                        |
+| Data source        | [`kubectl_manifest`](./data-sources/kubectl_manifest.md)                   | Read any object from the cluster by GVK + name (+ namespace) and extract fields by dot-path.         |
+| Data source        | [`kubectl_server_version`](./data-sources/kubectl_server_version.md)       | Read API-server version info.                                                                        |
+| Data source        | [`kubectl_file_documents`](./data-sources/kubectl_file_documents.md)       | Split a multi-document YAML string into individual documents.                                        |
+| Data source        | [`kubectl_filename_list`](./data-sources/kubectl_filename_list.md)         | Glob a directory for YAML files.                                                                     |
+| Data source        | [`kubectl_path_documents`](./data-sources/kubectl_path_documents.md)       | Glob a directory and split every matched file into individual documents.                             |
+| Ephemeral resource | [`kubectl_manifest`](./ephemeral-resources/kubectl_manifest.md)            | Same shape as the data source, but the fetched value is **never written to state**. Terraform 1.10+. |
 
 ## Installation
 
