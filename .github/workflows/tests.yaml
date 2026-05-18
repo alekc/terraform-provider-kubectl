@@ -91,7 +91,7 @@ jobs:
         with:
           wait: 2m
           node_image: kindest/node:v${{ needs.get_version_matrix.outputs.latest_k8s_version }}
-      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_version: ${{ needs.get_version_matrix.outputs.latest_terraform_version }}
           terraform_wrapper: false
@@ -200,7 +200,7 @@ jobs:
       # `terraform_wrapper: false` is required so the binary on PATH is the
       # real Terraform, not the wrapping script setup-terraform installs by
       # default.
-      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_version: ${{ needs.get_version_matrix.outputs.latest_terraform_version }}
           terraform_wrapper: false
@@ -257,7 +257,7 @@ jobs:
           wait: 2m
           node_image: kindest/node:v${{ matrix.k8s_version }}
       # See acc_test_smoke for why TF_ACC_TERRAFORM_PATH is set.
-      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_version: ${{ matrix.terraform_version }}
           terraform_wrapper: false
