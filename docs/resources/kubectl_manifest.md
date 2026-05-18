@@ -73,7 +73,7 @@ metadata:
 spec:
   containers:
   - name: nginx
-    image: nginx:1.14.2
+    image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
     readinessProbe:
       httpGet:
         path: "/"
@@ -92,11 +92,11 @@ YAML
 * `server_side_apply` - Optional. Allow using server-side-apply method. Default `false`.
 * `field_manager` - Optional. Override the default field manager name. This is only relevent when using server-side apply. Default `kubectl`.
 * `force_conflicts` - Optional. Allow using force_conflicts. Default `false`.
-* `apply_only` - Optional. It does not delete resource in any case Default `false`.
+* `apply_only` - Optional. When `true`, the resource is never deleted on `terraform destroy`. Default `false`.
 * `ignore_fields` - Optional. List of map fields to ignore when applying the manifest. See below for more details.
 * `override_namespace` - Optional. Override the namespace to apply the kubernetes resource to, ignoring any declared namespace in the `yaml_body`.
 * `validate_schema` - Optional. Setting to `false` will mimic `kubectl apply --validate=false` mode. Default `true`.
-* `wait` - Optional. Set this flag to wait or not for finalized to complete for deleted objects. Default `false`.
+* `wait` - Optional. When `true`, wait for finalizers to complete on deleted objects before returning. Default `false`.
 * `wait_for_rollout` - Optional. Set this flag to wait or not for `Deployment`, `DaemonSet`, `StatefulSet` & `APIService`  resources to complete rollout. Default `true`.
 * `wait_for` - Optional. If set, will wait until either all conditions are satisfied, or until timeout is reached (see [below for nested schema](#wait_for)). Under the hood [gojsonq](https://github.com/thedevsaddam/gojsonq) is used for querying, see the related syntax and examples.
 * `delete_cascade` - Optional; `Background` or `Foreground` are valid options. If set this overrides the default provider behaviour which is to use `Background` unless `wait` is `true` when `Foreground` will be used. To duplicate the default behaviour of `kubectl` this should be explicitly set to `Background`.

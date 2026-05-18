@@ -16,11 +16,11 @@ resource "kubectl_server_version" "current" { }
 
 ## Attribute Reference
 
-* `version` - Version of the server, e.g. `v1.12.10`.
+* `version` - Version of the server, e.g. `v1.34.0`.
 * `major` - Major version, semver if available, e.g. `1`.
-* `minor` - Minor version, semver if available, e.g. `12`.
-* `patch` - Patch version, semver if available, e.g. `10`.
-* `git_version` - Version of the server, e.g. `v1.12.10-eks-aae39f`.
+* `minor` - Minor version, semver if available, e.g. `34`.
+* `patch` - Patch version, semver if available, e.g. `0`.
+* `git_version` - Version of the server, e.g. `v1.34.0-eks-aae39f`.
 * `git_commit` - Git sha commit, e.g. `aae39f4697508697bf16c0de4a5687d464f4da81`.
-* `build_date` - Date server binaries were build, e.g. `2019-12-23T08:19:12Z`.
+* `build_date` - Date the server binaries were built, e.g. `2025-08-27T08:19:12Z`.
 * `platform` - Server platform name, e.g. `linux/amd64`.
