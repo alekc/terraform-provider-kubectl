@@ -141,7 +141,13 @@ func Provider() *schema.Provider {
 			"exec": {
 				Type:     schema.TypeList,
 				Optional: true,
-				MaxItems: 1,
+				// MaxItems is intentionally NOT set here. The framework half
+				// of the muxed provider does not emit MaxItems at the schema
+				// protocol level (terraform-plugin-framework drops it), so
+				// declaring it here causes tf6muxserver to fail with a schema
+				// parity error at provider startup (see issue #275). Single-
+				// element enforcement is preserved in initializeConfiguration
+				// below, which rejects len(exec) > 1 explicitly.
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
 						"api_version": {
@@ -295,8 +301,16 @@ func initializeConfiguration(d *schema.ResourceData) (*restclient.Config, error)
 	}
 
 	if v, ok := d.GetOk("exec"); ok {
+		execList := v.([]interface{})
+		// Enforce the single-block limit that used to come for free from
+		// schema MaxItems: 1. The MaxItems hint was dropped from the schema
+		// to keep parity with the framework half of the muxed provider
+		// (see issue #275); the limit lives here now.
+		if len(execList) > 1 {
+			return nil, fmt.Errorf("provider supports at most one exec block, got %d", len(execList))
+		}
 		exec := &clientcmdapi.ExecConfig{}
-		if spec, ok := v.([]interface{})[0].(map[string]interface{}); ok {
+		if spec, ok := execList[0].(map[string]interface{}); ok {
 			exec.InteractiveMode = clientcmdapi.IfAvailableExecInteractiveMode
 			exec.APIVersion = spec["api_version"].(string)
 			exec.Command = spec["command"].(string)
