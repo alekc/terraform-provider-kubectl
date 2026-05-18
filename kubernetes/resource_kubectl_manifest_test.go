@@ -52,7 +52,7 @@ metadata:
 spec:
   containers:
   - name: nginx
-    image: nginx:1.14.2
+    image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
     readinessProbe:
       httpGet:
         path: "/"
@@ -99,7 +99,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.14.2
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
           ports:
             - containerPort: 80
           readinessProbe:
@@ -149,7 +149,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.14.2
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
           ports:
             - containerPort: 80
           readinessProbe:
@@ -199,7 +199,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.14.2
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
           ports:
             - containerPort: 80
           readinessProbe:
@@ -248,7 +248,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.14.2
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
           ports:
             - containerPort: 80
           readinessProbe:
@@ -298,7 +298,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.14.2
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
           ports:
             - containerPort: 80
           readinessProbe:
@@ -349,7 +349,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.14.2
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
           ports:
             - containerPort: 80
           readinessProbe:
@@ -387,7 +387,7 @@ metadata:
 spec:
   containers:
   - name: nginx
-    image: nginx:1.14.2
+    image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
     readinessProbe:
       httpGet:
         path: "/"
@@ -551,11 +551,11 @@ resource "kubectl_manifest" "test" {
 apiVersion: v1
 kind: Pod
 metadata:
-  name: nginx
+  name: nginx-field-test
 spec:
   containers:
   - name: nginx
-    image: nginx:1.14.2
+    image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
     readinessProbe:
       httpGet:
         path: "/"
@@ -597,11 +597,11 @@ resource "kubectl_manifest" "test" {
 apiVersion: v1
 kind: Pod
 metadata:
-  name: nginx
+  name: nginx-conditions-test
 spec:
   containers:
   - name: nginx
-    image: nginx:1.14.2
+    image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
     readinessProbe:
       httpGet:
         path: "/"
@@ -656,11 +656,11 @@ resource "kubectl_manifest" "test" {
 apiVersion: v1
 kind: Pod
 metadata:
-  name: nginx
+  name: nginx-fieldandcondition-test
 spec:
   containers:
   - name: nginx
-    image: nginx:1.14.2
+    image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
     readinessProbe:
       httpGet:
         path: "/"
@@ -708,7 +708,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.27.0
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
           ports:
             - containerPort: 80
           readinessProbe:
@@ -748,7 +748,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.27.2
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
           ports:
             - containerPort: 80
           readinessProbe:
@@ -800,7 +800,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.27.0
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
           ports:
             - containerPort: 80
           readinessProbe:
@@ -812,6 +812,10 @@ YAML
 }
 `
 
+	// Bump `replicas: 1 -> 2` so the Deployment's spec actually changes
+	// between steps. Without a spec change Kubernetes does not bump
+	// metadata.generation, so status.observedGeneration stays at 1 and
+	// the wait_for.field match for "2" never succeeds.
 	updateConfig := `
 resource "kubectl_manifest" "test" {
   wait_for_rollout = false
@@ -829,7 +833,7 @@ metadata:
   labels:
     app: nginx
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: nginx
@@ -840,7 +844,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.27.2
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
           ports:
             - containerPort: 80
           readinessProbe:
@@ -970,6 +974,7 @@ spec:
 }
 
 func TestAccKubectlOverrideNamespace(t *testing.T) {
+	t.Parallel()
 
 	namespace := "dev-" + acctest.RandString(10)
 	yaml_body := `
@@ -1027,6 +1032,7 @@ type: Opaque
 }
 
 func TestAccKubectlSetNamespace(t *testing.T) {
+	t.Parallel()
 
 	namespace := "dev-" + acctest.RandString(10)
 	yaml_body := `
@@ -1084,6 +1090,7 @@ type: Opaque
 }
 
 func TestAccKubectlSetNamespace_nonnamespaced_resource(t *testing.T) {
+	t.Parallel()
 
 	namespace := "dev-" + acctest.RandString(10)
 	yaml_body := fmt.Sprintf(`
@@ -1994,6 +2001,8 @@ status:
 // apiVersion with upgrade_api_version=true updates the resource in-place
 // (preserving its UID) rather than forcing a delete and recreate.
 func TestAccKubectl_UpgradeApiVersion_InPlaceUpdate(t *testing.T) {
+	t.Parallel()
+
 	name := "test-upgrade-api-version-" + acctest.RandString(10)
 
 	configV1 := fmt.Sprintf(`
@@ -2072,6 +2081,8 @@ YAML
 // apiVersion WITHOUT upgrade_api_version (default false) forces a delete and
 // recreate, resulting in a new UID.
 func TestAccKubectl_UpgradeApiVersion_ForceNewByDefault(t *testing.T) {
+	t.Parallel()
+
 	name := "test-upgrade-api-version-" + acctest.RandString(10)
 
 	configV1 := fmt.Sprintf(`

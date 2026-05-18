@@ -7,6 +7,8 @@ import (
 )
 
 func TestAccKubectlDataSourceFileDocuments_single(t *testing.T) {
+	t.Parallel()
+
 	resource.Test(t, resource.TestCase{
 		PreCheck:  func() {},
 		Providers: testAccProviders,
@@ -25,6 +27,8 @@ func TestAccKubectlDataSourceFileDocuments_single(t *testing.T) {
 }
 
 func TestAccKubectlDataSourceFileDocuments_basic(t *testing.T) {
+	t.Parallel()
+
 	resource.Test(t, resource.TestCase{
 		PreCheck:  func() {},
 		Providers: testAccProviders,
@@ -45,6 +49,8 @@ func TestAccKubectlDataSourceFileDocuments_basic(t *testing.T) {
 }
 
 func TestAccKubectlDataSourceFileDocuments_basicMultipleEmpty(t *testing.T) {
+	t.Parallel()
+
 	resource.Test(t, resource.TestCase{
 		PreCheck:  func() {},
 		Providers: testAccProviders,
