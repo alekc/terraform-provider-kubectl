@@ -125,6 +125,13 @@ jobs:
           provider "kubectl" {}
 
           resource "kubectl_manifest" "smoke" {
+            # `wait = true` makes the provider block on `terraform destroy`
+            # until all finalizers (including the built-in `kubernetes`
+            # finalizer that drains in-namespace resources) finish. Without
+            # this, destroy returns while the namespace is still in
+            # Terminating phase and the post-destroy `kubectl get` check
+            # races against the kube-controller-manager.
+            wait = true
             yaml_body = <<-YAML
               apiVersion: v1
               kind: Namespace
