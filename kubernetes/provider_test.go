@@ -28,10 +28,9 @@ func TestProvider(t *testing.T) {
 }
 
 // TestProviderConfigure_ApplyRetryCountIsPerProvider pins the fix for issue
-// #265: apply_retry_count used to live in a package-level global, so the last
-// providerConfigure to run silently set the value for every other aliased
-// provider's resources. Each providerConfigure call must populate its own
-// *KubeProvider with the value the caller passed.
+// #265: apply_retry_count was held in a package-level global, so the last call
+// to providerConfigure silently overwrote the value seen by every other aliased
+// provider. Each call must now populate its own *KubeProvider with its value.
 func TestProviderConfigure_ApplyRetryCountIsPerProvider(t *testing.T) {
 	t.Setenv("KUBECTL_PROVIDER_APPLY_RETRY_COUNT", "")
 

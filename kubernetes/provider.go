@@ -199,11 +199,10 @@ type KubeProvider struct {
 	MainClientset       *kubernetes.Clientset
 	RestConfig          restclient.Config
 	AggregatorClientset *aggregator.Clientset
-	// ApplyRetryCount is how many times an apply will be retried with
-	// exponential backoff before surfacing the error. Sourced from the
-	// `apply_retry_count` provider arg (or KUBECTL_PROVIDER_APPLY_RETRY_COUNT).
-	// Held per-provider so aliased blocks with different values don't clobber
-	// each other.
+	// ApplyRetryCount is how many times an apply is retried with exponential
+	// backoff before surfacing the error. Sourced from the `apply_retry_count`
+	// provider arg (or KUBECTL_PROVIDER_APPLY_RETRY_COUNT). Held per-provider
+	// so aliased blocks with different values don't clobber each other.
 	ApplyRetryCount uint64
 }
 
