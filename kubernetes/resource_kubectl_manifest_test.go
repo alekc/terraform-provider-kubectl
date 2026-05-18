@@ -186,7 +186,12 @@ YAML
 func TestAccKubectl_WaitForRolloutDeploymentUpdate(t *testing.T) {
 	t.Parallel()
 
-	deploymentConfig := func(replicas int) string {
+	// Generate one unique name per test run so this test does not
+	// collide with concurrent runs (matrix jobs sharing a cluster,
+	// or other `t.Parallel()` tests that touch the default namespace).
+	name := acctest.RandomWithPrefix("issue-226-deployment")
+
+	deploymentConfig := func(name string, replicas int) string {
 		return fmt.Sprintf(`
 resource "kubectl_manifest" "test" {
   wait_for_rollout = true
@@ -199,25 +204,25 @@ resource "kubectl_manifest" "test" {
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: issue-226-deployment
+  name: %s
   labels:
-    app: issue-226
+    app: %s
 spec:
   replicas: %d
   selector:
     matchLabels:
-      app: issue-226
+      app: %s
   template:
     metadata:
       labels:
-        app: issue-226
+        app: %s
     spec:
       containers:
         - name: pause
           image: registry.k8s.io/pause:3.10
 YAML
 }
-`, replicas)
+`, name, name, replicas, name, name)
 	}
 
 	resource.Test(t, resource.TestCase{
@@ -225,8 +230,8 @@ YAML
 		Providers:    testAccProviders,
 		CheckDestroy: testAccCheckkubectlDestroy,
 		Steps: []resource.TestStep{
-			{Config: deploymentConfig(1)},
-			{Config: deploymentConfig(2)},
+			{Config: deploymentConfig(name, 1)},
+			{Config: deploymentConfig(name, 2)},
 		},
 	})
 }
