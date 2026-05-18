@@ -125,6 +125,41 @@ provider "kubectl" {
 }
 ```
 
+## Troubleshooting
+
+### `Failed to get RESTMapper client / cannot create discovery client: no client config`
+
+This error means the provider configuration produced an empty REST config —
+`host`, `token`, `cluster_ca_certificate`, `exec`, or a kubeconfig path either
+wasn't supplied or wasn't resolvable when Terraform configured the provider.
+The provider now reports the underlying `clientcmd` reason (missing host,
+malformed cert, unresolved variable, …) directly in the diagnostic, so check
+the full error text first.
+
+The most common trigger is **deferred evaluation of provider arguments**:
+Terraform configures providers up front, before any resources have been
+applied. If `host`/`token`/etc. come from outputs of resources that haven't
+been applied yet (or from a sibling module that errored during plan), those
+values are unknown at provider-configure time and the provider falls back to
+an empty config. The same pitfall affects `hashicorp/kubernetes` —
+see Terraform's
+[providers documentation](https://developer.hashicorp.com/terraform/language/providers/configuration#provider-versions)
+for the broader pattern.
+
+Workarounds, in order of preference:
+
+1. **Two-stage apply** — apply the cluster (or whatever owns the credentials)
+   in one root module, then apply the manifests in a separate root module
+   that reads the cluster outputs via `terraform_remote_state` or a data
+   source.
+2. **Pin the credentials to a stable source** — e.g. `data
+   "aws_eks_cluster"` / `data "google_container_cluster"` instead of the
+   resource attribute, since data sources are re-read on every plan and
+   don't carry the "unknown until apply" status that resource outputs do.
+3. **Smoke-test with literal values** — replace `var.host` /
+   `var.cluster_ca_certificate` etc. with hardcoded strings briefly to
+   confirm the rest of the config is correct; if that succeeds the failure
+   is the deferred-evaluation pattern above.
 
 ## Example
 

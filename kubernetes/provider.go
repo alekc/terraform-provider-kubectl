@@ -399,8 +399,14 @@ func initializeConfiguration(d *schema.ResourceData) (*restclient.Config, error)
 	cc := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loader, overrides)
 	cfg, err := cc.ClientConfig()
 	if err != nil {
-		log.Printf("[WARN] Invalid provider configuration was supplied. Provider operations likely to fail: %v", err)
-		return nil, nil
+		// Surface the underlying clientcmd error to the caller. Swallowing it
+		// here (returning nil, nil) lets the rest of providerConfigure run
+		// against an empty restclient.Config, and the failure resurfaces much
+		// later as a misleading "cannot create discovery client: no client
+		// config" from ToRESTMapper. Returning the real reason — typically a
+		// missing host, an unresolved variable, or a malformed cert — points
+		// users straight at the bad field. See issue #203.
+		return nil, fmt.Errorf("invalid provider configuration: %w", err)
 	}
 
 	return cfg, nil
