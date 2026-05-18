@@ -59,13 +59,14 @@ func resourceKubectlManifest() *schema.Resource {
 
 	return &schema.Resource{
 		CreateContext: func(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
+			retryCount := meta.(*KubeProvider).ApplyRetryCount
 			// No retries requested — run apply once and return.
 			// Without this early return the success path falls through to
 			// the retry block below and runs apply a second time against
 			// an already-consumed rate-limit budget / context, which
 			// surfaces as `client rate limiter Wait returned an error:
 			// context deadline exceeded`. See issue #228.
-			if kubectlApplyRetryCount == 0 {
+			if retryCount == 0 {
 				if applyErr := resourceKubectlManifestApply(ctx, d, meta, schema.TimeoutCreate); applyErr != nil {
 					return diag.FromErr(applyErr)
 				}
@@ -76,7 +77,7 @@ func resourceKubectlManifest() *schema.Resource {
 			exponentialBackoffConfig.InitialInterval = 3 * time.Second
 			exponentialBackoffConfig.MaxInterval = 30 * time.Second
 
-			retryConfig := backoff.WithMaxRetries(exponentialBackoffConfig, kubectlApplyRetryCount)
+			retryConfig := backoff.WithMaxRetries(exponentialBackoffConfig, retryCount)
 			retryErr := backoff.Retry(func() error {
 				err := resourceKubectlManifestApply(ctx, d, meta, schema.TimeoutCreate)
 				if err != nil {
@@ -104,12 +105,13 @@ func resourceKubectlManifest() *schema.Resource {
 			return nil
 		},
 		UpdateContext: func(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
+			retryCount := meta.(*KubeProvider).ApplyRetryCount
 			exponentialBackoffConfig := backoff.NewExponentialBackOff()
 			exponentialBackoffConfig.InitialInterval = 3 * time.Second
 			exponentialBackoffConfig.MaxInterval = 30 * time.Second
 
-			if kubectlApplyRetryCount > 0 {
-				retryConfig := backoff.WithMaxRetries(exponentialBackoffConfig, kubectlApplyRetryCount)
+			if retryCount > 0 {
+				retryConfig := backoff.WithMaxRetries(exponentialBackoffConfig, retryCount)
 				retryErr := backoff.Retry(func() error {
 					err := resourceKubectlManifestApply(ctx, d, meta, schema.TimeoutUpdate)
 					if err != nil {
