@@ -60,6 +60,115 @@ jobs:
         run: |
           make test
           make vet
+  real_terraform_smoke:
+    # End-to-end smoke that drives a real Terraform CLI against a
+    # dev_overrides build of the provider, applies a real manifest to a
+    # real kind cluster, and tears it back down. Covers two regression
+    # surfaces the SDK-test harness does not:
+    #
+    #   1. Provider load (GetProviderSchema): catches schema-parity
+    #      regressions across the muxed providers — issue #275.
+    #   2. Full create / read / delete lifecycle through the real CLI:
+    #      catches anything that only manifests when the provider is
+    #      driven over gRPC by `terraform` itself (plugin protocol
+    #      versioning, mux server plumbing, signal handling, etc.).
+    #
+    # One Kubernetes × Terraform pair is enough — the matrix-wide
+    # coverage already lives in acc_test_smoke / acc_test. This job is
+    # about catching real-CLI-only regressions, not version drift.
+    needs:
+      - get_version_matrix
+      - unit_test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+      - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          wait: 2m
+          node_image: kindest/node:v${{ needs.get_version_matrix.outputs.latest_k8s_version }}
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: ${{ needs.get_version_matrix.outputs.latest_terraform_version }}
+          terraform_wrapper: false
+      - name: Build provider
+        run: go build -o "${HOME}/terraform-provider-kubectl" .
+      - name: Configure dev_overrides
+        run: |
+          cat > "${HOME}/.terraformrc" <<EOF
+          provider_installation {
+            dev_overrides {
+              "alekc/kubectl" = "${HOME}"
+            }
+            direct {}
+          }
+          EOF
+      - name: Write smoke config
+        run: |
+          mkdir -p smoke
+          cat > smoke/main.tf <<'EOF'
+          terraform {
+            required_providers {
+              kubectl = {
+                source = "alekc/kubectl"
+              }
+            }
+          }
+
+          # Reads kubeconfig via KUBE_CONFIG_PATH env var (defaulted to the
+          # kind-action workspace path in this workflow). load_config_file
+          # defaults to true.
+          provider "kubectl" {}
+
+          resource "kubectl_manifest" "smoke" {
+            # `wait = true` makes the provider block on `terraform destroy`
+            # until all finalizers (including the built-in `kubernetes`
+            # finalizer that drains in-namespace resources) finish. Without
+            # this, destroy returns while the namespace is still in
+            # Terminating phase and the post-destroy `kubectl get` check
+            # races against the kube-controller-manager.
+            wait = true
+            yaml_body = <<-YAML
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: kubectl-provider-real-smoke
+            YAML
+          }
+          EOF
+      - name: terraform apply
+        # This is the real CLI driving the real provider binary through
+        # gRPC. GetProviderSchema fires here; if mux parity is broken,
+        # this step exits non-zero with the same diagnostic users see.
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: |
+          cd smoke
+          terraform apply -auto-approve
+      - name: Verify namespace exists
+        run: kubectl get namespace kubectl-provider-real-smoke
+      - name: terraform destroy
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: |
+          cd smoke
+          terraform destroy -auto-approve
+      - name: Verify namespace deleted
+        run: |
+          # `kubectl get` returns non-zero with a NotFound error once the
+          # namespace is gone; treat that as success. Anything else (still
+          # Terminating, still Active, transport error) fails the job.
+          if kubectl get namespace kubectl-provider-real-smoke 2>&1 | grep -q 'NotFound'; then
+            echo "namespace deleted as expected"
+          else
+            echo "namespace still present after terraform destroy" >&2
+            kubectl get namespace kubectl-provider-real-smoke -o yaml >&2 || true
+            exit 1
+          fi
   acc_test_smoke:
     name: "acc_test smoke (k8s ${{ needs.get_version_matrix.outputs.latest_k8s_version }} / tf ${{ needs.get_version_matrix.outputs.latest_terraform_version }})"
     needs:
