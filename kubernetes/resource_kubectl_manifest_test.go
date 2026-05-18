@@ -812,6 +812,10 @@ YAML
 }
 `
 
+	// Bump `replicas: 1 -> 2` so the Deployment's spec actually changes
+	// between steps. Without a spec change Kubernetes does not bump
+	// metadata.generation, so status.observedGeneration stays at 1 and
+	// the wait_for.field match for "2" never succeeds.
 	updateConfig := `
 resource "kubectl_manifest" "test" {
   wait_for_rollout = false
@@ -829,7 +833,7 @@ metadata:
   labels:
     app: nginx
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: nginx
