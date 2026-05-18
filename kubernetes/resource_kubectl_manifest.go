@@ -59,11 +59,17 @@ func resourceKubectlManifest() *schema.Resource {
 
 	return &schema.Resource{
 		CreateContext: func(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-			// if there is no retry required, perform a simple apply
+			// No retries requested — run apply once and return.
+			// Without this early return the success path falls through to
+			// the retry block below and runs apply a second time against
+			// an already-consumed rate-limit budget / context, which
+			// surfaces as `client rate limiter Wait returned an error:
+			// context deadline exceeded`. See issue #228.
 			if kubectlApplyRetryCount == 0 {
 				if applyErr := resourceKubectlManifestApply(ctx, d, meta); applyErr != nil {
 					return diag.FromErr(applyErr)
 				}
+				return nil
 			}
 			// retry count is not 0, so we need to leverage exponential backoff and multiple retries
 			exponentialBackoffConfig := backoff.NewExponentialBackOff()
@@ -1097,14 +1103,25 @@ func waitForDaemonSetRollout(ctx context.Context, provider *KubeProvider, ns str
 	// delivers future events; the watcher would sit idle until the
 	// Terraform create-timeout and surface as a rollout failure. See
 	// https://github.com/alekc/terraform-provider-kubectl/issues/228.
+	//
+	// We also capture the ResourceVersion to seed the Watch — that way
+	// any reconcile event the controller emits between this Get and the
+	// Watch opening is still delivered, closing the read-then-watch race.
+	resourceVersion := ""
 	if current, err := daemonClient.Get(ctx, name, meta_v1.GetOptions{}); err == nil {
 		if daemonSetRolloutComplete(current) {
 			return nil
 		}
+		resourceVersion = current.ResourceVersion
 	}
 
 	timeoutSeconds := int64(timeout.Seconds())
-	watcher, err := daemonClient.Watch(ctx, meta_v1.ListOptions{Watch: true, TimeoutSeconds: &timeoutSeconds, FieldSelector: fields.OneTermEqualSelector("metadata.name", name).String()})
+	watcher, err := daemonClient.Watch(ctx, meta_v1.ListOptions{
+		Watch:           true,
+		TimeoutSeconds:  &timeoutSeconds,
+		FieldSelector:   fields.OneTermEqualSelector("metadata.name", name).String(),
+		ResourceVersion: resourceVersion,
+	})
 	if err != nil {
 		return err
 	}
@@ -1112,7 +1129,16 @@ func waitForDaemonSetRollout(ctx context.Context, provider *KubeProvider, ns str
 
 	for {
 		select {
-		case event := <-watcher.ResultChan():
+		case event, ok := <-watcher.ResultChan():
+			if !ok {
+				// Watcher closed (server-side timeout or apiserver
+				// disconnect) before we observed completion. Re-probe
+				// directly — the rollout may have finished silently.
+				if current, gerr := daemonClient.Get(ctx, name, meta_v1.GetOptions{}); gerr == nil && daemonSetRolloutComplete(current) {
+					return nil
+				}
+				return fmt.Errorf("%s watch channel closed before DaemonSet rollout completed", name)
+			}
 			if event.Type != watch.Modified {
 				continue
 			}
