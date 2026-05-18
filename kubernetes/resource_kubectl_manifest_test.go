@@ -52,7 +52,7 @@ metadata:
 spec:
   containers:
   - name: nginx
-    image: nginx:1.27.2
+    image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
     readinessProbe:
       httpGet:
         path: "/"
@@ -99,7 +99,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.27.2
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
           ports:
             - containerPort: 80
           readinessProbe:
@@ -149,7 +149,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.27.2
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
           ports:
             - containerPort: 80
           readinessProbe:
@@ -199,7 +199,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.27.2
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
           ports:
             - containerPort: 80
           readinessProbe:
@@ -248,7 +248,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.27.2
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
           ports:
             - containerPort: 80
           readinessProbe:
@@ -298,7 +298,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.27.2
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
           ports:
             - containerPort: 80
           readinessProbe:
@@ -349,7 +349,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.27.2
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
           ports:
             - containerPort: 80
           readinessProbe:
@@ -387,7 +387,7 @@ metadata:
 spec:
   containers:
   - name: nginx
-    image: nginx:1.27.2
+    image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
     readinessProbe:
       httpGet:
         path: "/"
@@ -555,7 +555,7 @@ metadata:
 spec:
   containers:
   - name: nginx
-    image: nginx:1.27.2
+    image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
     readinessProbe:
       httpGet:
         path: "/"
@@ -601,7 +601,7 @@ metadata:
 spec:
   containers:
   - name: nginx
-    image: nginx:1.27.2
+    image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
     readinessProbe:
       httpGet:
         path: "/"
@@ -660,7 +660,7 @@ metadata:
 spec:
   containers:
   - name: nginx
-    image: nginx:1.27.2
+    image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
     readinessProbe:
       httpGet:
         path: "/"
@@ -708,7 +708,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.27.0
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
           ports:
             - containerPort: 80
           readinessProbe:
@@ -748,7 +748,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.27.2
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
           ports:
             - containerPort: 80
           readinessProbe:
@@ -800,7 +800,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.27.0
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
           ports:
             - containerPort: 80
           readinessProbe:
@@ -840,7 +840,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:1.27.2
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
           ports:
             - containerPort: 80
           readinessProbe:
