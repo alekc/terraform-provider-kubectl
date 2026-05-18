@@ -551,7 +551,7 @@ resource "kubectl_manifest" "test" {
 apiVersion: v1
 kind: Pod
 metadata:
-  name: nginx
+  name: nginx-field-test
 spec:
   containers:
   - name: nginx
@@ -597,7 +597,7 @@ resource "kubectl_manifest" "test" {
 apiVersion: v1
 kind: Pod
 metadata:
-  name: nginx
+  name: nginx-conditions-test
 spec:
   containers:
   - name: nginx
@@ -656,7 +656,7 @@ resource "kubectl_manifest" "test" {
 apiVersion: v1
 kind: Pod
 metadata:
-  name: nginx
+  name: nginx-fieldandcondition-test
 spec:
   containers:
   - name: nginx
