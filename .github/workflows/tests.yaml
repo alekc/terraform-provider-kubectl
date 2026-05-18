@@ -84,8 +84,11 @@ jobs:
           # Tests that opt into parallelism via `t.Parallel()` (Phase 1: all
           # file-only data sources + the resource tests that already use
           # acctest.RandString for namespace isolation) run up to 4 at a time.
-          # Tests without `t.Parallel()` still run serially.
-          TESTARGS: "-parallel 4"
+          # Tests without `t.Parallel()` still run serially. The Makefile's
+          # `ACC_TESTARGS` deliberately omits `-race` because the SDK v2
+          # harness shares a `*schema.Provider` across parallel tests and
+          # races inside `GRPCProviderServer.ConfigureProvider`.
+          ACC_TESTARGS: "-parallel 4"
         run: |
           make testacc
   acc_test:
@@ -124,6 +127,6 @@ jobs:
         env:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
           TF_ACC_TERRAFORM_VERSION: ${{ matrix.terraform_version }}
-          TESTARGS: "-parallel 4"
+          ACC_TESTARGS: "-parallel 4"
         run: |
           make testacc
