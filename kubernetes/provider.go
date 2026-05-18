@@ -211,6 +211,12 @@ type KubeProvider struct {
 	MainClientset       *kubernetes.Clientset
 	RestConfig          restclient.Config
 	AggregatorClientset *aggregator.Clientset
+	// ApplyRetryCount is how many times an apply will be retried with
+	// exponential backoff before surfacing the error. Sourced from the
+	// `apply_retry_count` provider arg (or KUBECTL_PROVIDER_APPLY_RETRY_COUNT).
+	// Held per-provider so aliased blocks with different values don't clobber
+	// each other.
+	ApplyRetryCount uint64
 }
 
 var _ k8sresource.RESTClientGetter = &KubeProvider{}
@@ -244,8 +250,6 @@ func (p *KubeProvider) ToRESTMapper() (meta.RESTMapper, error) {
 	return nil, fmt.Errorf("no restmapper")
 }
 
-var kubectlApplyRetryCount uint64
-
 func providerConfigure(d *schema.ResourceData, terraformVersion string) (interface{}, diag.Diagnostics) {
 
 	cfg, err := initializeConfiguration(d)
@@ -257,10 +261,10 @@ func providerConfigure(d *schema.ResourceData, terraformVersion string) (interfa
 		cfg = &restclient.Config{}
 	}
 
-	kubectlApplyRetryCount = uint64(d.Get("apply_retry_count").(int))
+	applyRetryCount := uint64(d.Get("apply_retry_count").(int))
 	if os.Getenv("KUBECTL_PROVIDER_APPLY_RETRY_COUNT") != "" {
 		applyEnvValue, _ := strconv.Atoi(os.Getenv("KUBECTL_PROVIDER_APPLY_RETRY_COUNT"))
-		kubectlApplyRetryCount = uint64(applyEnvValue)
+		applyRetryCount = uint64(applyEnvValue)
 	}
 
 	cfg.QPS = 100.0
@@ -285,6 +289,7 @@ func providerConfigure(d *schema.ResourceData, terraformVersion string) (interfa
 		MainClientset:       k,
 		RestConfig:          *cfg,
 		AggregatorClientset: a,
+		ApplyRetryCount:     applyRetryCount,
 	}, nil
 }
 
