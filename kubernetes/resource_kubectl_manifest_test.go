@@ -323,6 +323,64 @@ YAML
 	})
 }
 
+// TestAccKubectl_WaitForRolloutDaemonSetNoMatchingNodes is a regression test
+// for https://github.com/alekc/terraform-provider-kubectl/issues/228.
+// A DaemonSet whose nodeSelector matches no nodes settles with
+// DesiredNumberScheduled = 0 — the controller has nothing to schedule. Prior
+// to the fix, the rollout-wait opened a Watch with no initial-state probe;
+// the controller had usually already settled by then, no further Modified
+// events were emitted, and the apply blocked until Terraform's create
+// timeout. The tight `timeouts { create = "60s" }` budget below would have
+// failed under the old behaviour.
+func TestAccKubectl_WaitForRolloutDaemonSetNoMatchingNodes(t *testing.T) {
+	//language=hcl
+	config := `
+resource "kubectl_manifest" "test" {
+  wait_for_rollout = true
+  timeouts {
+    create = "60s"
+  }
+  yaml_body = <<YAML
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nginx-noselect
+  labels:
+    app: nginx-noselect
+spec:
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: nginx-noselect
+  template:
+    metadata:
+      labels:
+        app: nginx-noselect
+    spec:
+      nodeSelector:
+        terraform-provider-kubectl-test/no-such-label: "true"
+      containers:
+        - name: nginx
+          image: registry.k8s.io/e2e-test-images/nginx:1.28.0-1
+          ports:
+            - containerPort: 80
+YAML
+}
+`
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckkubectlDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+			},
+		},
+	})
+}
+
 func TestAccKubectl_WaitForRolloutStatefulSet(t *testing.T) {
 	//language=hcl
 	config := `

@@ -1066,52 +1066,67 @@ func getDeploymentCondition(status apps_v1.DeploymentStatus, condType apps_v1.De
 	return nil
 }
 
+// daemonSetRolloutComplete reports whether the DaemonSet has finished its
+// current rollout. Mirrors kubectl's `rollout status daemonset` logic.
+// A DaemonSet whose `nodeSelector` matches no nodes settles with
+// DesiredNumberScheduled = 0; this predicate returns true for that case
+// (0 >= 0) and the caller exits without waiting on further events.
+func daemonSetRolloutComplete(daemon *apps_v1.DaemonSet) bool {
+	if daemon.Spec.UpdateStrategy.Type != apps_v1.RollingUpdateDaemonSetStrategyType {
+		return true
+	}
+	if daemon.Generation > daemon.Status.ObservedGeneration {
+		return false
+	}
+	if daemon.Status.UpdatedNumberScheduled < daemon.Status.DesiredNumberScheduled {
+		return false
+	}
+	if daemon.Status.NumberAvailable < daemon.Status.DesiredNumberScheduled {
+		return false
+	}
+	return true
+}
+
 func waitForDaemonSetRollout(ctx context.Context, provider *KubeProvider, ns string, name string, timeout time.Duration) error {
-	// Borrowed from: https://github.com/kubernetes/kubectl/blob/c4be63c54b7188502c1a63bb884a0b05fac51ebd/pkg/polymorphichelpers/rollout_status.go#L95
+	daemonClient := provider.MainClientset.AppsV1().DaemonSets(ns)
+
+	// Probe the current state before opening a watch. The DaemonSet
+	// controller may have already settled the status by the time we get
+	// here (notably for a DaemonSet whose nodeSelector matches no nodes —
+	// DesiredNumberScheduled = 0). A `Watch` opened after that point only
+	// delivers future events; the watcher would sit idle until the
+	// Terraform create-timeout and surface as a rollout failure. See
+	// https://github.com/alekc/terraform-provider-kubectl/issues/228.
+	if current, err := daemonClient.Get(ctx, name, meta_v1.GetOptions{}); err == nil {
+		if daemonSetRolloutComplete(current) {
+			return nil
+		}
+	}
 
 	timeoutSeconds := int64(timeout.Seconds())
-
-	watcher, err := provider.MainClientset.AppsV1().DaemonSets(ns).Watch(ctx, meta_v1.ListOptions{Watch: true, TimeoutSeconds: &timeoutSeconds, FieldSelector: fields.OneTermEqualSelector("metadata.name", name).String()})
+	watcher, err := daemonClient.Watch(ctx, meta_v1.ListOptions{Watch: true, TimeoutSeconds: &timeoutSeconds, FieldSelector: fields.OneTermEqualSelector("metadata.name", name).String()})
 	if err != nil {
 		return err
 	}
-
 	defer watcher.Stop()
 
-	done := false
-	for !done {
+	for {
 		select {
 		case event := <-watcher.ResultChan():
-			if event.Type == watch.Modified {
-				daemon, ok := event.Object.(*apps_v1.DaemonSet)
-				if !ok {
-					return fmt.Errorf("%s could not cast to DaemonSet", name)
-				}
-
-				if daemon.Spec.UpdateStrategy.Type != apps_v1.RollingUpdateDaemonSetStrategyType {
-					done = true
-					continue
-				}
-
-				if daemon.Generation <= daemon.Status.ObservedGeneration {
-					if daemon.Status.UpdatedNumberScheduled < daemon.Status.DesiredNumberScheduled {
-						continue
-					}
-
-					if daemon.Status.NumberAvailable < daemon.Status.DesiredNumberScheduled {
-						continue
-					}
-
-					done = true
-				}
+			if event.Type != watch.Modified {
+				continue
 			}
-
+			daemon, ok := event.Object.(*apps_v1.DaemonSet)
+			if !ok {
+				return fmt.Errorf("%s could not cast to DaemonSet", name)
+			}
+			if daemonSetRolloutComplete(daemon) {
+				return nil
+			}
 		case <-ctx.Done():
 			return fmt.Errorf("%s failed to rollout DaemonSet", name)
 		}
 	}
-
-	return nil
 }
 
 func waitForStatefulSetRollout(ctx context.Context, provider *KubeProvider, ns string, name string, timeout time.Duration) error {
