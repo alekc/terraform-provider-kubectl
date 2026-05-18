@@ -66,6 +66,12 @@ jobs:
       - get_version_matrix
       - unit_test
     runs-on: ubuntu-latest
+    # Hard cap so a wedged test (e.g. wait-for-condition pinned to an old
+    # nginx image that never reaches Ready on a newer Kubernetes release)
+    # can't burn the runner for hours. The Go-level `-timeout` in the
+    # Makefile is a few minutes lower so the test framework gets a chance
+    # to surface goroutine stacks before the runner is killed.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up Go
@@ -118,6 +124,8 @@ jobs:
       - unit_test
       - acc_test_smoke
     runs-on: ubuntu-latest
+    # Same hard cap as acc_test_smoke. See that job for rationale.
+    timeout-minutes: 30
     strategy:
       fail-fast: true
       matrix:
