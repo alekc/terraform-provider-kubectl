@@ -427,10 +427,14 @@ jobs:
         run: |
           make testacc
   acc_test_terraform:
-    # Full Kubernetes × Terraform matrix, gated on acc_test_terraform_smoke
-    # (latest k8s × latest tf). This catches "syntax error / missing
-    # assertion / forgotten t.Parallel()" failures against one cell
-    # before fanning out the rest of the matrix.
+    # Full Kubernetes × Terraform matrix, gated on both Terraform smokes:
+    #   * acc_test_terraform_smoke catches "syntax error / missing
+    #     assertion / forgotten t.Parallel()" failures against one cell
+    #     before fanning out the rest of the matrix.
+    #   * real_terraform_smoke catches real-CLI / mux-parity / plugin-
+    #     protocol regressions that the SDK harness does not exercise.
+    #     If either is broken, fanning out the full matrix would burn
+    #     CI minutes on a known-bad provider for the same reason.
     #
     # Independent of the OpenTofu side: an OpenTofu CI hiccup does not
     # block this job, and a Terraform regression does not block
@@ -440,6 +444,7 @@ jobs:
       - get_version_matrix
       - unit_test
       - acc_test_terraform_smoke
+      - real_terraform_smoke
     runs-on: ubuntu-latest
     # Same hard cap as the smoke job. See that job for rationale.
     timeout-minutes: 30
@@ -481,15 +486,18 @@ jobs:
         run: |
           make testacc
   acc_test_opentofu:
-    # Full Kubernetes × OpenTofu matrix, gated on acc_test_opentofu_smoke.
-    # Mirrors acc_test_terraform but with the OpenTofu axis and the
-    # opentofu/setup-opentofu action. terraform-plugin-testing execs the
-    # binary at TF_ACC_TERRAFORM_PATH regardless of its name.
+    # Full Kubernetes × OpenTofu matrix, gated on both OpenTofu smokes
+    # (acc_test_opentofu_smoke + real_opentofu_smoke) for the same
+    # reasons spelled out on acc_test_terraform. Mirrors that job but
+    # with the OpenTofu axis and the opentofu/setup-opentofu action.
+    # terraform-plugin-testing execs the binary at TF_ACC_TERRAFORM_PATH
+    # regardless of its name.
     name: "acc_test opentofu ${{ matrix.opentofu_version }} / k8s ${{ matrix.k8s_version }}"
     needs:
       - get_version_matrix
       - unit_test
       - acc_test_opentofu_smoke
+      - real_opentofu_smoke
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
