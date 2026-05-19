@@ -399,6 +399,18 @@ jobs:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
           TF_ACC_TERRAFORM_PATH: ${{ steps.tfpath.outputs.path }}
           TF_ACC_TERRAFORM_VERSION: ${{ needs.get_version_matrix.outputs.latest_opentofu_version }}
+          # terraform-plugin-testing auto-injects a required_providers
+          # block whose `source` is built from these env vars. The
+          # defaults (registry.terraform.io / "-" or "hashicorp") produce
+          # a legacy "-" namespace address that OpenTofu's parser rejects
+          # with "The legacy provider namespace '-' can be used only with
+          # hostname registry.opentofu.org". Setting both fields to the
+          # real values makes the generated source address a fully
+          # qualified registry.opentofu.org/alekc/kubectl that OpenTofu
+          # accepts and the SDK v2 in-process provider plumbing serves.
+          # Terraform tolerates the default and does not need these vars.
+          TF_ACC_PROVIDER_NAMESPACE: alekc
+          TF_ACC_PROVIDER_HOST: registry.opentofu.org
           ACC_TESTARGS: "-parallel 4"
         run: |
           make testacc
@@ -499,6 +511,9 @@ jobs:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
           TF_ACC_TERRAFORM_PATH: ${{ steps.tfpath.outputs.path }}
           TF_ACC_TERRAFORM_VERSION: ${{ matrix.opentofu_version }}
+          # See acc_test_opentofu_smoke for why these are set.
+          TF_ACC_PROVIDER_NAMESPACE: alekc
+          TF_ACC_PROVIDER_HOST: registry.opentofu.org
           ACC_TESTARGS: "-parallel 4"
         run: |
           make testacc
