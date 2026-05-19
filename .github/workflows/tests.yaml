@@ -441,6 +441,12 @@ jobs:
       - name: Locate Terraform binary
         id: tfpath
         run: echo "path=$(which terraform)" >> "${GITHUB_OUTPUT}"
+      - name: Prepare runtime directory
+        # Sparse checkout (above) did not materialize kubernetes/;
+        # create an empty placeholder so `working-directory:
+        # kubernetes` resolves and the test binary's references to
+        # `../_examples/` reach the cone we did check out.
+        run: mkdir -p kubernetes
       - name: Acceptance Tests
         # `working-directory: kubernetes` so the tests resolve
         # ../_examples/ correctly (same effective cwd that
@@ -499,6 +505,12 @@ jobs:
       - name: Locate OpenTofu binary
         id: tfpath
         run: echo "path=$(which tofu)" >> "${GITHUB_OUTPUT}"
+      - name: Prepare runtime directory
+        # Sparse checkout (above) did not materialize kubernetes/;
+        # create an empty placeholder so `working-directory:
+        # kubernetes` resolves and the test binary's references to
+        # `../_examples/` reach the cone we did check out.
+        run: mkdir -p kubernetes
       - name: Acceptance Tests
         working-directory: kubernetes
         env:
@@ -595,6 +607,12 @@ jobs:
       - name: Locate Terraform binary
         id: tfpath
         run: echo "path=$(which terraform)" >> "${GITHUB_OUTPUT}"
+      - name: Prepare runtime directory
+        # Sparse checkout (above) did not materialize kubernetes/;
+        # create an empty placeholder so `working-directory:
+        # kubernetes` resolves and the test binary's references to
+        # `../_examples/` reach the cone we did check out.
+        run: mkdir -p kubernetes
       - name: Acceptance Tests
         working-directory: kubernetes
         env:
@@ -657,6 +675,12 @@ jobs:
       - name: Locate OpenTofu binary
         id: tfpath
         run: echo "path=$(which tofu)" >> "${GITHUB_OUTPUT}"
+      - name: Prepare runtime directory
+        # Sparse checkout (above) did not materialize kubernetes/;
+        # create an empty placeholder so `working-directory:
+        # kubernetes` resolves and the test binary's references to
+        # `../_examples/` reach the cone we did check out.
+        run: mkdir -p kubernetes
       - name: Acceptance Tests
         working-directory: kubernetes
         env:
