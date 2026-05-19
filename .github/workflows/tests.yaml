@@ -3,6 +3,15 @@ on:
   pull_request:
     branches:
       - master
+    # Skip the real kind / Terraform matrix on documentation-only PRs.
+    # A companion ghost workflow at .github/workflows/tests-docs-skip.yaml
+    # fires on the inverse path set and reports success on the same job
+    # names, so branch protection (if ever configured to require these
+    # checks) is still satisfied without burning runners on a Markdown
+    # edit. Keep this list and the ghost's `paths:` list in lockstep.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
 
 concurrency:
   group: pr-${{ github.ref }}
