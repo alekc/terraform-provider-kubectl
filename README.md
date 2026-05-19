@@ -6,6 +6,8 @@ This provider offers the most effective method for handling Kubernetes resources
 
 At the heart of this provider lies the `kubectl_manifest` resource, enabling the processing and application of free-form YAML directly to Kubernetes. This YAML object is monitored across its full lifecycle — creation, updates, drift detection and deletion.
 
+For reads, the provider exposes both a `data "kubectl_manifest"` source for ordinary lookups and an `ephemeral "kubectl_manifest"` resource (Terraform 1.10+) that fetches Secret payloads, freshly-minted tokens, and any other sensitive data without ever writing the value to `terraform.tfstate`.
+
 The `terraform-provider-kubectl` has gained widespread adoption in numerous large Kubernetes installations, serving as the primary tool for orchestrating the complete lifecycle of Kubernetes resources.
 
 ## What's in this provider
@@ -19,7 +21,7 @@ The `terraform-provider-kubectl` has gained widespread adoption in numerous larg
 | Data source        | [`kubectl_file_documents`](./docs/data-sources/kubectl_file_documents.md)            | Split a multi-document YAML string into individual documents.                                        |
 | Data source        | [`kubectl_filename_list`](./docs/data-sources/kubectl_filename_list.md)              | Glob a directory for YAML files.                                                                     |
 | Data source        | [`kubectl_path_documents`](./docs/data-sources/kubectl_path_documents.md)            | Glob a directory and split every matched file into individual documents.                             |
-| Ephemeral resource | [`kubectl_manifest`](./docs/ephemeral-resources/kubectl_manifest.md)                 | Same shape as the data source, but the fetched value is **never written to state**. Terraform 1.10+. |
+| Ephemeral resource | [`kubectl_manifest`](./docs/ephemeral-resources/kubectl_manifest.md)                 | Read any cluster object without ever writing the value to `terraform.tfstate` or the plan file. Required for Secret payloads, freshly-minted tokens, private keys, and anything else you must keep out of state. Re-fetched on every plan / apply. Terraform 1.10+. |
 
 ## Supported Kubernetes and Terraform versions
 
@@ -42,16 +44,20 @@ The provider can be installed and managed automatically by Terraform. Sample `ve
 
 ```hcl
 terraform {
-  required_version = ">= 0.13"
+  required_version = ">= 1.0"
 
   required_providers {
     kubectl = {
       source  = "alekc/kubectl"
-      version = "~> 2.0"
+      version = "~> 2.3"
     }
   }
 }
 ```
+
+The provider itself works back to Terraform 0.13. The example above pins `>= 1.0` because most users will be on a supported Terraform release; if you need to run older Terraform, you can drop the constraint to `>= 0.13`.
+
+If your configuration uses the `ephemeral "kubectl_manifest"` block (covered below), the floor moves up to **Terraform 1.10**, because ephemeral resources are a 1.10+ language feature regardless of the provider version. Bump `required_version` to `">= 1.10"` in that case.
 
 ### Install manually
 
@@ -98,9 +104,39 @@ YAML
 
 See the [User Guide](https://registry.terraform.io/providers/alekc/kubectl/latest) for details on installation and all the provided data and resource types.
 
+### Reading sensitive data without persisting it
+
+For data that must never reach `terraform.tfstate` (Secret payloads, freshly-minted tokens, private keys), use the `ephemeral "kubectl_manifest"` resource. It has the same lookup shape as the data source, but the value is re-fetched on every plan / apply and never persisted. Requires Terraform 1.10+.
+
+Ephemeral values cannot flow through `output` blocks. They are consumed during apply through a resource's write-only attribute (Terraform 1.11+), a provisioner, or a `check` block:
+
+```hcl
+ephemeral "kubectl_manifest" "db_creds" {
+  api_version = "v1"
+  kind        = "Secret"
+  name        = "postgres-credentials"
+  namespace   = "data"
+
+  fields = {
+    password = "data.password"
+  }
+}
+
+# Example consumer: stage the password into a sibling tool's config
+# during apply, never to state. `content_wo` is a write-only attribute
+# (Terraform 1.11+); the value is forgotten after the file is written.
+resource "local_file" "db_password" {
+  filename            = "${path.module}/.db-password"
+  content_wo          = ephemeral.kubectl_manifest.db_creds.results["password"]
+  content_wo_revision = 1
+}
+```
+
+See [`docs/ephemeral-resources/kubectl_manifest.md`](./docs/ephemeral-resources/kubectl_manifest.md) for the full reference, additional consumer patterns (including `check` blocks for cluster invariants), and behaviour notes.
+
 ### Reading existing objects
 
-A `data "kubectl_manifest"` block reads any cluster object by `api_version` + `kind` + `name` (+ `namespace`) and extracts user-named fields via gojsonq dot-paths. The fetched object is also exposed as raw `yaml` and `json`.
+A `data "kubectl_manifest"` block reads any cluster object by `api_version` + `kind` + `name` (+ `namespace`) and extracts user-named fields via gojsonq dot-paths. The fetched object is also exposed as raw `yaml` and `json`. Use this when the value is non-sensitive and you want it cached in state; reach for the ephemeral resource above when it is not.
 
 ```hcl
 data "kubectl_manifest" "ns" {
@@ -114,24 +150,6 @@ data "kubectl_manifest" "ns" {
 ```
 
 See [`docs/data-sources/kubectl_manifest.md`](./docs/data-sources/kubectl_manifest.md) for the full reference.
-
-### Reading sensitive data without persisting it
-
-For data that must never reach `terraform.tfstate` (Secret payloads, freshly-minted tokens, private keys), use the `ephemeral "kubectl_manifest"` resource — same shape, but the value is re-fetched on every plan / apply and never persisted. Requires Terraform 1.10+.
-
-```hcl
-ephemeral "kubectl_manifest" "db_creds" {
-  api_version = "v1"
-  kind        = "Secret"
-  name        = "postgres-credentials"
-  namespace   = "data"
-  fields = {
-    password = "data.password"
-  }
-}
-```
-
-See [`docs/ephemeral-resources/kubectl_manifest.md`](./docs/ephemeral-resources/kubectl_manifest.md) for the full reference and consumer patterns.
 
 ---
 
