@@ -109,7 +109,7 @@ jobs:
       - name: Compile acceptance-test binary
         # `go test -c` builds the test binary without running it. The
         # resulting binary accepts standard testing flags with the
-        # `-test.` prefix at run time (-test.v, -test.parallel=4,
+        # `-test.` prefix at run time (-test.v, -test.parallel=8,
         # -test.timeout=25m, -test.count=1).
         #
         # `-ldflags="-s -w"` strips the symbol table and DWARF debug
@@ -454,10 +454,15 @@ jobs:
         # `working-directory: kubernetes` so the tests resolve
         # ../_examples/ correctly (same effective cwd that
         # `go test ./kubernetes` provides).
-        # `-test.parallel=4`: tests that opt in via `t.Parallel()` run
-        # up to 4 at a time; tests without it still run serially. No
-        # `-race`: the SDK v2 harness shares a *schema.Provider across
-        # parallel tests and races inside
+        # `-test.parallel=8`: tests that opt in via `t.Parallel()` run
+        # up to 8 at a time; tests without it still run serially. The
+        # cap was raised from 4 to 8 after measurement showed cells
+        # spent most of their wall time inside serial test execution
+        # rather than kind cluster setup; the kind cluster on hosted
+        # runners (4 vCPU / 16 GB) tolerates 8-way parallelism for
+        # tests that already use acctest.RandString for namespace
+        # isolation. No `-race`: the SDK v2 harness shares a
+        # *schema.Provider across parallel tests and races inside
         # `GRPCProviderServer.ConfigureProvider`.
         working-directory: kubernetes
         env:
@@ -465,7 +470,7 @@ jobs:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
           TF_ACC_TERRAFORM_PATH: ${{ steps.tfpath.outputs.path }}
           TF_ACC_TERRAFORM_VERSION: ${{ needs.get_version_matrix.outputs.latest_terraform_version }}
-        run: ../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
+        run: ../acc.test -test.v -test.parallel=8 -test.timeout=25m -test.count=1
   acc_test_opentofu_smoke:
     # OpenTofu sibling of acc_test_terraform_smoke. Same shape, swapped
     # setup action. terraform-plugin-testing execs whatever binary sits
@@ -545,7 +550,7 @@ jobs:
           # either var.
           TF_ACC_PROVIDER_NAMESPACE: hashicorp
           TF_ACC_PROVIDER_HOST: registry.opentofu.org
-        run: ../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
+        run: ../acc.test -test.v -test.parallel=8 -test.timeout=25m -test.count=1
   acc_test_terraform:
     # Full Kubernetes × Terraform matrix, gated on both Terraform smokes:
     #   * acc_test_terraform_smoke catches "syntax error / missing
@@ -623,7 +628,7 @@ jobs:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
           TF_ACC_TERRAFORM_PATH: ${{ steps.tfpath.outputs.path }}
           TF_ACC_TERRAFORM_VERSION: ${{ matrix.terraform_version }}
-        run: ../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
+        run: ../acc.test -test.v -test.parallel=8 -test.timeout=25m -test.count=1
   acc_test_opentofu:
     # Full Kubernetes × OpenTofu matrix, gated on both OpenTofu smokes
     # (acc_test_opentofu_smoke + real_opentofu_smoke) for the same
@@ -694,4 +699,4 @@ jobs:
           # See acc_test_opentofu_smoke for why these are set.
           TF_ACC_PROVIDER_NAMESPACE: hashicorp
           TF_ACC_PROVIDER_HOST: registry.opentofu.org
-        run: ../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
+        run: ../acc.test -test.v -test.parallel=8 -test.timeout=25m -test.count=1
