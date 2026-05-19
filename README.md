@@ -135,62 +135,12 @@ See [`docs/ephemeral-resources/kubectl_manifest.md`](./docs/ephemeral-resources/
 
 ---
 
-## Development Guide
+## Contributing
 
-You will need [Go](http://www.golang.org) (the version pinned in [`go.mod`](./go.mod) — currently 1.26 or newer) and a correctly set up [GOPATH](http://golang.org/doc/code.html#GOPATH), with `$GOPATH/bin` on your `$PATH`.
-
-To compile the provider, run `make build`. This puts the provider binary at `$GOPATH/bin/terraform-provider-kubectl`.
-
-### Building the provider
-
-```sh
-git clone https://github.com/alekc/terraform-provider-kubectl
-cd terraform-provider-kubectl
-make build
-```
-
-To point Terraform at your local build, create or edit `~/.terraformrc` and add the dev-override block below. Replace the path with your own `$GOPATH/bin/` (run `go env GOPATH` if you're unsure):
-
-```hcl
-provider_installation {
-  dev_overrides {
-    "alekc/kubectl" = "<your-gopath>/bin/"
-  }
-  direct {}
-}
-```
-
-Run `terraform init` (it's a no-op under dev_overrides) and your local build is now in use. On every plan/apply you'll see Terraform note the override:
-
-```text
-╷
-│ Warning: Provider development overrides are in effect
-│ 
-│ The following provider development overrides are set in the CLI configuration:
-│  - alekc/kubectl in <your-gopath>/bin
-```
-
-### Testing
-
-There are two test surfaces:
-
-- **`make test`** — unit tests for the provider Go packages. No cluster required. Runs with `-race` and coverage.
-- **`make testacc`** — acceptance tests against a live Kubernetes cluster. Reads `KUBE_CONFIG_PATH` (or `KUBECONFIG`) to find the cluster. The CI workflow uses [`kind`](https://kind.sigs.k8s.io/) via `helm/kind-action`; locally any reachable cluster works (kind, k3d, Docker Desktop, EKS, …). Tests are isolated by namespace / random suffix and may be run in parallel — `ACC_TESTARGS="-parallel 4"` is the default.
-
-```sh
-make test       # unit
-make testacc    # acceptance — needs a cluster + KUBE_CONFIG_PATH
-```
-
-To narrow the run, pass `-run` through `ACC_TESTARGS`:
-
-```sh
-ACC_TESTARGS="-parallel 4 -run TestAccKubectlDataSourceManifest" make testacc
-```
-
-The CI workflow (`.github/workflows/tests.yaml`) runs the newest Kubernetes × Terraform pair as a single **smoke** job; only if it passes does it fan out to the rest of the matrix. This catches "obvious break" failures fast without burning 20 kind clusters on a syntax error.
-
-*Note:* acceptance tests create real Kubernetes resources. Against a managed cluster (EKS, GKE, AKS) they may incur cost.
+Building from source, pointing Terraform at a local build with
+`dev_overrides`, running the test suites, and the PR workflow are all
+documented in [CONTRIBUTING.md](./CONTRIBUTING.md). Start there if you
+want to try an unreleased fix from `master` or submit a change.
 
 ## Changing providers for existing resources
 
