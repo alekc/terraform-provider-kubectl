@@ -179,6 +179,112 @@ Workarounds, in order of preference:
    }
    ```
 
+## Trying an unreleased version
+
+If a fix you need is already on `master` but no release has been cut yet,
+you can build the provider locally and point Terraform at the binary with a
+[`dev_overrides`](https://developer.hashicorp.com/terraform/cli/config/config-file#development-overrides-for-provider-developers)
+block. This is the same mechanism the project's own CI smoke job uses, and
+is the recommended way to test a regression fix before it ships to the
+Terraform Registry.
+
+### Prerequisites
+
+- [Go](https://go.dev/dl/) at the version pinned in
+  [`go.mod`](https://github.com/alekc/terraform-provider-kubectl/blob/master/go.mod)
+  (currently 1.26 or newer)
+- `$(go env GOPATH)/bin` on your `$PATH`
+- Terraform 0.14+ (`dev_overrides` was added in 0.14)
+
+### Build
+
+```sh
+git clone https://github.com/alekc/terraform-provider-kubectl
+cd terraform-provider-kubectl
+git checkout master           # or any branch / tag / commit you want to test
+make build                    # places the binary at $(go env GOPATH)/bin/terraform-provider-kubectl
+```
+
+Alternatively, `go install` from the repo root produces the same binary.
+The binary name must stay `terraform-provider-kubectl` for Terraform to
+pick it up.
+
+### Tell Terraform about the local binary
+
+Create or edit `~/.terraformrc` (or `%APPDATA%\terraform.rc` on Windows)
+and add a `dev_overrides` block pointing at the directory that holds the
+binary, not the binary itself:
+
+```hcl
+provider_installation {
+  dev_overrides {
+    "alekc/kubectl" = "/path/to/your/gopath/bin"
+  }
+  direct {}
+}
+```
+
+Run `go env GOPATH` to fill in the path if you are not sure. The `direct {}`
+line keeps the default registry lookup for every other provider in your
+config so they still resolve normally.
+
+### Use it
+
+In your Terraform configuration, keep the `required_providers` block
+unchanged (the source still points at `alekc/kubectl`):
+
+```hcl
+terraform {
+  required_providers {
+    kubectl = {
+      source  = "alekc/kubectl"
+      version = ">= 2.0.0"
+    }
+  }
+}
+```
+
+`terraform init` becomes a no-op under `dev_overrides`. From the next
+`terraform plan` or `terraform apply` onward you will see Terraform print
+the override warning every run:
+
+```text
+│ Warning: Provider development overrides are in effect
+│
+│ The following provider development overrides are set in the CLI
+│ configuration:
+│  - alekc/kubectl in /path/to/your/gopath/bin
+```
+
+That warning is the signal that your custom build is in use. It is
+expected and cannot be suppressed.
+
+### Caveats
+
+- `dev_overrides` skips the registry checksum check and ignores the
+  `version` constraint in `required_providers`. Anything in the override
+  directory wins, even if it is older or newer than the constraint says.
+- Other team members on the same Terraform configuration will keep using
+  the released version unless they also configure a `dev_overrides`
+  block. Do not commit `~/.terraformrc`.
+- Remove the `dev_overrides` block (or comment it out) once a real
+  release containing the fix is out, otherwise Terraform will keep using
+  your stale local binary.
+
+### Run the tests
+
+If you want to verify your build against the provider's own suite before
+trusting it:
+
+```sh
+make test       # unit tests, no cluster required
+make testacc    # acceptance tests against a live cluster (KUBECONFIG / KUBE_CONFIG_PATH)
+```
+
+Acceptance tests create real Kubernetes objects. Point them at a throw-away
+cluster (`kind`, `k3d`, Docker Desktop, …) rather than anything you care
+about.
+
 ## Example
 
 Loading a raw yaml manifest into kubernetes is simple, just set the `yaml_body` argument:
