@@ -40,7 +40,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          k8s_cycles="$(curl -sSfL https://endoflife.date/api/kubernetes.json | jq -rc '[sort_by(.releaseDate) | reverse | .[0:4] | .[].cycle]')"
+          k8s_cycles="$(curl -sSfL https://endoflife.date/api/kubernetes.json | jq -rc '[sort_by(.releaseDate) | reverse | .[0:5] | .[].cycle]')"
           # The final `select($versions[.] != null)` drops cycles that
           # endoflife.date reports as current but for which kindest/node has
           # not yet published a matching tag (the typical case immediately
@@ -48,21 +48,30 @@ jobs:
           # picks up a JSON null which renders as `kindest/node:v` and the
           # job fails with "manifest unknown".
           kind_versions="$(crane ls docker.io/kindest/node | jq -sRrc --argjson cycles "${k8s_cycles}" 'split("\n") | [.[] | match("^v((\\d+\\.\\d+)\\.\\d+)$").captures | {cycle: .[1].string, version: .[0].string}] | group_by(.cycle) | [.[] | .[-1] | {(.cycle): {"version": .version}}] | reduce .[] as $item ({}; . *= $item) | . as $versions | [$cycles | .[] | select($versions[.] != null) | $versions[.].version]')"
-          terraform_versions="$(curl -sSfL https://endoflife.date/api/terraform.json | jq -rc '[sort_by(.releaseDate) | reverse | .[0:4] | .[].latest] + ["1.5.7"]')"
+          terraform_versions="$(curl -sSfL https://endoflife.date/api/terraform.json | jq -rc '[sort_by(.releaseDate) | reverse | .[0:5] | .[].latest] + ["1.5.7"]')"
+          # OpenTofu version list. No legacy pin equivalent to Terraform's
+          # 1.5.7 because OpenTofu's first GA is 1.6.0 and there is no
+          # MPL/BSL transition to commemorate.
+          opentofu_versions="$(curl -sSfL https://endoflife.date/api/opentofu.json | jq -rc '[sort_by(.releaseDate) | reverse | .[0:5] | .[].latest]')"
 
           {
             echo "terraform_versions=${terraform_versions}"
+            echo "opentofu_versions=${opentofu_versions}"
             echo "k8s_versions=${kind_versions}"
-            # Index 0 of each is the most recent version. The smoke job uses
-            # these singletons; the full matrix job excludes this pair so
-            # it isn't re-run.
+            # Index 0 of each version list is the most recent. The
+            # per-engine smoke jobs consume these singletons; the
+            # per-engine matrix jobs use the full lists and exclude the
+            # smoke pair via the matrix's own `exclude:` block.
             echo "latest_terraform_version=$(echo "${terraform_versions}" | jq -rc '.[0]')"
+            echo "latest_opentofu_version=$(echo "${opentofu_versions}" | jq -rc '.[0]')"
             echo "latest_k8s_version=$(echo "${kind_versions}" | jq -rc '.[0]')"
           } >> "${GITHUB_OUTPUT}"
     outputs:
       terraform_versions: ${{ steps.get_version_matrix.outputs.terraform_versions }}
+      opentofu_versions: ${{ steps.get_version_matrix.outputs.opentofu_versions }}
       k8s_versions: ${{ steps.get_version_matrix.outputs.k8s_versions }}
       latest_terraform_version: ${{ steps.get_version_matrix.outputs.latest_terraform_version }}
+      latest_opentofu_version: ${{ steps.get_version_matrix.outputs.latest_opentofu_version }}
       latest_k8s_version: ${{ steps.get_version_matrix.outputs.latest_k8s_version }}
   unit_test:
     runs-on: ubuntu-latest
@@ -187,8 +196,124 @@ jobs:
             kubectl get namespace kubectl-provider-real-smoke -o yaml >&2 || true
             exit 1
           fi
-  acc_test_smoke:
-    name: "acc_test smoke (k8s ${{ needs.get_version_matrix.outputs.latest_k8s_version }} / tf ${{ needs.get_version_matrix.outputs.latest_terraform_version }})"
+  real_opentofu_smoke:
+    # Sibling of real_terraform_smoke for the OpenTofu CLI. Same shape: kind
+    # cluster, dev_overrides build, real CLI apply/destroy on a namespace
+    # manifest. Two reasons for a separate job rather than an engine matrix
+    # on real_terraform_smoke:
+    #
+    #   1. Job names stay stable for branch protection. The existing
+    #      `real_terraform_smoke` name keeps matching its required check;
+    #      `real_opentofu_smoke` is the new contract.
+    #   2. setup-terraform and setup-opentofu have different inputs
+    #      (terraform_version / terraform_wrapper vs tofu_version /
+    #      tofu_wrapper), and an engine-matrix + `if:` pattern would add
+    #      noise without DRY savings; the rest of the job is ~15 lines.
+    #
+    # OpenTofu reads `~/.tofurc` first and falls back to `~/.terraformrc`.
+    # We write the explicit `~/.tofurc` here so the provider_installation
+    # block is the one OpenTofu prefers, not the compat-fallback path.
+    needs:
+      - get_version_matrix
+      - unit_test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+      - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          wait: 2m
+          node_image: kindest/node:v${{ needs.get_version_matrix.outputs.latest_k8s_version }}
+      - uses: opentofu/setup-opentofu@847eaa4afeb791b06daa46e8eafa8b1b68d7cfb4 # v2.0.1
+        with:
+          tofu_version: ${{ needs.get_version_matrix.outputs.latest_opentofu_version }}
+          tofu_wrapper: false
+      - name: Build provider
+        run: go build -o "${HOME}/terraform-provider-kubectl" .
+      - name: Configure dev_overrides
+        run: |
+          cat > "${HOME}/.tofurc" <<EOF
+          provider_installation {
+            dev_overrides {
+              "alekc/kubectl" = "${HOME}"
+            }
+            direct {}
+          }
+          EOF
+      - name: Write smoke config
+        run: |
+          mkdir -p smoke
+          cat > smoke/main.tf <<'EOF'
+          terraform {
+            required_providers {
+              kubectl = {
+                source = "alekc/kubectl"
+              }
+            }
+          }
+
+          # Reads kubeconfig via KUBE_CONFIG_PATH env var (defaulted to the
+          # kind-action workspace path in this workflow). load_config_file
+          # defaults to true.
+          provider "kubectl" {}
+
+          resource "kubectl_manifest" "smoke" {
+            # `wait = true` makes the provider block on `tofu destroy`
+            # until all finalizers (including the built-in `kubernetes`
+            # finalizer that drains in-namespace resources) finish. Without
+            # this, destroy returns while the namespace is still in
+            # Terminating phase and the post-destroy `kubectl get` check
+            # races against the kube-controller-manager.
+            wait = true
+            yaml_body = <<-YAML
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: kubectl-provider-real-smoke
+            YAML
+          }
+          EOF
+      - name: tofu apply
+        # OpenTofu driving the real provider binary through gRPC. Same
+        # GetProviderSchema / mux-parity coverage as the Terraform smoke,
+        # but exercised against the OpenTofu CLI's plugin-protocol
+        # implementation.
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: |
+          cd smoke
+          tofu apply -auto-approve
+      - name: Verify namespace exists
+        run: kubectl get namespace kubectl-provider-real-smoke
+      - name: tofu destroy
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: |
+          cd smoke
+          tofu destroy -auto-approve
+      - name: Verify namespace deleted
+        run: |
+          # `kubectl get` returns non-zero with a NotFound error once the
+          # namespace is gone; treat that as success. Anything else (still
+          # Terminating, still Active, transport error) fails the job.
+          if kubectl get namespace kubectl-provider-real-smoke 2>&1 | grep -q 'NotFound'; then
+            echo "namespace deleted as expected"
+          else
+            echo "namespace still present after tofu destroy" >&2
+            kubectl get namespace kubectl-provider-real-smoke -o yaml >&2 || true
+            exit 1
+          fi
+  acc_test_terraform_smoke:
+    # Cheap-failure shield for the Terraform half of acc_test. Runs the
+    # latest Kubernetes × latest Terraform cell first; the full Terraform
+    # matrix only fans out after this is green. Decoupled from the
+    # OpenTofu smoke so a tofu CI hiccup cannot block the Terraform
+    # matrix (and vice versa).
+    name: "acc_test smoke (terraform / k8s ${{ needs.get_version_matrix.outputs.latest_k8s_version }})"
     needs:
       - get_version_matrix
       - unit_test
@@ -240,18 +365,88 @@ jobs:
           ACC_TESTARGS: "-parallel 4"
         run: |
           make testacc
-  acc_test:
-    # acc_test runs the full Kubernetes × Terraform matrix, but only after
-    # acc_test_smoke (latest of each) has passed. This catches the common
-    # "syntax error / missing assertion / forgotten t.Parallel()" failures
-    # against one combination before fanning out N×M kind cluster spin-ups
-    # across the matrix.
+  acc_test_opentofu_smoke:
+    # OpenTofu sibling of acc_test_terraform_smoke. Same shape, swapped
+    # setup action. terraform-plugin-testing execs whatever binary sits
+    # at TF_ACC_TERRAFORM_PATH, so `tofu` works the same as `terraform`
+    # for the harness; only the setup-* action differs.
+    name: "acc_test smoke (opentofu / k8s ${{ needs.get_version_matrix.outputs.latest_k8s_version }})"
     needs:
       - get_version_matrix
       - unit_test
-      - acc_test_smoke
     runs-on: ubuntu-latest
-    # Same hard cap as acc_test_smoke. See that job for rationale.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+      - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        id: kind
+        with:
+          wait: 2m
+          node_image: kindest/node:v${{ needs.get_version_matrix.outputs.latest_k8s_version }}
+      - uses: opentofu/setup-opentofu@847eaa4afeb791b06daa46e8eafa8b1b68d7cfb4 # v2.0.1
+        with:
+          tofu_version: ${{ needs.get_version_matrix.outputs.latest_opentofu_version }}
+          tofu_wrapper: false
+      - name: Locate OpenTofu binary
+        id: tfpath
+        run: echo "path=$(which tofu)" >> "${GITHUB_OUTPUT}"
+      - name: Acceptance Tests
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+          TF_ACC_TERRAFORM_PATH: ${{ steps.tfpath.outputs.path }}
+          TF_ACC_TERRAFORM_VERSION: ${{ needs.get_version_matrix.outputs.latest_opentofu_version }}
+          # The SDK v2 harness (helper/resource/plugin.go) builds the
+          # TF_REATTACH_PROVIDERS map keyed by <host>/<namespace>/<name>.
+          # With defaults it registers BOTH a legacy `-` and a modern
+          # `hashicorp` namespace key so any Terraform CLI version finds
+          # a match.
+          #
+          # Two OpenTofu wrinkles need fixing:
+          #   1. OpenTofu's parser rejects the legacy `-` namespace
+          #      unless the host is registry.opentofu.org, so we have to
+          #      pin the host explicitly to silence the parse-time
+          #      panic the default would produce.
+          #   2. The test configs are bare `resource "kubectl_manifest"`
+          #      blocks with no `required_providers`, so OpenTofu's
+          #      implicit local-name lookup resolves to
+          #      registry.opentofu.org/hashicorp/kubectl. The reattach
+          #      map must contain that exact key. Setting NAMESPACE to
+          #      `hashicorp` makes the harness register exactly that
+          #      key (and skips the legacy `-` key that would otherwise
+          #      trip wrinkle 1).
+          #
+          # Terraform tolerates the defaults silently and does not need
+          # either var.
+          TF_ACC_PROVIDER_NAMESPACE: hashicorp
+          TF_ACC_PROVIDER_HOST: registry.opentofu.org
+          ACC_TESTARGS: "-parallel 4"
+        run: |
+          make testacc
+  acc_test_terraform:
+    # Full Kubernetes × Terraform matrix, gated on both Terraform smokes:
+    #   * acc_test_terraform_smoke catches "syntax error / missing
+    #     assertion / forgotten t.Parallel()" failures against one cell
+    #     before fanning out the rest of the matrix.
+    #   * real_terraform_smoke catches real-CLI / mux-parity / plugin-
+    #     protocol regressions that the SDK harness does not exercise.
+    #     If either is broken, fanning out the full matrix would burn
+    #     CI minutes on a known-bad provider for the same reason.
+    #
+    # Independent of the OpenTofu side: an OpenTofu CI hiccup does not
+    # block this job, and a Terraform regression does not block
+    # acc_test_opentofu. The two engines run in parallel.
+    name: "acc_test terraform ${{ matrix.terraform_version }} / k8s ${{ matrix.k8s_version }}"
+    needs:
+      - get_version_matrix
+      - unit_test
+      - acc_test_terraform_smoke
+      - real_terraform_smoke
+    runs-on: ubuntu-latest
+    # Same hard cap as the smoke job. See that job for rationale.
     timeout-minutes: 30
     strategy:
       fail-fast: true
@@ -274,7 +469,7 @@ jobs:
         with:
           wait: 2m
           node_image: kindest/node:v${{ matrix.k8s_version }}
-      # See acc_test_smoke for why TF_ACC_TERRAFORM_PATH is set.
+      # See acc_test_terraform_smoke for why TF_ACC_TERRAFORM_PATH is set.
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_version: ${{ matrix.terraform_version }}
@@ -287,6 +482,58 @@ jobs:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
           TF_ACC_TERRAFORM_PATH: ${{ steps.tfpath.outputs.path }}
           TF_ACC_TERRAFORM_VERSION: ${{ matrix.terraform_version }}
+          ACC_TESTARGS: "-parallel 4"
+        run: |
+          make testacc
+  acc_test_opentofu:
+    # Full Kubernetes × OpenTofu matrix, gated on both OpenTofu smokes
+    # (acc_test_opentofu_smoke + real_opentofu_smoke) for the same
+    # reasons spelled out on acc_test_terraform. Mirrors that job but
+    # with the OpenTofu axis and the opentofu/setup-opentofu action.
+    # terraform-plugin-testing execs the binary at TF_ACC_TERRAFORM_PATH
+    # regardless of its name.
+    name: "acc_test opentofu ${{ matrix.opentofu_version }} / k8s ${{ matrix.k8s_version }}"
+    needs:
+      - get_version_matrix
+      - unit_test
+      - acc_test_opentofu_smoke
+      - real_opentofu_smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix:
+        opentofu_version: ${{ fromJson(needs.get_version_matrix.outputs.opentofu_versions) }}
+        k8s_version: ${{ fromJson(needs.get_version_matrix.outputs.k8s_versions) }}
+        exclude:
+          - opentofu_version: ${{ needs.get_version_matrix.outputs.latest_opentofu_version }}
+            k8s_version: ${{ needs.get_version_matrix.outputs.latest_k8s_version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+      - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        id: kind
+        with:
+          wait: 2m
+          node_image: kindest/node:v${{ matrix.k8s_version }}
+      - uses: opentofu/setup-opentofu@847eaa4afeb791b06daa46e8eafa8b1b68d7cfb4 # v2.0.1
+        with:
+          tofu_version: ${{ matrix.opentofu_version }}
+          tofu_wrapper: false
+      - name: Locate OpenTofu binary
+        id: tfpath
+        run: echo "path=$(which tofu)" >> "${GITHUB_OUTPUT}"
+      - name: Acceptance Tests
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+          TF_ACC_TERRAFORM_PATH: ${{ steps.tfpath.outputs.path }}
+          TF_ACC_TERRAFORM_VERSION: ${{ matrix.opentofu_version }}
+          # See acc_test_opentofu_smoke for why these are set.
+          TF_ACC_PROVIDER_NAMESPACE: hashicorp
+          TF_ACC_PROVIDER_HOST: registry.opentofu.org
           ACC_TESTARGS: "-parallel 4"
         run: |
           make testacc

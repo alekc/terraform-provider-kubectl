@@ -50,13 +50,29 @@ jobs:
     steps:
       - run: echo "Docs-only change; skipping real-terraform smoke."
 
-  acc_test_smoke:
-    name: "acc_test smoke"
+  real_opentofu_smoke:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Docs-only change; skipping acceptance smoke."
+      - run: echo "Docs-only change; skipping real-opentofu smoke."
 
-  acc_test:
+  acc_test_terraform_smoke:
+    name: "acc_test smoke (terraform)"
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Docs-only change; skipping acceptance matrix."
+      - run: echo "Docs-only change; skipping terraform acceptance smoke."
+
+  acc_test_opentofu_smoke:
+    name: "acc_test smoke (opentofu)"
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Docs-only change; skipping opentofu acceptance smoke."
+
+  acc_test_terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Docs-only change; skipping terraform acceptance matrix."
+
+  acc_test_opentofu:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Docs-only change; skipping opentofu acceptance matrix."
