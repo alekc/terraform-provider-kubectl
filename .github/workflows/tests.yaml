@@ -17,6 +17,15 @@ concurrency:
   group: pr-${{ github.ref }}
   cancel-in-progress: true
 
+# Lock GITHUB_TOKEN to the minimum scope every job in this workflow needs.
+# All five jobs just check out the repo and run tests; none post comments,
+# push commits, write packages, or otherwise mutate GitHub state. Setting
+# `contents: read` here implicitly denies every other permission category
+# (per GitHub's "set one, deny the rest" semantics), so a compromised
+# step or action cannot escalate beyond reading the source tree.
+permissions:
+  contents: read
+
 env:
   KUBECONFIG: ${{ github.workspace }}/.kube/config
 
