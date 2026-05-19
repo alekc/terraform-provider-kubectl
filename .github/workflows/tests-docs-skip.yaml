@@ -1,0 +1,56 @@
+# CI ghost workflow for documentation-only pull requests.
+#
+# Companion to .github/workflows/tests.yaml. That workflow uses
+# `paths-ignore` so its real jobs (get_version_matrix, unit_test,
+# real_terraform_smoke, acc_test_smoke, acc_test) do not run on
+# documentation-only changes. If branch protection on master is ever
+# configured to require those job names as status checks, a skipped
+# workflow leaves the required checks permanently pending and the PR
+# cannot merge.
+#
+# This workflow fires on exactly the inverse path set and emits success
+# statuses with the same job names, so the contract is satisfied. Each
+# job is a no-op that prints why it was skipped.
+#
+# Keep in sync with tests.yaml:
+#   * `paths:` here must equal `paths-ignore:` over there.
+#   * Job names here must equal job names over there.
+#   * `acc_test` is a single job rather than the full matrix; branch
+#     protection by job name matches it as one context. If matrix cells
+#     are ever pinned as required checks individually, mirror them here.
+name: "tests"
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - '**.md'
+      - 'docs/**'
+
+jobs:
+  get_version_matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Docs-only change; skipping real version-matrix lookup."
+
+  unit_test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Docs-only change; skipping unit tests."
+
+  real_terraform_smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Docs-only change; skipping real-terraform smoke."
+
+  acc_test_smoke:
+    name: "acc_test smoke"
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Docs-only change; skipping acceptance smoke."
+
+  acc_test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Docs-only change; skipping acceptance matrix."
