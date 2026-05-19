@@ -69,6 +69,7 @@ The following arguments are supported:
 
 * `apply_retry_count` - (Optional) Defines the number of attempts any create/update action will take. Default `1`.
 * `load_config_file` - (Optional) Flag to enable/disable loading of the local kubeconf file. Default `true`. Can be sourced from `KUBE_LOAD_CONFIG_FILE`.
+* `lazy_load` - (Optional) When `true`, kubeconfig resolution errors at provider-configure time are swallowed and the actual client is built lazily on first use. Lets `terraform plan` succeed when provider arguments (`host`, `token`, certs) are sourced from outputs of resources that have not been applied yet. Off by default; can be sourced from `KUBE_LAZY_LOAD`. See [Troubleshooting](#troubleshooting) for trade-offs.
 * `host` - (Optional) The hostname (in form of URI) of the Kubernetes API. Can be sourced from `KUBE_HOST`.
 * `username` - (Optional) The username to use for HTTP basic authentication when accessing the Kubernetes API. Can be sourced from `KUBE_USER`.
 * `password` - (Optional) The password to use for HTTP basic authentication when accessing the Kubernetes API. Can be sourced from `KUBE_PASSWORD`.
@@ -160,6 +161,23 @@ Workarounds, in order of preference:
    `var.cluster_ca_certificate` etc. with hardcoded strings briefly to
    confirm the rest of the config is correct; if that succeeds the failure
    is the deferred-evaluation pattern above.
+4. **Set `lazy_load = true`** to opt back into the pre-`v2.3.0` behaviour:
+   `clientcmd` errors at provider-configure time are swallowed and the
+   actual client is built lazily on first use. This trades the precise
+   diagnostic above for a less specific late error if the configuration
+   is genuinely broken, so prefer one of the other workarounds when they
+   fit. Use this when the same-root cluster-plus-manifests pattern is
+   the only shape that fits the workflow.
+
+   ```hcl
+   provider "kubectl" {
+     host                   = module.eks.cluster_endpoint
+     cluster_ca_certificate = base64decode(module.eks.cluster_ca_certificate)
+     token                  = data.aws_eks_cluster_auth.this.token
+     load_config_file       = false
+     lazy_load              = true
+   }
+   ```
 
 ## Example
 

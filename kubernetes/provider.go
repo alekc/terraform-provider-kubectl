@@ -132,6 +132,12 @@ func Provider() *schema.Provider {
 				DefaultFunc: schema.EnvDefaultFunc("KUBE_LOAD_CONFIG_FILE", true),
 				Description: "Load local kubeconfig.",
 			},
+			"lazy_load": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("KUBE_LAZY_LOAD", false),
+				Description: "When true, kubeconfig resolution errors at provider-configure time are swallowed and the actual client is built lazily on first use. Lets `terraform plan` succeed when provider arguments (host, token, certs) are sourced from outputs of resources that have not been applied yet. Off by default; see Troubleshooting in the provider docs for trade-offs.",
+			},
 			"tls_server_name": {
 				Type:        schema.TypeString,
 				Optional:    true,
@@ -413,13 +419,23 @@ func initializeConfiguration(d *schema.ResourceData) (*restclient.Config, error)
 	cc := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loader, overrides)
 	cfg, err := cc.ClientConfig()
 	if err != nil {
-		// Surface the underlying clientcmd error to the caller. Swallowing it
-		// here (returning nil, nil) lets the rest of providerConfigure run
-		// against an empty restclient.Config, and the failure resurfaces much
-		// later as a misleading "cannot create discovery client: no client
-		// config" from ToRESTMapper. Returning the real reason — typically a
-		// missing host, an unresolved variable, or a malformed cert — points
-		// users straight at the bad field. See issue #203.
+		// Default: surface the underlying clientcmd error. Swallowing it
+		// (returning nil, nil) lets the rest of providerConfigure run against
+		// an empty restclient.Config and the failure resurfaces later as a
+		// misleading "cannot create discovery client: no client config" from
+		// ToRESTMapper. Returning the real reason (missing host, unresolved
+		// variable, malformed cert) points users at the bad field (#203).
+		//
+		// Opt-out: when lazy_load = true, the user is explicitly accepting
+		// that provider arguments resolve at apply time (e.g. host sourced
+		// from an EKS module output in the same root). Swallow the error so
+		// `terraform plan` succeeds; the empty REST config falls through to
+		// providerConfigure, which substitutes &restclient.Config{} and lets
+		// resource-time calls surface the real failure naturally (#283).
+		if v, ok := d.Get("lazy_load").(bool); ok && v {
+			log.Printf("[WARN] lazy_load: swallowing clientcmd error: %s", err)
+			return nil, nil
+		}
 		return nil, fmt.Errorf("invalid provider configuration: %w", err)
 	}
 

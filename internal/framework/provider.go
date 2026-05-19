@@ -121,6 +121,10 @@ func (p *kubectlFrameworkProvider) Schema(_ context.Context, _ provider.SchemaRe
 				Optional:    true,
 				Description: "Load local kubeconfig.",
 			},
+			"lazy_load": schema.BoolAttribute{
+				Optional:    true,
+				Description: "When true, kubeconfig resolution errors at provider-configure time are swallowed and the actual client is built lazily on first use. Lets `terraform plan` succeed when provider arguments (host, token, certs) are sourced from outputs of resources that have not been applied yet. Off by default; see Troubleshooting in the provider docs for trade-offs.",
+			},
 			"tls_server_name": schema.StringAttribute{
 				Optional:    true,
 				Description: "Server name passed to the server for SNI and is used in the client to check server certificates against.",
