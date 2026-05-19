@@ -399,17 +399,29 @@ jobs:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
           TF_ACC_TERRAFORM_PATH: ${{ steps.tfpath.outputs.path }}
           TF_ACC_TERRAFORM_VERSION: ${{ needs.get_version_matrix.outputs.latest_opentofu_version }}
-          # terraform-plugin-testing auto-injects a required_providers
-          # block whose `source` is built from these env vars. The
-          # defaults (registry.terraform.io / "-" or "hashicorp") produce
-          # a legacy "-" namespace address that OpenTofu's parser rejects
-          # with "The legacy provider namespace '-' can be used only with
-          # hostname registry.opentofu.org". Setting both fields to the
-          # real values makes the generated source address a fully
-          # qualified registry.opentofu.org/alekc/kubectl that OpenTofu
-          # accepts and the SDK v2 in-process provider plumbing serves.
-          # Terraform tolerates the default and does not need these vars.
-          TF_ACC_PROVIDER_NAMESPACE: alekc
+          # The SDK v2 harness (helper/resource/plugin.go) builds the
+          # TF_REATTACH_PROVIDERS map keyed by <host>/<namespace>/<name>.
+          # With defaults it registers BOTH a legacy `-` and a modern
+          # `hashicorp` namespace key so any Terraform CLI version finds
+          # a match.
+          #
+          # Two OpenTofu wrinkles need fixing:
+          #   1. OpenTofu's parser rejects the legacy `-` namespace
+          #      unless the host is registry.opentofu.org, so we have to
+          #      pin the host explicitly to silence the parse-time
+          #      panic the default would produce.
+          #   2. The test configs are bare `resource "kubectl_manifest"`
+          #      blocks with no `required_providers`, so OpenTofu's
+          #      implicit local-name lookup resolves to
+          #      registry.opentofu.org/hashicorp/kubectl. The reattach
+          #      map must contain that exact key. Setting NAMESPACE to
+          #      `hashicorp` makes the harness register exactly that
+          #      key (and skips the legacy `-` key that would otherwise
+          #      trip wrinkle 1).
+          #
+          # Terraform tolerates the defaults silently and does not need
+          # either var.
+          TF_ACC_PROVIDER_NAMESPACE: hashicorp
           TF_ACC_PROVIDER_HOST: registry.opentofu.org
           ACC_TESTARGS: "-parallel 4"
         run: |
@@ -512,7 +524,7 @@ jobs:
           TF_ACC_TERRAFORM_PATH: ${{ steps.tfpath.outputs.path }}
           TF_ACC_TERRAFORM_VERSION: ${{ matrix.opentofu_version }}
           # See acc_test_opentofu_smoke for why these are set.
-          TF_ACC_PROVIDER_NAMESPACE: alekc
+          TF_ACC_PROVIDER_NAMESPACE: hashicorp
           TF_ACC_PROVIDER_HOST: registry.opentofu.org
           ACC_TESTARGS: "-parallel 4"
         run: |
