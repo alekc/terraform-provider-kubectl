@@ -23,18 +23,31 @@ The `terraform-provider-kubectl` has gained widespread adoption in numerous larg
 | Data source        | [`kubectl_path_documents`](./docs/data-sources/kubectl_path_documents.md)            | Glob a directory and split every matched file into individual documents.                             |
 | Ephemeral resource | [`kubectl_manifest`](./docs/ephemeral-resources/kubectl_manifest.md)                 | Read any cluster object without ever writing the value to `terraform.tfstate` or the plan file. Required for Secret payloads, freshly-minted tokens, private keys, and anything else you must keep out of state. Re-fetched on every plan / apply. Terraform 1.10+. |
 
-## Supported Kubernetes and Terraform versions
+## Supported Kubernetes, Terraform, and OpenTofu versions
 
-Every PR is exercised against the matrix below on `kind`. The matrix is regenerated from [endoflife.date](https://endoflife.date) on each CI run, so it tracks the four most recent active Kubernetes release cycles and the four most recent stable Terraform minors, plus a legacy `1.5.7` cell (the last MPL-licensed Terraform release).
+Every PR is exercised against the matrices below on `kind`. The matrices are regenerated from [endoflife.date](https://endoflife.date) on each CI run, so they track the five most recent active Kubernetes release cycles, the five most recent stable Terraform minors (plus a legacy `1.5.7` pin, the last MPL-licensed Terraform release), and the five most recent OpenTofu versions.
 
-|                 | Terraform 1.15 | Terraform 1.14 | Terraform 1.13 | Terraform 1.12 | Terraform 1.5.7 |
-| --------------- | :------------: | :------------: | :------------: | :------------: | :-------------: |
-| Kubernetes 1.36 | smoke + ✅      | ✅              | ✅              | ✅              | ✅               |
-| Kubernetes 1.35 | ✅              | ✅              | ✅              | ✅              | ✅               |
-| Kubernetes 1.34 | ✅              | ✅              | ✅              | ✅              | ✅               |
-| Kubernetes 1.33 | ✅              | ✅              | ✅              | ✅              | ✅               |
+### Terraform
 
-The versions in the table are the snapshot resolved at the time of writing; the live matrix moves with the upstream release cadence. The newest pair (latest Kubernetes × latest Terraform) is run first as a single **smoke** job; the remaining 19 combinations fan out only after smoke passes. Combinations outside this grid may still work — your mileage may vary.
+|                 | Terraform 1.15 | Terraform 1.14 | Terraform 1.13 | Terraform 1.12 | Terraform 1.11 | Terraform 1.5.7 |
+| --------------- | :------------: | :------------: | :------------: | :------------: | :------------: | :-------------: |
+| Kubernetes 1.36 | smoke + ✅      | ✅              | ✅              | ✅              | ✅              | ✅               |
+| Kubernetes 1.35 | ✅              | ✅              | ✅              | ✅              | ✅              | ✅               |
+| Kubernetes 1.34 | ✅              | ✅              | ✅              | ✅              | ✅              | ✅               |
+| Kubernetes 1.33 | ✅              | ✅              | ✅              | ✅              | ✅              | ✅               |
+| Kubernetes 1.32 | ✅              | ✅              | ✅              | ✅              | ✅              | ✅               |
+
+### OpenTofu
+
+|                 | OpenTofu 1.11 | OpenTofu 1.10 | OpenTofu 1.9 | OpenTofu 1.8 | OpenTofu 1.7 |
+| --------------- | :-----------: | :-----------: | :----------: | :----------: | :----------: |
+| Kubernetes 1.36 | smoke + ✅     | ✅             | ✅            | ✅            | ✅            |
+| Kubernetes 1.35 | ✅             | ✅             | ✅            | ✅            | ✅            |
+| Kubernetes 1.34 | ✅             | ✅             | ✅            | ✅            | ✅            |
+| Kubernetes 1.33 | ✅             | ✅             | ✅            | ✅            | ✅            |
+| Kubernetes 1.32 | ✅             | ✅             | ✅            | ✅            | ✅            |
+
+The versions in the tables are the snapshot resolved at the time of writing; the live matrices move with the upstream release cadences. Each engine has its own **smoke** job (latest Kubernetes × latest CLI for that engine); the rest of that engine's matrix fans out only after its smoke passes. The Terraform and OpenTofu halves run independently, so an issue on one side does not block the other. Combinations outside this grid may still work; your mileage may vary.
 
 ## Installation
 
