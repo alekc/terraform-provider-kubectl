@@ -28,6 +28,12 @@ on:
       - '**.md'
       - 'docs/**'
 
+# The ghost jobs do nothing except echo a single line. They do not check
+# out the repo, contact any API, or read any secret, so the workflow
+# needs no GITHUB_TOKEN scope at all. An empty permissions block denies
+# every category and is the strictest setting available.
+permissions: {}
+
 jobs:
   get_version_matrix:
     runs-on: ubuntu-latest
