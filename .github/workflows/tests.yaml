@@ -115,10 +115,12 @@ jobs:
         # `-ldflags="-s -w"` strips the symbol table and DWARF debug
         # info, cutting the binary size by ~30%; the test framework
         # still produces full assertion messages and file:line panic
-        # traces. `-trimpath` removes the absolute build path from
-        # the binary so runner-temp directories do not leak into
-        # log output.
-        run: go test -c -ldflags="-s -w" -trimpath -o acc.test ./kubernetes
+        # traces. `-trimpath` was tested and removed: it invalidates
+        # the go-build cache (cache keys include the absolute build
+        # paths it would strip) and added ~60 s to the first-wave
+        # critical path. The strip flags do not invalidate the
+        # cache and stand on their own.
+        run: go test -c -ldflags="-s -w" -o acc.test ./kubernetes
       - name: Upload acceptance-test binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -141,10 +143,11 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Compile provider binary
-        # `-ldflags="-s -w" -trimpath`: same reasoning as
-        # build_acc_test_binary; the provider binary is CI-only here
-        # and never shipped to users.
-        run: go build -ldflags="-s -w" -trimpath -o terraform-provider-kubectl .
+        # `-ldflags="-s -w"`: same reasoning as build_acc_test_binary
+        # (strip debug, no -trimpath because it invalidates the
+        # go-build cache). The provider binary is CI-only and never
+        # shipped to users.
+        run: go build -ldflags="-s -w" -o terraform-provider-kubectl .
       - name: Upload provider binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
