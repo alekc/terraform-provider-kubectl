@@ -786,6 +786,388 @@ jobs:
             kubectl get namespace upgrade-smoke -o yaml >&2 || true
             exit 1
           fi
+  cross_provider_upgrade_smoke_terraform:
+    # Phase A of the v3.0.0 framework-migration epic (issue #123 / milestone
+    # v3.0.0). Cross-provider `moved {}` block smoke: install the published
+    # gavinbunney/kubectl provider from the public registry, apply a small
+    # manifest set, then swap `required_providers` to alekc/kubectl (via
+    # dev_overrides pointing at the just-built binary), add `moved {}`
+    # blocks for each resource, and assert `terraform plan` is a no-op
+    # (state must round-trip cleanly across the provider boundary).
+    #
+    # Gated by the `CROSS_PROVIDER_SMOKE_ENABLED` repository variable;
+    # stays skipped while that variable is unset (default) and runs only
+    # once an admin sets it to `true`. The gate exists because
+    # cross-provider `moved {}` uses same-address `from`/`to`
+    # declarations, and Terraform's HCL validator rejects those as
+    # redundant unless the destination resource type implements
+    # MoveStateResource. Without that, the smoke would fail at
+    # config-validate time on every run before reaching the cross-provider
+    # plan-no-op assertion. Phase D adds the destination implementation
+    # and removes this `if:` guard in the same PR, at which point the
+    # smoke runs unconditionally and the plan-no-op assertion becomes
+    # load-bearing. See docs/adr/0001 for the full plan.
+    if: ${{ vars.CROSS_PROVIDER_SMOKE_ENABLED == 'true' }}
+    needs:
+      - get_version_matrix
+      - unit_test
+      - build_provider_binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Download provider binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: provider-binary
+      - name: Install provider binary
+        run: |
+          chmod +x terraform-provider-kubectl
+          mv terraform-provider-kubectl "${HOME}/"
+      - name: Look up latest published gavinbunney version
+        id: gb
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=$(gh release view --repo gavinbunney/terraform-provider-kubectl \
+            --json tagName --jq .tagName)
+          VERSION="${TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Latest published gavinbunney: ${VERSION}"
+      - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          wait: 2m
+          node_image: kindest/node:v${{ needs.get_version_matrix.outputs.latest_k8s_version }}
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ needs.get_version_matrix.outputs.latest_terraform_version }}
+          terraform_wrapper: false
+      - name: Phase 1 - write config pinned to gavinbunney
+        # Quoted heredoc so bash leaves HCL alone; GitHub Actions still
+        # substitutes the version pin.
+        run: |
+          mkdir -p cross-smoke
+          cat > cross-smoke/main.tf <<'EOF'
+          terraform {
+            required_providers {
+              kubectl = {
+                source  = "gavinbunney/kubectl"
+                version = "${{ steps.gb.outputs.version }}"
+              }
+            }
+          }
+
+          provider "kubectl" {}
+
+          resource "kubectl_manifest" "ns" {
+            wait      = true
+            yaml_body = <<-YAML
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: cross-provider-smoke
+            YAML
+          }
+
+          resource "kubectl_manifest" "cm" {
+            wait       = true
+            depends_on = [kubectl_manifest.ns]
+            yaml_body  = <<-YAML
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: cross-provider-smoke-cm
+                namespace: cross-provider-smoke
+              data:
+                phase: "1"
+            YAML
+          }
+          EOF
+      - name: Phase 1 - terraform init (registry install of gavinbunney)
+        working-directory: cross-smoke
+        run: terraform init
+      - name: Phase 1 - terraform apply (against gavinbunney provider)
+        working-directory: cross-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: terraform apply -auto-approve
+      - name: Configure dev_overrides for built alekc binary
+        run: |
+          cat > "${HOME}/.terraformrc" <<EOF
+          provider_installation {
+            dev_overrides {
+              "alekc/kubectl" = "${HOME}"
+            }
+            direct {}
+          }
+          EOF
+      - name: Phase 2 - rewrite main.tf to use alekc with moved blocks
+        # Swap required_providers from gavinbunney/kubectl to alekc/kubectl
+        # and add `moved {}` blocks for each resource so Terraform knows
+        # the state should transition between providers rather than be
+        # destroyed and re-created.
+        run: |
+          cat > cross-smoke/main.tf <<'EOF'
+          terraform {
+            required_providers {
+              kubectl = {
+                source = "alekc/kubectl"
+              }
+            }
+          }
+
+          provider "kubectl" {}
+
+          moved {
+            from = kubectl_manifest.ns
+            to   = kubectl_manifest.ns
+          }
+
+          moved {
+            from = kubectl_manifest.cm
+            to   = kubectl_manifest.cm
+          }
+
+          resource "kubectl_manifest" "ns" {
+            wait      = true
+            yaml_body = <<-YAML
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: cross-provider-smoke
+            YAML
+          }
+
+          resource "kubectl_manifest" "cm" {
+            wait       = true
+            depends_on = [kubectl_manifest.ns]
+            yaml_body  = <<-YAML
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: cross-provider-smoke-cm
+                namespace: cross-provider-smoke
+              data:
+                phase: "1"
+            YAML
+          }
+          EOF
+      - name: Phase 2 - terraform plan must be a no-op after the move
+        working-directory: cross-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        # -detailed-exitcode: 0 = no diff (success), 2 = diff (fail),
+        # 1 = error. Until Phase D ships, expect this to exit non-zero
+        # because alekc's kubectl_manifest is still SDK v2 and cannot
+        # accept the cross-provider move. continue-on-error at the job
+        # level absorbs the red.
+        run: |
+          set +e
+          terraform plan -detailed-exitcode -no-color
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then
+            echo "Phase 2: plan is a no-op as required (Phase D has shipped)"
+          elif [ $rc -eq 2 ]; then
+            echo "Phase 2: plan reports drift -- expected until Phase D" >&2
+            exit 1
+          else
+            echo "Phase 2: terraform plan errored (rc=$rc) -- expected until Phase D" >&2
+            exit $rc
+          fi
+      - name: Phase 2 - terraform apply must be a no-op
+        working-directory: cross-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: terraform apply -auto-approve
+      - name: Verify resources survived the move
+        run: |
+          kubectl get namespace cross-provider-smoke
+          kubectl get configmap -n cross-provider-smoke cross-provider-smoke-cm
+      - name: Cleanup - terraform destroy
+        if: always()
+        working-directory: cross-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: terraform destroy -auto-approve || true
+  cross_provider_upgrade_smoke_opentofu:
+    # OpenTofu sibling of cross_provider_upgrade_smoke_terraform. Same
+    # scenario, same expectations, OpenTofu CLI throughout. See the
+    # Terraform job's comment for the `CROSS_PROVIDER_SMOKE_ENABLED`
+    # gate rationale until Phase D ships MoveStateResource on the
+    # framework-side kubectl_manifest.
+    if: ${{ vars.CROSS_PROVIDER_SMOKE_ENABLED == 'true' }}
+    needs:
+      - get_version_matrix
+      - unit_test
+      - build_provider_binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Download provider binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: provider-binary
+      - name: Install provider binary
+        run: |
+          chmod +x terraform-provider-kubectl
+          mv terraform-provider-kubectl "${HOME}/"
+      - name: Look up latest published gavinbunney version
+        id: gb
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=$(gh release view --repo gavinbunney/terraform-provider-kubectl \
+            --json tagName --jq .tagName)
+          VERSION="${TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Latest published gavinbunney: ${VERSION}"
+      - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          wait: 2m
+          node_image: kindest/node:v${{ needs.get_version_matrix.outputs.latest_k8s_version }}
+      - uses: opentofu/setup-opentofu@847eaa4afeb791b06daa46e8eafa8b1b68d7cfb4 # v2.0.1
+        with:
+          tofu_version: ${{ needs.get_version_matrix.outputs.latest_opentofu_version }}
+          tofu_wrapper: false
+      - name: Phase 1 - write config pinned to gavinbunney
+        run: |
+          mkdir -p cross-smoke
+          cat > cross-smoke/main.tf <<'EOF'
+          terraform {
+            required_providers {
+              kubectl = {
+                source  = "gavinbunney/kubectl"
+                version = "${{ steps.gb.outputs.version }}"
+              }
+            }
+          }
+
+          provider "kubectl" {}
+
+          resource "kubectl_manifest" "ns" {
+            wait      = true
+            yaml_body = <<-YAML
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: cross-provider-smoke
+            YAML
+          }
+
+          resource "kubectl_manifest" "cm" {
+            wait       = true
+            depends_on = [kubectl_manifest.ns]
+            yaml_body  = <<-YAML
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: cross-provider-smoke-cm
+                namespace: cross-provider-smoke
+              data:
+                phase: "1"
+            YAML
+          }
+          EOF
+      - name: Phase 1 - tofu init (registry install of gavinbunney)
+        working-directory: cross-smoke
+        run: tofu init
+      - name: Phase 1 - tofu apply (against gavinbunney provider)
+        working-directory: cross-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: tofu apply -auto-approve
+      - name: Configure dev_overrides for built alekc binary
+        run: |
+          cat > "${HOME}/.tofurc" <<EOF
+          provider_installation {
+            dev_overrides {
+              "alekc/kubectl" = "${HOME}"
+            }
+            direct {}
+          }
+          EOF
+      - name: Phase 2 - rewrite main.tf to use alekc with moved blocks
+        run: |
+          cat > cross-smoke/main.tf <<'EOF'
+          terraform {
+            required_providers {
+              kubectl = {
+                source = "alekc/kubectl"
+              }
+            }
+          }
+
+          provider "kubectl" {}
+
+          moved {
+            from = kubectl_manifest.ns
+            to   = kubectl_manifest.ns
+          }
+
+          moved {
+            from = kubectl_manifest.cm
+            to   = kubectl_manifest.cm
+          }
+
+          resource "kubectl_manifest" "ns" {
+            wait      = true
+            yaml_body = <<-YAML
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: cross-provider-smoke
+            YAML
+          }
+
+          resource "kubectl_manifest" "cm" {
+            wait       = true
+            depends_on = [kubectl_manifest.ns]
+            yaml_body  = <<-YAML
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: cross-provider-smoke-cm
+                namespace: cross-provider-smoke
+              data:
+                phase: "1"
+            YAML
+          }
+          EOF
+      - name: Phase 2 - tofu plan must be a no-op after the move
+        working-directory: cross-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: |
+          set +e
+          tofu plan -detailed-exitcode -no-color
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then
+            echo "Phase 2: plan is a no-op as required (Phase D has shipped)"
+          elif [ $rc -eq 2 ]; then
+            echo "Phase 2: plan reports drift -- expected until Phase D" >&2
+            exit 1
+          else
+            echo "Phase 2: tofu plan errored (rc=$rc) -- expected until Phase D" >&2
+            exit $rc
+          fi
+      - name: Phase 2 - tofu apply must be a no-op
+        working-directory: cross-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: tofu apply -auto-approve
+      - name: Verify resources survived the move
+        run: |
+          kubectl get namespace cross-provider-smoke
+          kubectl get configmap -n cross-provider-smoke cross-provider-smoke-cm
+      - name: Cleanup - tofu destroy
+        if: always()
+        working-directory: cross-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: tofu destroy -auto-approve || true
   acc_test_terraform_smoke:
     # Cheap-failure shield for the Terraform half of acc_test. Runs the
     # latest Kubernetes × latest Terraform cell first; the full Terraform
