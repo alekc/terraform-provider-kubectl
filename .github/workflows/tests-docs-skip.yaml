@@ -45,6 +45,16 @@ jobs:
     steps:
       - run: echo "Docs-only change; skipping unit tests."
 
+  build_acc_test_binary:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Docs-only change; skipping acceptance-test binary build."
+
+  build_provider_binary:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Docs-only change; skipping provider binary build."
+
   real_terraform_smoke:
     runs-on: ubuntu-latest
     steps:

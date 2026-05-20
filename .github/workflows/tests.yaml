@@ -87,6 +87,74 @@ jobs:
         run: |
           make test
           make vet
+  build_acc_test_binary:
+    # Compile the kubernetes acceptance-test binary once per CI run.
+    # The four acc_test_* jobs download this artifact and execute it
+    # directly via `./acc.test` instead of each invoking
+    # `go test ./kubernetes`, which re-links the same binary 50+
+    # times across the matrix fan-out.
+    #
+    # Runs in the same first wave as get_version_matrix and unit_test
+    # (no `needs:`), so it does not extend critical-path wall time.
+    # Compile failures here surface before the matrix fans out,
+    # short-circuiting wasted runner minutes on a known-bad source
+    # tree.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+      - name: Compile acceptance-test binary
+        # `go test -c` builds the test binary without running it. The
+        # resulting binary accepts standard testing flags with the
+        # `-test.` prefix at run time (-test.v, -test.parallel=4,
+        # -test.timeout=25m, -test.count=1).
+        #
+        # `-ldflags="-s -w"` strips the symbol table and DWARF debug
+        # info, cutting the binary size by ~30%; the test framework
+        # still produces full assertion messages and file:line panic
+        # traces. `-trimpath` was tested and removed: it invalidates
+        # the go-build cache (cache keys include the absolute build
+        # paths it would strip) and added ~60 s to the first-wave
+        # critical path. The strip flags do not invalidate the
+        # cache and stand on their own.
+        run: go test -c -ldflags="-s -w" -o acc.test ./kubernetes
+      - name: Upload acceptance-test binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: acc-test-binary
+          path: acc.test
+          retention-days: 1
+          if-no-files-found: error
+  build_provider_binary:
+    # Compile the provider binary once per CI run. real_terraform_smoke
+    # and real_opentofu_smoke download this artifact and place it where
+    # their dev_overrides block expects to find it. Centralising the
+    # build collapses two parallel `go build` invocations (~30-60 s
+    # each) into one; runs in the same first wave as the other build
+    # jobs so it does not extend critical-path wall time.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+      - name: Compile provider binary
+        # `-ldflags="-s -w"`: same reasoning as build_acc_test_binary
+        # (strip debug, no -trimpath because it invalidates the
+        # go-build cache). The provider binary is CI-only and never
+        # shipped to users.
+        run: go build -ldflags="-s -w" -o terraform-provider-kubectl .
+      - name: Upload provider binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-binary
+          path: terraform-provider-kubectl
+          retention-days: 1
+          if-no-files-found: error
   real_terraform_smoke:
     # End-to-end smoke that drives a real Terraform CLI against a
     # dev_overrides build of the provider, applies a real manifest to a
@@ -106,14 +174,22 @@ jobs:
     needs:
       - get_version_matrix
       - unit_test
+      - build_provider_binary
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+      - name: Download provider binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          go-version-file: go.mod
+          name: provider-binary
+      - name: Install provider binary
+        # dev_overrides below expects the binary at ${HOME}; move it
+        # there and restore the executable bit (download-artifact
+        # does not preserve it).
+        run: |
+          chmod +x terraform-provider-kubectl
+          mv terraform-provider-kubectl "${HOME}/"
       - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           wait: 2m
@@ -122,8 +198,6 @@ jobs:
         with:
           terraform_version: ${{ needs.get_version_matrix.outputs.latest_terraform_version }}
           terraform_wrapper: false
-      - name: Build provider
-        run: go build -o "${HOME}/terraform-provider-kubectl" .
       - name: Configure dev_overrides
         run: |
           cat > "${HOME}/.terraformrc" <<EOF
@@ -216,14 +290,20 @@ jobs:
     needs:
       - get_version_matrix
       - unit_test
+      - build_provider_binary
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+      - name: Download provider binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          go-version-file: go.mod
+          name: provider-binary
+      - name: Install provider binary
+        # See real_terraform_smoke for why this is at ${HOME}.
+        run: |
+          chmod +x terraform-provider-kubectl
+          mv terraform-provider-kubectl "${HOME}/"
       - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           wait: 2m
@@ -232,8 +312,6 @@ jobs:
         with:
           tofu_version: ${{ needs.get_version_matrix.outputs.latest_opentofu_version }}
           tofu_wrapper: false
-      - name: Build provider
-        run: go build -o "${HOME}/terraform-provider-kubectl" .
       - name: Configure dev_overrides
         run: |
           cat > "${HOME}/.tofurc" <<EOF
@@ -317,19 +395,35 @@ jobs:
     needs:
       - get_version_matrix
       - unit_test
+      - build_acc_test_binary
     runs-on: ubuntu-latest
     # Hard cap so a wedged test (e.g. wait-for-condition pinned to an old
     # nginx image that never reaches Ready on a newer Kubernetes release)
-    # can't burn the runner for hours. The Go-level `-timeout` in the
-    # Makefile is a few minutes lower so the test framework gets a chance
-    # to surface goroutine stacks before the runner is killed.
+    # can't burn the runner for hours. The `-test.timeout=25m` flag
+    # passed to the precompiled binary is a few minutes lower so the
+    # test framework gets a chance to surface goroutine stacks before
+    # the runner is killed.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version-file: go.mod
+          # The acceptance-test binary downloaded below embeds the
+          # compiled test code; the only repo content this job needs
+          # at runtime is the example .tf files under `_examples/`
+          # (the tests reference them via `../_examples/` from
+          # working-directory: kubernetes). Sparse checkout in cone
+          # mode keeps the top-level files plus the named cone, so
+          # the rest of the source tree is skipped.
+          sparse-checkout: |
+            _examples
+      - name: Download acceptance-test binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: acc-test-binary
+      - name: Make binary executable
+        # download-artifact does not preserve the executable bit on the
+        # uploaded file; restore it before running.
+        run: chmod +x acc.test
       - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         id: kind
         with:
@@ -350,21 +444,35 @@ jobs:
       - name: Locate Terraform binary
         id: tfpath
         run: echo "path=$(which terraform)" >> "${GITHUB_OUTPUT}"
+      - name: Prepare runtime directory
+        # Sparse checkout (above) did not materialize kubernetes/;
+        # create an empty placeholder so `working-directory:
+        # kubernetes` resolves and the test binary's references to
+        # `../_examples/` reach the cone we did check out.
+        run: mkdir -p kubernetes
       - name: Acceptance Tests
+        # `working-directory: kubernetes` so the tests resolve
+        # ../_examples/ correctly (same effective cwd that
+        # `go test ./kubernetes` provides).
+        # `-test.parallel=4`: tests that opt in via `t.Parallel()` run
+        # up to 4 at a time; tests without it still run serially. A
+        # bump to 8 was tested and reverted -- one of every ~50 cells
+        # tripped `TestAccKubectlDataSourceManifest_arrayIndex` on a
+        # `client rate limiter Wait returned an error: context
+        # deadline exceeded` failure, caused by k8s client-go's
+        # default QPS=5 / burst=10 limiter saturating under doubled
+        # concurrency. A 2% flake rate is not acceptable for CI; if
+        # the provider ever raises its client QPS we can revisit.
+        # No `-race`: the SDK v2 harness shares a *schema.Provider
+        # across parallel tests and races inside
+        # `GRPCProviderServer.ConfigureProvider`.
+        working-directory: kubernetes
         env:
+          TF_ACC: "1"
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
           TF_ACC_TERRAFORM_PATH: ${{ steps.tfpath.outputs.path }}
           TF_ACC_TERRAFORM_VERSION: ${{ needs.get_version_matrix.outputs.latest_terraform_version }}
-          # Tests that opt into parallelism via `t.Parallel()` (Phase 1: all
-          # file-only data sources + the resource tests that already use
-          # acctest.RandString for namespace isolation) run up to 4 at a time.
-          # Tests without `t.Parallel()` still run serially. The Makefile's
-          # `ACC_TESTARGS` deliberately omits `-race` because the SDK v2
-          # harness shares a `*schema.Provider` across parallel tests and
-          # races inside `GRPCProviderServer.ConfigureProvider`.
-          ACC_TESTARGS: "-parallel 4"
-        run: |
-          make testacc
+        run: ../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
   acc_test_opentofu_smoke:
     # OpenTofu sibling of acc_test_terraform_smoke. Same shape, swapped
     # setup action. terraform-plugin-testing execs whatever binary sits
@@ -374,14 +482,27 @@ jobs:
     needs:
       - get_version_matrix
       - unit_test
+      - build_acc_test_binary
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version-file: go.mod
+          # The acceptance-test binary downloaded below embeds the
+          # compiled test code; the only repo content this job needs
+          # at runtime is the example .tf files under `_examples/`
+          # (the tests reference them via `../_examples/` from
+          # working-directory: kubernetes). Sparse checkout in cone
+          # mode keeps the top-level files plus the named cone, so
+          # the rest of the source tree is skipped.
+          sparse-checkout: |
+            _examples
+      - name: Download acceptance-test binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: acc-test-binary
+      - name: Make binary executable
+        run: chmod +x acc.test
       - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         id: kind
         with:
@@ -394,8 +515,16 @@ jobs:
       - name: Locate OpenTofu binary
         id: tfpath
         run: echo "path=$(which tofu)" >> "${GITHUB_OUTPUT}"
+      - name: Prepare runtime directory
+        # Sparse checkout (above) did not materialize kubernetes/;
+        # create an empty placeholder so `working-directory:
+        # kubernetes` resolves and the test binary's references to
+        # `../_examples/` reach the cone we did check out.
+        run: mkdir -p kubernetes
       - name: Acceptance Tests
+        working-directory: kubernetes
         env:
+          TF_ACC: "1"
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
           TF_ACC_TERRAFORM_PATH: ${{ steps.tfpath.outputs.path }}
           TF_ACC_TERRAFORM_VERSION: ${{ needs.get_version_matrix.outputs.latest_opentofu_version }}
@@ -423,9 +552,7 @@ jobs:
           # either var.
           TF_ACC_PROVIDER_NAMESPACE: hashicorp
           TF_ACC_PROVIDER_HOST: registry.opentofu.org
-          ACC_TESTARGS: "-parallel 4"
-        run: |
-          make testacc
+        run: ../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
   acc_test_terraform:
     # Full Kubernetes × Terraform matrix, gated on both Terraform smokes:
     #   * acc_test_terraform_smoke catches "syntax error / missing
@@ -443,6 +570,7 @@ jobs:
     needs:
       - get_version_matrix
       - unit_test
+      - build_acc_test_binary
       - acc_test_terraform_smoke
       - real_terraform_smoke
     runs-on: ubuntu-latest
@@ -460,10 +588,22 @@ jobs:
             k8s_version: ${{ needs.get_version_matrix.outputs.latest_k8s_version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version-file: go.mod
+          # The acceptance-test binary downloaded below embeds the
+          # compiled test code; the only repo content this job needs
+          # at runtime is the example .tf files under `_examples/`
+          # (the tests reference them via `../_examples/` from
+          # working-directory: kubernetes). Sparse checkout in cone
+          # mode keeps the top-level files plus the named cone, so
+          # the rest of the source tree is skipped.
+          sparse-checkout: |
+            _examples
+      - name: Download acceptance-test binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: acc-test-binary
+      - name: Make binary executable
+        run: chmod +x acc.test
       - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         id: kind
         with:
@@ -477,14 +617,20 @@ jobs:
       - name: Locate Terraform binary
         id: tfpath
         run: echo "path=$(which terraform)" >> "${GITHUB_OUTPUT}"
+      - name: Prepare runtime directory
+        # Sparse checkout (above) did not materialize kubernetes/;
+        # create an empty placeholder so `working-directory:
+        # kubernetes` resolves and the test binary's references to
+        # `../_examples/` reach the cone we did check out.
+        run: mkdir -p kubernetes
       - name: Acceptance Tests
+        working-directory: kubernetes
         env:
+          TF_ACC: "1"
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
           TF_ACC_TERRAFORM_PATH: ${{ steps.tfpath.outputs.path }}
           TF_ACC_TERRAFORM_VERSION: ${{ matrix.terraform_version }}
-          ACC_TESTARGS: "-parallel 4"
-        run: |
-          make testacc
+        run: ../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
   acc_test_opentofu:
     # Full Kubernetes × OpenTofu matrix, gated on both OpenTofu smokes
     # (acc_test_opentofu_smoke + real_opentofu_smoke) for the same
@@ -496,6 +642,7 @@ jobs:
     needs:
       - get_version_matrix
       - unit_test
+      - build_acc_test_binary
       - acc_test_opentofu_smoke
       - real_opentofu_smoke
     runs-on: ubuntu-latest
@@ -510,10 +657,22 @@ jobs:
             k8s_version: ${{ needs.get_version_matrix.outputs.latest_k8s_version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version-file: go.mod
+          # The acceptance-test binary downloaded below embeds the
+          # compiled test code; the only repo content this job needs
+          # at runtime is the example .tf files under `_examples/`
+          # (the tests reference them via `../_examples/` from
+          # working-directory: kubernetes). Sparse checkout in cone
+          # mode keeps the top-level files plus the named cone, so
+          # the rest of the source tree is skipped.
+          sparse-checkout: |
+            _examples
+      - name: Download acceptance-test binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: acc-test-binary
+      - name: Make binary executable
+        run: chmod +x acc.test
       - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         id: kind
         with:
@@ -526,14 +685,20 @@ jobs:
       - name: Locate OpenTofu binary
         id: tfpath
         run: echo "path=$(which tofu)" >> "${GITHUB_OUTPUT}"
+      - name: Prepare runtime directory
+        # Sparse checkout (above) did not materialize kubernetes/;
+        # create an empty placeholder so `working-directory:
+        # kubernetes` resolves and the test binary's references to
+        # `../_examples/` reach the cone we did check out.
+        run: mkdir -p kubernetes
       - name: Acceptance Tests
+        working-directory: kubernetes
         env:
+          TF_ACC: "1"
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
           TF_ACC_TERRAFORM_PATH: ${{ steps.tfpath.outputs.path }}
           TF_ACC_TERRAFORM_VERSION: ${{ matrix.opentofu_version }}
           # See acc_test_opentofu_smoke for why these are set.
           TF_ACC_PROVIDER_NAMESPACE: hashicorp
           TF_ACC_PROVIDER_HOST: registry.opentofu.org
-          ACC_TESTARGS: "-parallel 4"
-        run: |
-          make testacc
+        run: ../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
