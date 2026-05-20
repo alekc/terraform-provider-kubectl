@@ -59,6 +59,42 @@ func TestParseServerVersion(t *testing.T) {
 			wantPatch:   "1",
 		},
 		{
+			name: "k3s build metadata without pre-release",
+			input: version.Info{
+				Major:      "1",
+				Minor:      "32",
+				GitVersion: "v1.32.1+k3s1",
+			},
+			wantVersion: "v1.32.1",
+			wantMajor:   "1",
+			wantMinor:   "32",
+			wantPatch:   "1",
+		},
+		{
+			name: "rke2 build metadata without pre-release",
+			input: version.Info{
+				Major:      "1",
+				Minor:      "32",
+				GitVersion: "v1.32.0+rke2r1",
+			},
+			wantVersion: "v1.32.0",
+			wantMajor:   "1",
+			wantMinor:   "32",
+			wantPatch:   "0",
+		},
+		{
+			name: "openshift / downstream rebuild stamp",
+			input: version.Info{
+				Major:      "1",
+				Minor:      "32",
+				GitVersion: "v1.32.0+abc1234",
+			},
+			wantVersion: "v1.32.0",
+			wantMajor:   "1",
+			wantMinor:   "32",
+			wantPatch:   "0",
+		},
+		{
 			name: "no v prefix is tolerated",
 			input: version.Info{
 				Major:      "1",
@@ -157,6 +193,22 @@ func TestParseServerVersion_IDStability(t *testing.T) {
 	second := parseServerVersion(in).ID
 	if first != second {
 		t.Fatalf("ID not stable across calls: %q vs %q", first, second)
+	}
+}
+
+// TestFetchServerVersion_NilGuard verifies the function returns a descriptive
+// error rather than panicking when the caller passes a nil provider. This
+// matters because the framework type-assertion pattern
+// `meta.(*KubeProvider)` returns `ok=true` for a typed-nil pointer, so the
+// guard is the actual safety net.
+func TestFetchServerVersion_NilGuard(t *testing.T) {
+	t.Parallel()
+	info, err := FetchServerVersion(nil)
+	if err == nil {
+		t.Fatal("expected error for nil provider, got nil")
+	}
+	if info != nil {
+		t.Errorf("expected nil ServerVersionInfo when error is returned, got %#v", info)
 	}
 }
 

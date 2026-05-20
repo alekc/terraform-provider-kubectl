@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -18,9 +19,10 @@ type ServerVersionInfo struct {
 	// the same version.
 	ID string
 
-	// Version is the apiserver's reported semver without any pre-release
-	// suffix (everything after the first "-" stripped). For example a
-	// GitVersion of "v1.32.1-alpha.0+abcdef" becomes "v1.32.1".
+	// Version is the apiserver's reported semver with both build metadata
+	// (everything after "+") and any pre-release suffix (everything after
+	// the first "-") stripped. For example "v1.32.1-alpha.0+abcdef" and
+	// "v1.32.1+k3s1" both reduce to "v1.32.1".
 	Version string
 
 	Major      string
@@ -38,9 +40,21 @@ type ServerVersionInfo struct {
 // delegates to parseServerVersion, which is a pure function and unit-tested
 // in server_version_helper_test.go.
 func FetchServerVersion(provider *KubeProvider) (*ServerVersionInfo, error) {
+	// Defensive: an upstream caller could pass a typed-nil *KubeProvider
+	// after an `ok`-style assertion on the mux callback (the assertion
+	// succeeds for a nil pointer of the right type). Without this guard we
+	// would panic in provider.ToDiscoveryClient() instead of producing a
+	// useful diagnostic.
+	if provider == nil {
+		return nil, errors.New("kubectl_server_version: provider is nil; framework Configure() never ran or SDK v2 meta is missing")
+	}
+
 	discoveryClient, err := provider.ToDiscoveryClient()
 	if err != nil {
 		return nil, err
+	}
+	if discoveryClient == nil {
+		return nil, errors.New("kubectl_server_version: ToDiscoveryClient returned a nil client without an error")
 	}
 
 	discoveryClient.Invalidate()
@@ -57,28 +71,40 @@ func FetchServerVersion(provider *KubeProvider) (*ServerVersionInfo, error) {
 // output every time, and ID is a deterministic sha256 of the raw version
 // string so successive reads against an unchanged cluster yield the same ID.
 //
-// The parser strips pre-release / build-metadata suffixes from the canonical
-// `Version` field (everything after the first `-`) and from the synthesised
-// `Patch` field. When the raw string contains fewer than three
-// dot-separated segments (an extremely rare malformed case) the parser falls
-// back to the `Major` / `Minor` fields supplied by apimachinery and leaves
-// `Patch` empty.
+// Both the canonical `Version` field and the synthesised `Patch` field are
+// reported with SemVer 2.0.0 pre-release and build-metadata suffixes stripped.
+// Build metadata is normalised first (everything after a `+`) so distributions
+// like K3s (`v1.32.1+k3s1`) and downstream-rebuild RKE2 / OpenShift / EKS
+// stamps don't leak into the Patch attribute. Pre-release suffixes (`-rc.0`,
+// `-alpha.0`, etc.) are stripped after that.
+//
+// When the cleaned string contains fewer than three dot-separated segments
+// (an extremely rare malformed case) the parser falls back to the `Major` /
+// `Minor` fields supplied by apimachinery and leaves `Patch` empty.
 func parseServerVersion(v *version.Info) *ServerVersionInfo {
 	raw := v.String()
+
+	// SemVer build metadata first (everything after "+"), then pre-release
+	// suffix (everything after "-"). After this both transformations the
+	// remainder is a clean "vMAJOR.MINOR.PATCH" string suitable for the
+	// dot-split.
+	noBuild := strings.SplitN(raw, "+", 2)[0]
+	clean := strings.SplitN(noBuild, "-", 2)[0]
+
 	info := &ServerVersionInfo{
 		ID:         fmt.Sprintf("%x", sha256.Sum256([]byte(raw))),
-		Version:    strings.Split(raw, "-")[0],
+		Version:    clean,
 		GitVersion: v.GitVersion,
 		GitCommit:  v.GitCommit,
 		BuildDate:  v.BuildDate,
 		Platform:   v.Platform,
 	}
 
-	semver := strings.Split(raw, ".")
+	semver := strings.Split(clean, ".")
 	if len(semver) >= 3 {
 		info.Major = strings.ReplaceAll(semver[0], "v", "")
 		info.Minor = semver[1]
-		info.Patch = strings.Split(semver[2], "-")[0]
+		info.Patch = semver[2]
 	} else {
 		info.Major = v.Major
 		info.Minor = v.Minor
