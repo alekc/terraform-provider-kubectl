@@ -35,7 +35,7 @@ Mux servers reject same-name resource types on both halves. Adding a sibling fra
 
 ## Schema-diff finding (load-bearing for this ADR)
 
-Schema diff between gavinbunney v1.19.0 and alekc master, captured 2026-05-20 (see `work/standalone/terraform-provider-kubectl-123/data/schema-diff.md` in the contributor workspace, or in the issue comment thread for the public record):
+Schema diff between gavinbunney v1.19.0 and alekc master, captured 2026-05-20:
 
 - gavinbunney's `kubectl_manifest` resource has **20 top-level attributes**; alekc has **24** (4 alekc-only: `upgrade_api_version`, `field_manager`, `wait_for`, `delete_cascade`).
 - All 20 gavinbunney attributes exist in alekc with the same name and type. **Zero gavinbunney-only attributes**.
