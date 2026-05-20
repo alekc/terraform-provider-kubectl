@@ -85,6 +85,11 @@ jobs:
     steps:
       - run: echo "Docs-only change; skipping opentofu cross-provider upgrade smoke."
 
+  framework_acc_test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Docs-only change; skipping framework acceptance tests."
+
   acc_test_terraform_smoke:
     name: "acc_test smoke (terraform)"
     runs-on: ubuntu-latest
