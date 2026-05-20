@@ -795,13 +795,19 @@ jobs:
     # blocks for each resource, and assert `terraform plan` is a no-op
     # (state must round-trip cleanly across the provider boundary).
     #
-    # `continue-on-error: true` until Phase D of the epic implements
-    # MoveStateResource on the framework-side kubectl_manifest. Until then,
-    # `terraform plan` in Phase 2 will fail because alekc's kubectl_manifest
-    # is still SDK v2 and cannot accept a cross-provider move. The job goes
-    # red but does not block PR merges, and the failure shape is exactly
-    # the state Phase D removes. See docs/adr/0001 for the full plan.
-    continue-on-error: true
+    # Gated by the `CROSS_PROVIDER_SMOKE_ENABLED` repository variable;
+    # stays skipped while that variable is unset (default) and runs only
+    # once an admin sets it to `true`. The gate exists because
+    # cross-provider `moved {}` uses same-address `from`/`to`
+    # declarations, and Terraform's HCL validator rejects those as
+    # redundant unless the destination resource type implements
+    # MoveStateResource. Without that, the smoke would fail at
+    # config-validate time on every run before reaching the cross-provider
+    # plan-no-op assertion. Phase D adds the destination implementation
+    # and removes this `if:` guard in the same PR, at which point the
+    # smoke runs unconditionally and the plan-no-op assertion becomes
+    # load-bearing. See docs/adr/0001 for the full plan.
+    if: ${{ vars.CROSS_PROVIDER_SMOKE_ENABLED == 'true' }}
     needs:
       - get_version_matrix
       - unit_test
@@ -987,9 +993,10 @@ jobs:
   cross_provider_upgrade_smoke_opentofu:
     # OpenTofu sibling of cross_provider_upgrade_smoke_terraform. Same
     # scenario, same expectations, OpenTofu CLI throughout. See the
-    # Terraform job's comment for context and the
-    # `continue-on-error: true` rationale until Phase D ships.
-    continue-on-error: true
+    # Terraform job's comment for the `CROSS_PROVIDER_SMOKE_ENABLED`
+    # gate rationale until Phase D ships MoveStateResource on the
+    # framework-side kubectl_manifest.
+    if: ${{ vars.CROSS_PROVIDER_SMOKE_ENABLED == 'true' }}
     needs:
       - get_version_matrix
       - unit_test

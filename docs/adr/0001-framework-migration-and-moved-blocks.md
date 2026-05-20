@@ -55,7 +55,7 @@ The implication is that the `MoveState` handler for `kubectl_manifest` collapses
 
 | Phase | PR scope | Release | Risk |
 | --- | --- | --- | --- |
-| A | This PR. ADR + cross-provider acc-test smoke (continue-on-error until Phase D) | v2.5.0 | Low |
+| A | This PR. ADR + cross-provider acc-test smoke (gated behind the `CROSS_PROVIDER_SMOKE_ENABLED` repo variable; stays skipped until Phase D removes the guard) | v2.5.0 | Low |
 | B | Port `kubectl_server_version` resource + data source to framework | v2.6.0 | Low |
 | C | Port `kubectl_filename_list` / `kubectl_file_documents` / `kubectl_path_documents` data sources to framework; **add `kubectl_kustomize_documents`** (port from gavinbunney#113, framework-native from day one) | v2.7.0 | Low |
 | D | Port `kubectl_manifest` resource to framework, implement `MoveState` for `gavinbunney/kubectl` source. **Closes #123.** | **v3.0.0** | High |
@@ -143,7 +143,7 @@ Phase D ships v3.0.0 (closes #123) when:
 
 - `kubectl_manifest` is a framework Resource implementing `MoveStateResource` for `registry.terraform.io/gavinbunney/kubectl` source.
 - The full existing acc test suite (`resource_kubectl_manifest_test.go`, 94KB / ~2700 lines) passes against the framework implementation.
-- The new cross-provider acc smoke from Phase A flips `continue-on-error: false` and stays green.
+- The new cross-provider acc smoke from Phase A has its `CROSS_PROVIDER_SMOKE_ENABLED` repo-variable guard removed (or the variable is set to `true`) and stays green. Until then Terraform's HCL validator rejects the smoke's same-address `moved {}` blocks as redundant, which is the gate Phase D's MoveStateResource implementation unlocks.
 - The alekc-internal upgrade-path smoke from #279 stays green (proves byte-identical state round-trip from v2.x to v3.0.0).
 - Release notes document every behaviour shift from the risk table above.
 
