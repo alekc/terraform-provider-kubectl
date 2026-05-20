@@ -165,11 +165,15 @@ func (p *kubectlFrameworkProvider) Configure(_ context.Context, _ provider.Confi
 }
 
 func (p *kubectlFrameworkProvider) Resources(_ context.Context) []func() resource.Resource {
-	return []func() resource.Resource{}
+	return []func() resource.Resource{
+		NewServerVersionResource,
+	}
 }
 
 func (p *kubectlFrameworkProvider) DataSources(_ context.Context) []func() datasource.DataSource {
-	return []func() datasource.DataSource{}
+	return []func() datasource.DataSource{
+		NewServerVersionDataSource,
+	}
 }
 
 func (p *kubectlFrameworkProvider) EphemeralResources(_ context.Context) []func() ephemeral.EphemeralResource {

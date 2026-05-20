@@ -184,13 +184,11 @@ func Provider() *schema.Provider {
 			"kubectl_filename_list":  dataSourceKubectlFilenameList(),
 			"kubectl_file_documents": dataSourceKubectlFileDocuments(),
 			"kubectl_path_documents": dataSourceKubectlPathDocuments(),
-			"kubectl_server_version": dataSourceKubectlServerVersion(),
 			"kubectl_manifest":       dataSourceKubectlManifest(),
 		},
 
 		ResourcesMap: map[string]*schema.Resource{
-			"kubectl_manifest":       resourceKubectlManifest(),
-			"kubectl_server_version": resourceKubectlServerVersion(),
+			"kubectl_manifest": resourceKubectlManifest(),
 		},
 	}
 
