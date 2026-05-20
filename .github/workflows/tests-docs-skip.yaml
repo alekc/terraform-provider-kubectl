@@ -65,6 +65,16 @@ jobs:
     steps:
       - run: echo "Docs-only change; skipping real-opentofu smoke."
 
+  upgrade_path_smoke_terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Docs-only change; skipping terraform upgrade-path smoke."
+
+  upgrade_path_smoke_opentofu:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Docs-only change; skipping opentofu upgrade-path smoke."
+
   acc_test_terraform_smoke:
     name: "acc_test smoke (terraform)"
     runs-on: ubuntu-latest

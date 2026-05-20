@@ -385,6 +385,407 @@ jobs:
             kubectl get namespace kubectl-provider-real-smoke -o yaml >&2 || true
             exit 1
           fi
+  upgrade_path_smoke_terraform:
+    # End-to-end smoke that exercises the upgrade path the matrix never
+    # touches: install the last published provider from the real registry,
+    # apply a representative manifest set, then swap to the just-built
+    # binary via dev_overrides and assert `plan` is a no-op (state must
+    # round-trip), `apply` is a no-op, an in-place update still works, and
+    # destroy is clean. Catches schema-version bumps without migrators,
+    # Read regressions, refresh crashes against state shapes the new
+    # version doesn't understand, and plugin-startup breakage like #275
+    # that pure clean-install smokes miss.
+    #
+    # Sibling upgrade_path_smoke_opentofu exercises the same scenario
+    # through the OpenTofu CLI.
+    needs:
+      - get_version_matrix
+      - unit_test
+      - build_provider_binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Download provider binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: provider-binary
+      - name: Install provider binary
+        # dev_overrides below expects the binary at ${HOME}; move it
+        # there and restore the executable bit (download-artifact does
+        # not preserve it).
+        run: |
+          chmod +x terraform-provider-kubectl
+          mv terraform-provider-kubectl "${HOME}/"
+      - name: Look up latest published provider version
+        id: latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=$(gh release view --json tagName --jq .tagName)
+          VERSION="${TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Latest published: ${VERSION}"
+      - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          wait: 2m
+          node_image: kindest/node:v${{ needs.get_version_matrix.outputs.latest_k8s_version }}
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ needs.get_version_matrix.outputs.latest_terraform_version }}
+          terraform_wrapper: false
+      - name: Write upgrade-path config
+        # Heredoc is quoted (<<'EOF') so bash does not expand HCL
+        # interpolations (`${var.upgrade_label}`); GitHub Actions
+        # expression substitution still runs first and replaces
+        # `${{ steps.latest.outputs.version }}` with the actual version.
+        # The `upgrade_label` variable defaults to "phase1" so Phase 1
+        # writes labels.upgraded=phase1; Phase 2c passes
+        # `-var upgrade_label=phase2` to drive an in-place update through
+        # the just-built binary.
+        run: |
+          mkdir -p upgrade-smoke
+          cat > upgrade-smoke/main.tf <<'EOF'
+          terraform {
+            required_providers {
+              kubectl = {
+                source  = "alekc/kubectl"
+                version = "${{ steps.latest.outputs.version }}"
+              }
+            }
+          }
+
+          variable "upgrade_label" {
+            type    = string
+            default = "phase1"
+          }
+
+          provider "kubectl" {}
+
+          resource "kubectl_manifest" "ns" {
+            wait      = true
+            yaml_body = <<-YAML
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: upgrade-smoke
+                labels:
+                  upgraded: "${var.upgrade_label}"
+            YAML
+          }
+
+          resource "kubectl_manifest" "cm" {
+            wait       = true
+            depends_on = [kubectl_manifest.ns]
+            yaml_body  = <<-YAML
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: upgrade-smoke-cm
+                namespace: upgrade-smoke
+              data:
+                key: value
+            YAML
+          }
+
+          resource "kubectl_manifest" "deploy" {
+            wait_for_rollout = true
+            wait             = true
+            depends_on       = [kubectl_manifest.ns]
+            yaml_body        = <<-YAML
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: upgrade-smoke-app
+                namespace: upgrade-smoke
+              spec:
+                replicas: 1
+                selector:
+                  matchLabels:
+                    app: upgrade-smoke
+                template:
+                  metadata:
+                    labels:
+                      app: upgrade-smoke
+                  spec:
+                    containers:
+                    - name: app
+                      image: nginx:alpine
+                      resources:
+                        requests:
+                          cpu: 10m
+                          memory: 16Mi
+                        limits:
+                          memory: 64Mi
+            YAML
+          }
+          EOF
+      - name: Phase 1 - terraform init (registry install of published version)
+        working-directory: upgrade-smoke
+        run: terraform init
+      - name: Phase 1 - terraform apply (against published provider)
+        working-directory: upgrade-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: terraform apply -auto-approve
+      - name: Configure dev_overrides for built binary
+        run: |
+          cat > "${HOME}/.terraformrc" <<EOF
+          provider_installation {
+            dev_overrides {
+              "alekc/kubectl" = "${HOME}"
+            }
+            direct {}
+          }
+          EOF
+      - name: Phase 2a - terraform plan must be a no-op
+        working-directory: upgrade-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        # `-detailed-exitcode` returns 0 = no diff, 2 = diff, 1 = error.
+        # A no-diff is the contract: state from the published version must
+        # round-trip cleanly through the built binary's Read / refresh
+        # path.
+        run: |
+          set +e
+          terraform plan -detailed-exitcode -no-color
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then
+            echo "Phase 2a: plan is a no-op as required"
+          elif [ $rc -eq 2 ]; then
+            echo "Phase 2a FAIL: upgrade caused drift" >&2
+            exit 1
+          else
+            exit $rc
+          fi
+      - name: Phase 2b - terraform apply must be a no-op
+        working-directory: upgrade-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: terraform apply -auto-approve
+      - name: Phase 2c - in-place update via built binary
+        working-directory: upgrade-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        # Flip the Namespace label to verify the built binary's Update
+        # path still works against state created by the published
+        # version.
+        run: |
+          terraform apply -auto-approve -var upgrade_label=phase2
+          ACTUAL=$(kubectl get namespace upgrade-smoke -o jsonpath='{.metadata.labels.upgraded}')
+          if [ "$ACTUAL" != "phase2" ]; then
+            echo "Phase 2c FAIL: expected label upgraded=phase2, got '$ACTUAL'" >&2
+            exit 1
+          fi
+      - name: Phase 2d - terraform destroy
+        working-directory: upgrade-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: terraform destroy -auto-approve -var upgrade_label=phase2
+      - name: Verify namespace deleted
+        run: |
+          if kubectl get namespace upgrade-smoke 2>&1 | grep -q 'NotFound'; then
+            echo "namespace deleted as expected"
+          else
+            echo "namespace still present after terraform destroy" >&2
+            kubectl get namespace upgrade-smoke -o yaml >&2 || true
+            exit 1
+          fi
+  upgrade_path_smoke_opentofu:
+    # OpenTofu sibling of upgrade_path_smoke_terraform. Identical scenario
+    # exercised through the OpenTofu CLI: registry.opentofu.org install of
+    # the last published version (alekc/kubectl is mirrored there), then
+    # dev_overrides swap to the just-built binary and the same
+    # plan-no-op / apply-no-op / mutate / destroy contract.
+    #
+    # Two separate jobs (not an engine matrix) for the same reasons
+    # documented on real_opentofu_smoke: stable required-check names for
+    # branch protection, and `setup-terraform` vs `setup-opentofu` having
+    # different inputs (terraform_version / terraform_wrapper vs
+    # tofu_version / tofu_wrapper).
+    needs:
+      - get_version_matrix
+      - unit_test
+      - build_provider_binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Download provider binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: provider-binary
+      - name: Install provider binary
+        run: |
+          chmod +x terraform-provider-kubectl
+          mv terraform-provider-kubectl "${HOME}/"
+      - name: Look up latest published provider version
+        id: latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=$(gh release view --json tagName --jq .tagName)
+          VERSION="${TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Latest published: ${VERSION}"
+      - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          wait: 2m
+          node_image: kindest/node:v${{ needs.get_version_matrix.outputs.latest_k8s_version }}
+      - uses: opentofu/setup-opentofu@847eaa4afeb791b06daa46e8eafa8b1b68d7cfb4 # v2.0.1
+        with:
+          tofu_version: ${{ needs.get_version_matrix.outputs.latest_opentofu_version }}
+          tofu_wrapper: false
+      - name: Write upgrade-path config
+        # Identical main.tf to upgrade_path_smoke_terraform — the
+        # kubectl_manifest config is CLI-agnostic. See that job's heredoc
+        # comment for the quoting / variable-default rationale.
+        run: |
+          mkdir -p upgrade-smoke
+          cat > upgrade-smoke/main.tf <<'EOF'
+          terraform {
+            required_providers {
+              kubectl = {
+                source  = "alekc/kubectl"
+                version = "${{ steps.latest.outputs.version }}"
+              }
+            }
+          }
+
+          variable "upgrade_label" {
+            type    = string
+            default = "phase1"
+          }
+
+          provider "kubectl" {}
+
+          resource "kubectl_manifest" "ns" {
+            wait      = true
+            yaml_body = <<-YAML
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: upgrade-smoke
+                labels:
+                  upgraded: "${var.upgrade_label}"
+            YAML
+          }
+
+          resource "kubectl_manifest" "cm" {
+            wait       = true
+            depends_on = [kubectl_manifest.ns]
+            yaml_body  = <<-YAML
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: upgrade-smoke-cm
+                namespace: upgrade-smoke
+              data:
+                key: value
+            YAML
+          }
+
+          resource "kubectl_manifest" "deploy" {
+            wait_for_rollout = true
+            wait             = true
+            depends_on       = [kubectl_manifest.ns]
+            yaml_body        = <<-YAML
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: upgrade-smoke-app
+                namespace: upgrade-smoke
+              spec:
+                replicas: 1
+                selector:
+                  matchLabels:
+                    app: upgrade-smoke
+                template:
+                  metadata:
+                    labels:
+                      app: upgrade-smoke
+                  spec:
+                    containers:
+                    - name: app
+                      image: nginx:alpine
+                      resources:
+                        requests:
+                          cpu: 10m
+                          memory: 16Mi
+                        limits:
+                          memory: 64Mi
+            YAML
+          }
+          EOF
+      - name: Phase 1 - tofu init (registry install of published version)
+        working-directory: upgrade-smoke
+        run: tofu init
+      - name: Phase 1 - tofu apply (against published provider)
+        working-directory: upgrade-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: tofu apply -auto-approve
+      - name: Configure dev_overrides for built binary
+        # OpenTofu reads ~/.tofurc first and falls back to ~/.terraformrc.
+        # We write the explicit ~/.tofurc here so dev_overrides comes from
+        # the preferred path, not the compat fallback.
+        run: |
+          cat > "${HOME}/.tofurc" <<EOF
+          provider_installation {
+            dev_overrides {
+              "alekc/kubectl" = "${HOME}"
+            }
+            direct {}
+          }
+          EOF
+      - name: Phase 2a - tofu plan must be a no-op
+        working-directory: upgrade-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: |
+          set +e
+          tofu plan -detailed-exitcode -no-color
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then
+            echo "Phase 2a: plan is a no-op as required"
+          elif [ $rc -eq 2 ]; then
+            echo "Phase 2a FAIL: upgrade caused drift" >&2
+            exit 1
+          else
+            exit $rc
+          fi
+      - name: Phase 2b - tofu apply must be a no-op
+        working-directory: upgrade-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: tofu apply -auto-approve
+      - name: Phase 2c - in-place update via built binary
+        working-directory: upgrade-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: |
+          tofu apply -auto-approve -var upgrade_label=phase2
+          ACTUAL=$(kubectl get namespace upgrade-smoke -o jsonpath='{.metadata.labels.upgraded}')
+          if [ "$ACTUAL" != "phase2" ]; then
+            echo "Phase 2c FAIL: expected label upgraded=phase2, got '$ACTUAL'" >&2
+            exit 1
+          fi
+      - name: Phase 2d - tofu destroy
+        working-directory: upgrade-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: tofu destroy -auto-approve -var upgrade_label=phase2
+      - name: Verify namespace deleted
+        run: |
+          if kubectl get namespace upgrade-smoke 2>&1 | grep -q 'NotFound'; then
+            echo "namespace deleted as expected"
+          else
+            echo "namespace still present after tofu destroy" >&2
+            kubectl get namespace upgrade-smoke -o yaml >&2 || true
+            exit 1
+          fi
   acc_test_terraform_smoke:
     # Cheap-failure shield for the Terraform half of acc_test. Runs the
     # latest Kubernetes × latest Terraform cell first; the full Terraform
