@@ -135,11 +135,12 @@ func (d *kustomizeDocumentsDataSource) Read(ctx context.Context, req datasource.
 		return
 	}
 
-	// Hash the concatenated documents so the ID is stable across re-reads of
-	// the same target with the same options.
+	// Hash the documents with length-prefixed framing so boundary positions
+	// can't collide: `["ab", "c"]` and `["a", "bc"]` would otherwise share a
+	// preimage. Mirrors the pattern used by kubectl_filename_list.
 	h := sha256.New()
-	for _, doc := range documents {
-		h.Write([]byte(doc))
+	for i, doc := range documents {
+		_, _ = fmt.Fprintf(h, "%d:%d:%s\n", i, len(doc), doc)
 	}
 	data.ID = types.StringValue(fmt.Sprintf("%x", h.Sum(nil)))
 	data.Documents = docsVal

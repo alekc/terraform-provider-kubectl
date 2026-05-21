@@ -85,7 +85,9 @@ func (d *filenameListDataSource) Read(ctx context.Context, req datasource.ReadRe
 	idHash := sha256.New()
 	basenames := make([]string, 0, len(items))
 	for i, s := range items {
-		fmt.Fprintf(idHash, "%d:%d:%s\n", i, len(s), s)
+		// sha256.Hash.Write never errors; explicit discard keeps errcheck
+		// quiet without changing behaviour.
+		_, _ = fmt.Fprintf(idHash, "%d:%d:%s\n", i, len(s), s)
 		basenames = append(basenames, filepath.Base(s))
 	}
 
