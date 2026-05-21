@@ -930,23 +930,30 @@ func getRestClientFromUnstructured(manifest *yaml.Manifest, provider *KubeProvid
 		return RestClientResultSuccess(client)
 	}
 
-	discoveryWithTimeout := func(manifest *yaml.Manifest, provider *KubeProvider) <-chan *RestClientResult {
-		ch := make(chan *RestClientResult)
-		go func() {
-			ch <- doGetRestClientFromUnstructured(manifest, provider)
-		}()
-		return ch
-	}
-
 	timeout := time.NewTimer(60 * time.Second)
 	defer timeout.Stop()
 	select {
-	case res := <-discoveryWithTimeout(manifest, provider):
+	case res := <-discoveryWithTimeout(func() *RestClientResult {
+		return doGetRestClientFromUnstructured(manifest, provider)
+	}):
 		return res
 	case <-timeout.C:
 		log.Printf("[ERROR] %v timed out fetching resources from discovery client", manifest)
 		return RestClientResultFromErr(fmt.Errorf("%v timed out fetching resources from discovery client", manifest))
 	}
+}
+
+// discoveryWithTimeout runs produce in a goroutine and returns a buffered
+// channel of capacity 1 so the producer can always deliver its result and
+// exit, even if the caller has already taken the timeout branch. Without the
+// buffer the producer pins the discovery client and cached HTTP responses
+// until the process exits, leaking one goroutine per timed-out apply.
+func discoveryWithTimeout(produce func() *RestClientResult) <-chan *RestClientResult {
+	ch := make(chan *RestClientResult, 1)
+	go func() {
+		ch <- produce()
+	}()
+	return ch
 }
 
 // checkAPIResourceIsPresent Loops through a list of available APIResources and
