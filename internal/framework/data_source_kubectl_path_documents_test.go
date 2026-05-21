@@ -145,11 +145,10 @@ data "kubectl_path_documents" "test" {
 	})
 }
 
-// TestAccKubectlDataSourcePathDocuments_varsListRejected confirms the
-// primitive-only validator surfaces an error when vars carries a list value.
-// Belt and braces over the unit test in
-// kubernetes/path_documents_helper_test.go - this confirms the validator is
-// wired into the framework schema correctly.
+// TestAccKubectlDataSourcePathDocuments_varsListRejected confirms a list
+// value under `vars` is rejected at config-validate time. The schema
+// declares `ElementType: types.StringType`, so the framework emits an
+// `Incorrect attribute value type` diagnostic on the way in.
 func TestAccKubectlDataSourcePathDocuments_varsListRejected(t *testing.T) {
 	t.Parallel()
 	cfg := fmt.Sprintf(`
@@ -166,7 +165,7 @@ data "kubectl_path_documents" "test" {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{{
 			Config:      cfg,
-			ExpectError: regexp.MustCompile(`(?i)(tuple|list).*string|element.*incorrect type`),
+			ExpectError: regexp.MustCompile(`(?is)Incorrect attribute value type.*string required`),
 		}},
 	})
 }

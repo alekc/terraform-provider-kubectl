@@ -11,7 +11,6 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/alekc/terraform-provider-kubectl/kubernetes"
@@ -64,12 +63,9 @@ func (d *pathDocumentsDataSource) Schema(_ context.Context, _ datasource.SchemaR
 			"vars": schema.MapAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
-				Description: "Variables to substitute into each loaded document's HCL template. Values must be " +
-					"primitives (strings); lists and maps are rejected at config-validate time. Defaults to an " +
-					"empty map.",
-				Validators: []validator.Map{
-					primitiveVarsValidator{attrName: "vars"},
-				},
+				Description: "Variables to substitute into each loaded document's HCL template. The map's " +
+					"element type is string, so the framework rejects lists or maps at config-validate time " +
+					"with a 'string required, but have tuple/object' error. Defaults to an empty map.",
 			},
 			"sensitive_vars": schema.MapAttribute{
 				Optional:    true,
@@ -77,9 +73,6 @@ func (d *pathDocumentsDataSource) Schema(_ context.Context, _ datasource.SchemaR
 				ElementType: types.StringType,
 				Description: "Same as `vars` but the values are marked sensitive so they don't leak into plan / " +
 					"apply output. Defaults to an empty map.",
-				Validators: []validator.Map{
-					primitiveVarsValidator{attrName: "sensitive_vars"},
-				},
 			},
 			"disable_template": schema.BoolAttribute{
 				Optional:    true,
@@ -225,35 +218,3 @@ func (d *pathDocumentsDataSource) Read(ctx context.Context, req datasource.ReadR
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
-// primitiveVarsValidator ensures the map's values resolve to scalar primitives.
-// Maps and lists fail at config-validate time, matching the SDK v2 behaviour.
-type primitiveVarsValidator struct {
-	attrName string
-}
-
-func (v primitiveVarsValidator) Description(_ context.Context) string {
-	return "values must be primitive scalars; nested maps or lists are rejected"
-}
-
-func (v primitiveVarsValidator) MarkdownDescription(ctx context.Context) string {
-	return v.Description(ctx)
-}
-
-func (v primitiveVarsValidator) ValidateMap(ctx context.Context, req validator.MapRequest, resp *validator.MapResponse) {
-	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
-		return
-	}
-	// The schema declares ElementType: types.StringType, so the framework
-	// rejects non-string values at decode time before this validator ever
-	// fires. The check is kept as defence in depth in case the schema is
-	// ever loosened to DynamicType.
-	raw := map[string]any{}
-	diags := req.ConfigValue.ElementsAs(ctx, &raw, false)
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-	if err := kubernetes.ValidatePathDocumentsVars(v.attrName, raw); err != nil {
-		resp.Diagnostics.AddAttributeError(req.Path, "invalid vars map", err.Error())
-	}
-}
