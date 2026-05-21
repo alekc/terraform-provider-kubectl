@@ -78,18 +78,20 @@ check "ns_active" {
 // back via the ephemeral resource, asserting on an extracted scalar field.
 // Confirms the namespaced path through getRestClientFromUnstructured works
 // from the framework half too, not just cluster-scoped.
+//
+// Split across two TestSteps because Terraform evaluates ephemeral resources
+// at pre-apply plan time even when `depends_on` points at a managed resource
+// that is also being created in the same step. A single-step config that
+// bundles `kubectl_manifest.seed` and the ephemeral lookup against the same
+// cluster object fails the first plan with NotFound. Step 1 applies the seed
+// alone; step 2 keeps the seed in config (so it stays in state) and adds the
+// ephemeral block plus the assertion. By the time step 2's plan runs, the
+// ConfigMap is on the cluster and the ephemeral read succeeds.
 func TestAccKubectlEphemeralManifest_namespacedConfigMap(t *testing.T) {
 	t.Parallel()
-	// Skipped because the single-TestStep `seed kubectl_manifest -> ephemeral
-	// reads it` pattern fails at pre-apply plan: Terraform evaluates the
-	// ephemeral before the seed gets applied, even with `depends_on`. The fix
-	// is to split into multi-step Steps (apply seed in step 1, read via
-	// ephemeral in step 2) or move the seed into a PreConfig hook. Tracking
-	// issue: alekc/terraform-provider-kubectl#301.
-	t.Skip("blocked by alekc/terraform-provider-kubectl#301")
 
 	name := fmt.Sprintf("acc-ephemeral-cm-%s", acctest.RandString(8))
-	cfg := fmt.Sprintf(`
+	seedCfg := fmt.Sprintf(`
 resource "kubectl_manifest" "seed" {
   yaml_body = <<YAML
 apiVersion: v1
@@ -101,7 +103,8 @@ data:
   region: eu-west-1
 YAML
 }
-
+`, name)
+	readCfg := seedCfg + fmt.Sprintf(`
 ephemeral "kubectl_manifest" "cm" {
   api_version = "v1"
   kind        = "ConfigMap"
@@ -119,7 +122,7 @@ check "region_ok" {
     error_message = "expected region eu-west-1, got: ${ephemeral.kubectl_manifest.cm.results["region"]}"
   }
 }
-`, name, name)
+`, name)
 
 	resource.Test(t, resource.TestCase{
 		PreCheck: func() { testAccPreCheck(t) },
@@ -129,7 +132,13 @@ check "region_ok" {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: cfg,
+				// Step 1: apply the seed only. ConfigMap lands on the cluster.
+				Config: seedCfg,
+			},
+			{
+				// Step 2: ephemeral reads what step 1 created. Plan-time
+				// evaluation is now safe because the ConfigMap exists.
+				Config: readCfg,
 			},
 		},
 	})
@@ -239,15 +248,17 @@ var _ statecheck.StateCheck = ephemeralNotInState{}
 //
 // (The seed kubectl_manifest resource IS in state — that's expected and
 // distinct from the ephemeral block.)
+//
+// Split across two TestSteps for the same reason as
+// TestAccKubectlEphemeralManifest_namespacedConfigMap above: a single-step
+// seed-then-read config fails the pre-apply plan because Terraform evaluates
+// the ephemeral before the seed has been applied. The state-not-in
+// assertion lives on step 2, after both seed and ephemeral are in play.
 func TestAccKubectlEphemeralManifest_notInState(t *testing.T) {
 	t.Parallel()
-	// Skipped for the same reason as TestAccKubectlEphemeralManifest_namespacedConfigMap:
-	// the seed-then-read-ephemeral pattern fires the ephemeral too early at
-	// pre-apply plan. Tracking issue: alekc/terraform-provider-kubectl#301.
-	t.Skip("blocked by alekc/terraform-provider-kubectl#301")
 
 	name := fmt.Sprintf("acc-ephemeral-state-%s", acctest.RandString(8))
-	cfg := fmt.Sprintf(`
+	seedCfg := fmt.Sprintf(`
 resource "kubectl_manifest" "seed" {
   yaml_body = <<YAML
 apiVersion: v1
@@ -259,7 +270,8 @@ data:
   marker: present
 YAML
 }
-
+`, name)
+	readCfg := seedCfg + fmt.Sprintf(`
 ephemeral "kubectl_manifest" "cm" {
   api_version = "v1"
   kind        = "ConfigMap"
@@ -277,7 +289,7 @@ check "consumed" {
     error_message = "ephemeral resource did not fetch the expected marker"
   }
 }
-`, name, name)
+`, name)
 
 	resource.Test(t, resource.TestCase{
 		PreCheck: func() { testAccPreCheck(t) },
@@ -287,7 +299,14 @@ check "consumed" {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: cfg,
+				// Step 1: apply the seed only.
+				Config: seedCfg,
+			},
+			{
+				// Step 2: add the ephemeral block + the state-not-in
+				// assertion. The ephemeral never lands in state regardless
+				// of whether it's evaluated; the assertion proves that.
+				Config: readCfg,
 				ConfigStateChecks: []statecheck.StateCheck{
 					ephemeralNotInState{addressPrefix: "ephemeral.kubectl_manifest.cm"},
 				},
