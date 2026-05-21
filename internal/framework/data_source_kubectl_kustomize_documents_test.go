@@ -79,10 +79,18 @@ data "kubectl_kustomize_documents" "test" {
 			Check: resource.ComposeAggregateTestCheckFunc(
 				resource.TestCheckResourceAttr("data.kubectl_kustomize_documents.test", "documents.#", "2"),
 				resource.TestCheckResourceAttr("data.kubectl_kustomize_documents.test", "add_managed_by_label", "true"),
-				// The label string itself should appear in the rendered documents.
+				// Both rendered documents (Namespace + ConfigMap) should
+				// carry the managed-by label. Assert on each separately so
+				// a regression that drops the label on the second resource
+				// can't slide through under aggregate matchers.
 				resource.TestMatchResourceAttr(
 					"data.kubectl_kustomize_documents.test",
 					"documents.0",
+					regexp.MustCompile("app.kubernetes.io/managed-by"),
+				),
+				resource.TestMatchResourceAttr(
+					"data.kubectl_kustomize_documents.test",
+					"documents.1",
 					regexp.MustCompile("app.kubernetes.io/managed-by"),
 				),
 			),

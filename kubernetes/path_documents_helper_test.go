@@ -92,13 +92,41 @@ func TestValidatePathDocumentsVars(t *testing.T) {
 			input: map[string]any{"a": "x", "b": "y"},
 		},
 		{
-			name:    "list value rejected",
+			name:  "mixed primitive types ok",
+			input: map[string]any{"s": "hi", "n": 42, "b": true, "f": 3.14},
+		},
+		{
+			name:  "nil value tolerated",
+			input: map[string]any{"a": nil},
+		},
+		{
+			name:    "untyped list value rejected",
 			input:   map[string]any{"a": []any{"x", "y"}},
 			wantErr: "a (list)",
 		},
 		{
-			name:    "map value rejected",
+			name:    "concrete []string rejected via reflect",
+			input:   map[string]any{"a": []string{"x", "y"}},
+			wantErr: "a (list)",
+		},
+		{
+			name:    "fixed-size array rejected",
+			input:   map[string]any{"a": [2]int{1, 2}},
+			wantErr: "a (list)",
+		},
+		{
+			name:    "untyped map value rejected",
 			input:   map[string]any{"a": map[string]any{"k": "v"}},
+			wantErr: "a (map)",
+		},
+		{
+			name:    "concrete map[string]string rejected via reflect",
+			input:   map[string]any{"a": map[string]string{"k": "v"}},
+			wantErr: "a (map)",
+		},
+		{
+			name:    "concrete map[int]int rejected via reflect",
+			input:   map[string]any{"a": map[int]int{1: 2}},
 			wantErr: "a (map)",
 		},
 		{

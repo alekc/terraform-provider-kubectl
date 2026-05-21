@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -51,16 +52,27 @@ func ParsePathTemplate(s string, vars map[string]string) (string, error) {
 }
 
 // ValidatePathDocumentsVars returns a descriptive error if any of the
-// supplied vars contain non-scalar values (lists or maps). The framework
-// data source attaches this at its validators step; this helper exists so
-// the rule is unit-testable without spinning up the framework wiring.
+// supplied vars contain non-scalar values (lists or maps). Detects collections
+// by reflection, so concretely-typed slices / maps (`[]string`,
+// `map[int]int`, `[2]int`, ...) are caught alongside the more obvious
+// `[]any` / `map[string]any` shapes. Pure helper; unit-tested in
+// path_documents_helper_test.go.
+//
+// The framework-side data source no longer wires this in - its
+// `ElementType: types.StringType` schema rejects non-strings at decode
+// time - but the helper stays exported for callers that work with
+// already-decoded `map[string]any` and need a single source of truth on
+// what counts as primitive.
 func ValidatePathDocumentsVars(attr string, vars map[string]any) error {
 	var bad []string
 	for k, v := range vars {
-		switch v.(type) {
-		case []any:
+		if v == nil {
+			continue
+		}
+		switch reflect.ValueOf(v).Kind() {
+		case reflect.Slice, reflect.Array:
 			bad = append(bad, fmt.Sprintf("%s (list)", k))
-		case map[string]any:
+		case reflect.Map:
 			bad = append(bad, fmt.Sprintf("%s (map)", k))
 		}
 	}

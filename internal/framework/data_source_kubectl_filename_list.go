@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
-	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
@@ -78,10 +77,15 @@ func (d *filenameListDataSource) Read(ctx context.Context, req datasource.ReadRe
 	}
 	sort.Strings(items)
 
-	var elemhash string
+	// Build the id preimage with explicit length prefixes so different
+	// (i, s) sequences cannot collide: concatenating "i" + "s" without a
+	// separator lets `["1", "0"]` and `["", "10"]` both hash to "0110".
+	// Streaming through sha256.New + length-prefixed encoding makes the
+	// preimage unambiguous regardless of which characters appear in `s`.
+	idHash := sha256.New()
 	basenames := make([]string, 0, len(items))
 	for i, s := range items {
-		elemhash += strconv.Itoa(i) + s
+		fmt.Fprintf(idHash, "%d:%d:%s\n", i, len(s), s)
 		basenames = append(basenames, filepath.Base(s))
 	}
 
@@ -93,7 +97,7 @@ func (d *filenameListDataSource) Read(ctx context.Context, req datasource.ReadRe
 		return
 	}
 
-	data.ID = types.StringValue(fmt.Sprintf("%x", sha256.Sum256([]byte(elemhash))))
+	data.ID = types.StringValue(fmt.Sprintf("%x", idHash.Sum(nil)))
 	data.Matches = matchesVal
 	data.Basenames = basenamesVal
 
