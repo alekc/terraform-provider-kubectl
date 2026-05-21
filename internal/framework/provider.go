@@ -173,6 +173,10 @@ func (p *kubectlFrameworkProvider) Resources(_ context.Context) []func() resourc
 func (p *kubectlFrameworkProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewServerVersionDataSource,
+		NewFilenameListDataSource,
+		NewFileDocumentsDataSource,
+		NewPathDocumentsDataSource,
+		NewKustomizeDocumentsDataSource,
 	}
 }
 

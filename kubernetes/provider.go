@@ -181,10 +181,7 @@ func Provider() *schema.Provider {
 		},
 
 		DataSourcesMap: map[string]*schema.Resource{
-			"kubectl_filename_list":  dataSourceKubectlFilenameList(),
-			"kubectl_file_documents": dataSourceKubectlFileDocuments(),
-			"kubectl_path_documents": dataSourceKubectlPathDocuments(),
-			"kubectl_manifest":       dataSourceKubectlManifest(),
+			"kubectl_manifest": dataSourceKubectlManifest(),
 		},
 
 		ResourcesMap: map[string]*schema.Resource{
