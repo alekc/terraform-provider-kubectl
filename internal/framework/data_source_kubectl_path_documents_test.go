@@ -56,16 +56,15 @@ data "kubectl_path_documents" "test" {
 
 // TestAccKubectlDataSourcePathDocuments_vars proves the HCL template
 // renderer + vars substitution flow works end-to-end through the framework
-// data source.
+// data source. The fixture single-templated.yaml has one placeholder
+// `${the_kind}` which the test supplies.
 func TestAccKubectlDataSourcePathDocuments_vars(t *testing.T) {
 	t.Parallel()
 	cfg := fmt.Sprintf(`
 data "kubectl_path_documents" "test" {
   pattern = "%s/single-templated.yaml"
   vars = {
-    name        = "from-vars"
-    cron_spec   = "* * * * *"
-    image       = "alpine"
+    the_kind = "CronTab"
   }
 }
 `, pathDocumentsExamplesDir)
@@ -77,9 +76,13 @@ data "kubectl_path_documents" "test" {
 			Config: cfg,
 			Check: resource.ComposeAggregateTestCheckFunc(
 				resource.TestCheckResourceAttr("data.kubectl_path_documents.test", "documents.#", "1"),
-				// Asserting on the manifest map's key (which derives from the
-				// rendered manifest's name field) proves substitution landed.
 				resource.TestCheckResourceAttr("data.kubectl_path_documents.test", "manifests.%", "1"),
+				// The rendered document must contain the substituted kind.
+				resource.TestMatchResourceAttr(
+					"data.kubectl_path_documents.test",
+					"documents.0",
+					regexp.MustCompile(`kind:\s*CronTab`),
+				),
 			),
 		}},
 	})
@@ -87,20 +90,18 @@ data "kubectl_path_documents" "test" {
 
 // TestAccKubectlDataSourcePathDocuments_sensitiveVarsMergeWins exercises
 // the merge rule: when the same key appears in both `vars` and
-// `sensitive_vars`, the sensitive value takes precedence (matches the SDK v2
-// behaviour).
+// `sensitive_vars`, the sensitive value takes precedence. Uses the
+// single-templated.yaml fixture whose placeholder is `${the_kind}`.
 func TestAccKubectlDataSourcePathDocuments_sensitiveVarsMergeWins(t *testing.T) {
 	t.Parallel()
 	cfg := fmt.Sprintf(`
 data "kubectl_path_documents" "test" {
   pattern = "%s/single-templated.yaml"
   vars = {
-    name      = "non-sensitive-name"
-    cron_spec = "1 1 1 1 1"
-    image     = "non-sensitive"
+    the_kind = "PlainKind"
   }
   sensitive_vars = {
-    name = "sensitive-wins"
+    the_kind = "SensitiveKind"
   }
 }
 `, pathDocumentsExamplesDir)
@@ -113,6 +114,13 @@ data "kubectl_path_documents" "test" {
 			Check: resource.ComposeAggregateTestCheckFunc(
 				resource.TestCheckResourceAttr("data.kubectl_path_documents.test", "documents.#", "1"),
 				resource.TestCheckResourceAttr("data.kubectl_path_documents.test", "manifests.%", "1"),
+				// The rendered manifest's kind line must come from the
+				// sensitive value, not the non-sensitive one.
+				resource.TestMatchResourceAttr(
+					"data.kubectl_path_documents.test",
+					"documents.0",
+					regexp.MustCompile(`kind:\s*SensitiveKind`),
+				),
 			),
 		}},
 	})
