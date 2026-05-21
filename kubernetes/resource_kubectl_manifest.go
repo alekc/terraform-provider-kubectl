@@ -931,7 +931,12 @@ func getRestClientFromUnstructured(manifest *yaml.Manifest, provider *KubeProvid
 	}
 
 	discoveryWithTimeout := func(manifest *yaml.Manifest, provider *KubeProvider) <-chan *RestClientResult {
-		ch := make(chan *RestClientResult)
+		// Buffered so the producing goroutine can always deliver its result
+		// even when the timeout branch has already won and nothing is reading.
+		// Otherwise the discovery goroutine pins the discovery client and any
+		// cached HTTP responses until the process exits, leaking one goroutine
+		// per timed-out apply against a slow apiserver.
+		ch := make(chan *RestClientResult, 1)
 		go func() {
 			ch <- doGetRestClientFromUnstructured(manifest, provider)
 		}()
