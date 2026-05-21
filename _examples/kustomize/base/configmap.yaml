@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kustomize-fixture-cm
+  namespace: kustomize-fixture
+data:
+  region: eu-west-1
