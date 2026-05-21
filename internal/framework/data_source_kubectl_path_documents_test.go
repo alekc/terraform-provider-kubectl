@@ -145,9 +145,15 @@ data "kubectl_path_documents" "test" {
 			Config: cfg,
 			Check: resource.ComposeAggregateTestCheckFunc(
 				// File is loaded verbatim - the rendered manifest still has
-				// `${name}` etc as literal text, so the manifest map key
-				// reflects that.
+				// `${the_kind}` as literal text. Assert the placeholder
+				// survives end-to-end so a regression that silently re-enables
+				// template rendering can't slide past on document count alone.
 				resource.TestCheckResourceAttr("data.kubectl_path_documents.test", "documents.#", "1"),
+				resource.TestMatchResourceAttr(
+					"data.kubectl_path_documents.test",
+					"documents.0",
+					regexp.MustCompile(`\$\{the_kind\}`),
+				),
 			),
 		}},
 	})
