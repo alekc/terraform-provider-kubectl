@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/thedevsaddam/gojsonq/v2"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -103,7 +105,13 @@ func extractFields(jsonBody string, fields map[string]string) (map[string]string
 	for key, path := range fields {
 		value := gq.Reset().Find(path)
 		if value == nil {
-			return nil, fmt.Errorf("fields[%q]: path %q not found in fetched object", key, path)
+			exists, err := jsonPathExists(jsonBody, path)
+			if err != nil {
+				return nil, fmt.Errorf("fields[%q]: %w", key, err)
+			}
+			if !exists {
+				return nil, fmt.Errorf("fields[%q]: path %q not found in fetched object", key, path)
+			}
 		}
 		s, err := stringifyValue(value)
 		if err != nil {
@@ -112,6 +120,49 @@ func extractFields(jsonBody string, fields map[string]string) (map[string]string
 		out[key] = s
 	}
 	return out, nil
+}
+
+func jsonPathExists(jsonBody, path string) (bool, error) {
+	var doc interface{}
+	if err := json.Unmarshal([]byte(jsonBody), &doc); err != nil {
+		return false, fmt.Errorf("failed to parse fetched object JSON: %w", err)
+	}
+
+	current := doc
+	for _, part := range strings.Split(path, ".") {
+		if part == "" {
+			return false, nil
+		}
+
+		switch node := current.(type) {
+		case map[string]interface{}:
+			value, ok := node[part]
+			if !ok {
+				return false, nil
+			}
+			current = value
+		case []interface{}:
+			index, ok := parsePathIndex(part)
+			if !ok || index < 0 || index >= len(node) {
+				return false, nil
+			}
+			current = node[index]
+		default:
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func parsePathIndex(part string) (int, bool) {
+	if strings.HasPrefix(part, "[") && strings.HasSuffix(part, "]") {
+		part = strings.TrimPrefix(strings.TrimSuffix(part, "]"), "[")
+	}
+	index, err := strconv.Atoi(part)
+	if err != nil {
+		return 0, false
+	}
+	return index, true
 }
 
 func stringifyValue(v interface{}) (string, error) {

@@ -47,9 +47,10 @@ func TestExtractFields(t *testing.T) {
       "spec": {
         "replicas": 3,
         "active": true,
+        "lastScheduleTime": null,
         "containers": [
           {"name": "main", "image": "nginx:1.25"},
-          {"name": "sidecar", "image": "envoy:1.30"}
+          {"name": "sidecar", "image": "envoy:1.30", "resources": null}
         ]
       }
     }`
@@ -111,6 +112,18 @@ func TestExtractFields(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(got["first_container"]), &container))
 		assert.Equal(t, "main", container["name"])
 		assert.Equal(t, "nginx:1.25", container["image"])
+	})
+
+	t.Run("null object field is extracted as JSON null", func(t *testing.T) {
+		got, err := extractFields(body, map[string]string{"last_schedule": "spec.lastScheduleTime"})
+		require.NoError(t, err)
+		assert.Equal(t, "null", got["last_schedule"])
+	})
+
+	t.Run("null array element field is extracted as JSON null", func(t *testing.T) {
+		got, err := extractFields(body, map[string]string{"resources": "spec.containers.[1].resources"})
+		require.NoError(t, err)
+		assert.Equal(t, "null", got["resources"])
 	})
 
 	t.Run("missing path returns error naming the field key", func(t *testing.T) {
