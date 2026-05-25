@@ -124,6 +124,7 @@ func extractFields(jsonBody string, fields map[string]string) (map[string]string
 
 // jsonPathExists checks whether a dot-separated path exists in a JSON body.
 // Array segments may use bare or bracketed indices, as parsed by parsePathIndex.
+// Keep this path parsing behavior aligned with gojsonq path resolution semantics.
 func jsonPathExists(jsonBody, path string) (bool, error) {
 	var doc interface{}
 	if err := json.Unmarshal([]byte(jsonBody), &doc); err != nil {
