@@ -28,6 +28,7 @@ func TestStringifyValue(t *testing.T) {
 		{"map encoded as JSON", map[string]interface{}{"a": "b", "c": float64(1)}, `{"a":"b","c":1}`},
 		{"slice of strings encoded as JSON", []interface{}{"a", "b"}, `["a","b"]`},
 		{"nested map+slice encoded as JSON", map[string]interface{}{"x": []interface{}{float64(1), float64(2)}}, `{"x":[1,2]}`},
+		{"nil encoded as JSON null", nil, "null"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -47,9 +48,10 @@ func TestExtractFields(t *testing.T) {
       "spec": {
         "replicas": 3,
         "active": true,
+        "lastScheduleTime": null,
         "containers": [
           {"name": "main", "image": "nginx:1.25"},
-          {"name": "sidecar", "image": "envoy:1.30"}
+          {"name": "sidecar", "image": "envoy:1.30", "resources": null}
         ]
       }
     }`
@@ -113,11 +115,45 @@ func TestExtractFields(t *testing.T) {
 		assert.Equal(t, "nginx:1.25", container["image"])
 	})
 
+	t.Run("null object field is extracted as JSON null", func(t *testing.T) {
+		got, err := extractFields(body, map[string]string{"last_schedule": "spec.lastScheduleTime"})
+		require.NoError(t, err)
+		assert.Equal(t, "null", got["last_schedule"])
+	})
+
+	t.Run("null array element field is extracted as JSON null", func(t *testing.T) {
+		got, err := extractFields(body, map[string]string{"resources": "spec.containers.[1].resources"})
+		require.NoError(t, err)
+		assert.Equal(t, "null", got["resources"])
+	})
+
+	t.Run("bare array index against null field is extracted as JSON null", func(t *testing.T) {
+		got, err := extractFields(body, map[string]string{"resources": "spec.containers.1.resources"})
+		require.NoError(t, err)
+		assert.Equal(t, "null", got["resources"])
+	})
+
 	t.Run("missing path returns error naming the field key", func(t *testing.T) {
 		_, err := extractFields(body, map[string]string{"oops": "spec.doesnt.exist"})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), `fields["oops"]`)
 		assert.Contains(t, err.Error(), `"spec.doesnt.exist"`)
+	})
+
+	t.Run("out-of-range array index returns not found", func(t *testing.T) {
+		_, err := extractFields(body, map[string]string{"oops": "spec.containers.[2].image"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `fields["oops"]`)
+		assert.Contains(t, err.Error(), `"spec.containers.[2].image"`)
+		assert.Contains(t, err.Error(), "not found")
+	})
+
+	t.Run("traversal through null returns not found", func(t *testing.T) {
+		_, err := extractFields(body, map[string]string{"oops": "spec.lastScheduleTime.foo"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `fields["oops"]`)
+		assert.Contains(t, err.Error(), `"spec.lastScheduleTime.foo"`)
+		assert.Contains(t, err.Error(), "not found")
 	})
 
 	t.Run("multiple fields extracted independently", func(t *testing.T) {
