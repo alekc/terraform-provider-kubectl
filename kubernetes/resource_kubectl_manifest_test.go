@@ -1456,9 +1456,9 @@ func TestGetLiveManifestFilteredForUserProvidedOnly(t *testing.T) {
 			log.SetOutput(&out)
 			defer log.SetOutput(os.Stderr)
 
-			fields := getLiveManifestFields_WithIgnoredFields(tcase.ignored, userProvided, liveManifest)
+			fields := GetLiveManifestFields(tcase.ignored, userProvided, liveManifest)
 			assert.Equal(t, tcase.expectedFields, fields, "Expect the builder output to match")
-			fingerprint := getFingerprint(fields)
+			fingerprint := GetFingerprint(fields)
 			assert.Equal(t, tcase.expectedFingerprint, fingerprint, "Expect the builder output to match")
 
 			if tcase.expectedDrift {

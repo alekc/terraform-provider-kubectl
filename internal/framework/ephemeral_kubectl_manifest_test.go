@@ -76,7 +76,7 @@ check "ns_active" {
 // TestAccKubectlEphemeralManifest_namespacedConfigMap seeds a ConfigMap via
 // the SDK v2 kubectl_manifest resource (same muxed provider) and reads it
 // back via the ephemeral resource, asserting on an extracted scalar field.
-// Confirms the namespaced path through getRestClientFromUnstructured works
+// Confirms the namespaced path through GetRestClientFromUnstructured works
 // from the framework half too, not just cluster-scoped.
 //
 // Split across two TestSteps because Terraform evaluates ephemeral resources
