@@ -550,7 +550,7 @@ func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, m
 	}
 	var sensitiveFields []string
 	if raw, ok := d.GetOk("sensitive_fields"); ok {
-		sensitiveFields = expandStringList(raw.([]interface{}))
+		sensitiveFields = NormalizeSensitiveFields(expandStringList(raw.([]interface{})))
 	}
 	var waitFor *types.WaitFor
 	if raw, ok := d.GetOk("wait_for"); ok {
@@ -636,7 +636,7 @@ func resourceKubectlManifestDelete(ctx context.Context, d *schema.ResourceData, 
 	}
 	var sensitiveFields []string
 	if raw, ok := d.GetOk("sensitive_fields"); ok {
-		sensitiveFields = expandStringList(raw.([]interface{}))
+		sensitiveFields = NormalizeSensitiveFields(expandStringList(raw.([]interface{})))
 	}
 	if err := DeleteManifest(ctx, meta.(*KubeProvider), DeleteManifestOptions{
 		YAMLBody:          d.Get("yaml_body").(string),

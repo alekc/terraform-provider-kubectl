@@ -415,6 +415,10 @@ func (r *manifestResource) buildApplyOptions(ctx context.Context, data manifestR
 	allDiags.Append(d...)
 	sensitiveFields, d := extractStringList(ctx, data.SensitiveFields)
 	allDiags.Append(d...)
+	// Drop empty / whitespace-only entries so a misconfigured
+	// sensitive_fields = [""] does not suppress the Secret v1 default
+	// masking inside BuildObfuscatedYAML.
+	sensitiveFields = kubernetes.NormalizeSensitiveFields(sensitiveFields)
 	return kubernetes.ApplyManifestOptions{
 		YAMLBody:          data.YAMLBody.ValueString(),
 		OverrideNamespace: data.OverrideNamespace.ValueString(),
@@ -573,6 +577,7 @@ func (r *manifestResource) Delete(ctx context.Context, req resource.DeleteReques
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	sensitiveFields = kubernetes.NormalizeSensitiveFields(sensitiveFields)
 
 	opts := kubernetes.DeleteManifestOptions{
 		YAMLBody:          data.YAMLBody.ValueString(),
