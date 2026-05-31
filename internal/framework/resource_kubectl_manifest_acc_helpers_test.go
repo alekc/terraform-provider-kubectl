@@ -56,10 +56,17 @@ func testAccCheckkubectlExists(s *terraform.State) error {
 }
 
 // testAccCheckkubectlStatus probes the cluster for each kubectl_manifest
-// resource in state and reports either a missing resource that should exist
-// or, when shouldExist is false, silently tolerates a still-present resource
-// (matching the SDK v2 helper's lenient destroy semantics). The probe uses
-// the self-link stored as the Terraform resource ID.
+// resource in state and reports both directions strictly:
+//
+//   - shouldExist=true: every resource must be reachable; NotFound/Gone and
+//     any other probe error (RBAC, transport, malformed self-link) fails.
+//   - shouldExist=false: every resource must be absent; a successful probe
+//     (object still present) fails, as do non-404 probe errors.
+//
+// The SDK v2 original was lenient on the destroy direction (it returned nil
+// even when the object was still present) and masked non-404 probe errors
+// in both directions. The strict semantics here are intentional: a leaky
+// CheckDestroy lets tests claim success while orphaning cluster objects.
 func testAccCheckkubectlStatus(s *terraform.State, shouldExist bool) error {
 	cfg, err := clientcmd.BuildConfigFromFlags("", os.Getenv("KUBECONFIG"))
 	if err != nil {
@@ -74,8 +81,18 @@ func testAccCheckkubectlStatus(s *terraform.State, shouldExist bool) error {
 			continue
 		}
 		content, err := cs.RESTClient().Get().AbsPath(rs.Primary.ID).DoRaw(context.TODO())
-		if (errors.IsNotFound(err) || errors.IsGone(err)) && shouldExist {
-			return fmt.Errorf("failed to find resource at %s: %+v %v", rs.Primary.ID, err, string(content))
+		switch {
+		case err == nil && shouldExist:
+			continue
+		case err == nil && !shouldExist:
+			return fmt.Errorf("resource still exists at %s: %s", rs.Primary.ID, string(content))
+		case errors.IsNotFound(err) || errors.IsGone(err):
+			if shouldExist {
+				return fmt.Errorf("failed to find resource at %s: %w", rs.Primary.ID, err)
+			}
+			continue
+		default:
+			return fmt.Errorf("failed to query resource at %s: %w", rs.Primary.ID, err)
 		}
 	}
 	return nil
