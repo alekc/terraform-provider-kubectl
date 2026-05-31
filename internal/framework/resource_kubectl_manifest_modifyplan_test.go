@@ -99,3 +99,86 @@ func TestModifyPlan_WaitForMaxItems(t *testing.T) {
 		}
 	})
 }
+
+// TestModifyPlan_ForceConflictsRequiresSSA asserts ModifyPlan rejects
+// force_conflicts = true when server_side_apply = false (the silent
+// no-op that drives #309) and accepts every other combination,
+// including the Unknown-on-either-side case where the check cannot
+// yet decide and must fall through.
+func TestModifyPlan_ForceConflictsRequiresSSA(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := &manifestResource{}
+
+	cases := []struct {
+		name           string
+		forceConflicts types.Bool
+		serverSide     types.Bool
+		wantErr        bool
+		wantDetailSub  string
+	}{
+		{
+			name:           "both false: ok",
+			forceConflicts: types.BoolValue(false),
+			serverSide:     types.BoolValue(false),
+			wantErr:        false,
+		},
+		{
+			name:           "ssa true, force false: ok",
+			forceConflicts: types.BoolValue(false),
+			serverSide:     types.BoolValue(true),
+			wantErr:        false,
+		},
+		{
+			name:           "ssa true, force true: ok",
+			forceConflicts: types.BoolValue(true),
+			serverSide:     types.BoolValue(true),
+			wantErr:        false,
+		},
+		{
+			name:           "force true, ssa false: rejected",
+			forceConflicts: types.BoolValue(true),
+			serverSide:     types.BoolValue(false),
+			wantErr:        true,
+			wantDetailSub:  "force_conflicts = true has no effect with the default client-side apply",
+		},
+		{
+			name:           "force unknown: falls through (no error)",
+			forceConflicts: types.BoolUnknown(),
+			serverSide:     types.BoolValue(false),
+			wantErr:        false,
+		},
+		{
+			name:           "ssa unknown: falls through (no error)",
+			forceConflicts: types.BoolValue(true),
+			serverSide:     types.BoolUnknown(),
+			wantErr:        false,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := baseModel()
+			m.ForceConflicts = tc.forceConflicts
+			m.ServerSideApply = tc.serverSide
+			req, resp := newCreatePlan(ctx, t, m)
+
+			r.ModifyPlan(ctx, req, resp)
+
+			if tc.wantErr {
+				if !resp.Diagnostics.HasError() {
+					t.Fatalf("expected an error, got none")
+				}
+				if !strings.Contains(resp.Diagnostics.Errors()[0].Detail(), tc.wantDetailSub) {
+					t.Errorf("unexpected diagnostic: %s", resp.Diagnostics.Errors()[0].Detail())
+				}
+				return
+			}
+			if resp.Diagnostics.HasError() {
+				t.Fatalf("unexpected error: %+v", resp.Diagnostics)
+			}
+		})
+	}
+}

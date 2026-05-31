@@ -626,6 +626,28 @@ func (r *manifestResource) ModifyPlan(ctx context.Context, req resource.ModifyPl
 		return
 	}
 
+	// Reject force_conflicts = true without server_side_apply = true.
+	// kubectl's apply.ApplyOptions.Validate() rejects this combination
+	// upstream, but ApplyOptions.Run() (the path the provider uses as
+	// a library consumer) never calls Validate(), so on the client-side
+	// apply branch ForceConflicts is silently dropped. Catching it
+	// here surfaces a clear diagnostic during `terraform plan` rather
+	// than at apply time and prevents a no-op flag from masquerading
+	// as configured behaviour. Unknown values on either side fall
+	// through; the check re-runs once they resolve.
+	if !plan.ForceConflicts.IsUnknown() && !plan.ServerSideApply.IsUnknown() &&
+		plan.ForceConflicts.ValueBool() && !plan.ServerSideApply.ValueBool() {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("force_conflicts"),
+			"force_conflicts requires server_side_apply",
+			"force_conflicts = true has no effect with the default client-side "+
+				"apply (server_side_apply = false). Set server_side_apply = true "+
+				"if you want server-side apply with conflict overrides, or remove "+
+				"force_conflicts.",
+		)
+		return
+	}
+
 	if plan.YAMLBody.IsUnknown() {
 		return
 	}
