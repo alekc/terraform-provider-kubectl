@@ -413,6 +413,8 @@ func (r *manifestResource) buildApplyOptions(ctx context.Context, data manifestR
 	allDiags.Append(d...)
 	ignoreFields, d := extractStringList(ctx, data.IgnoreFields)
 	allDiags.Append(d...)
+	sensitiveFields, d := extractStringList(ctx, data.SensitiveFields)
+	allDiags.Append(d...)
 	return kubernetes.ApplyManifestOptions{
 		YAMLBody:          data.YAMLBody.ValueString(),
 		OverrideNamespace: data.OverrideNamespace.ValueString(),
@@ -424,6 +426,7 @@ func (r *manifestResource) buildApplyOptions(ctx context.Context, data manifestR
 		WaitFor:           waitFor,
 		Timeout:           defaultLifecycleTimeout,
 		IgnoreFields:      ignoreFields,
+		SensitiveFields:   sensitiveFields,
 	}, allDiags
 }
 
@@ -565,6 +568,12 @@ func (r *manifestResource) Delete(ctx context.Context, req resource.DeleteReques
 		return
 	}
 
+	sensitiveFields, d := extractStringList(ctx, data.SensitiveFields)
+	resp.Diagnostics.Append(d...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	opts := kubernetes.DeleteManifestOptions{
 		YAMLBody:          data.YAMLBody.ValueString(),
 		OverrideNamespace: data.OverrideNamespace.ValueString(),
@@ -572,6 +581,7 @@ func (r *manifestResource) Delete(ctx context.Context, req resource.DeleteReques
 		Wait:              data.Wait.ValueBool(),
 		DeleteCascade:     data.DeleteCascade.ValueString(),
 		Timeout:           defaultLifecycleTimeout,
+		SensitiveFields:   sensitiveFields,
 	}
 
 	if delErr := kubernetes.DeleteManifest(ctx, provider, opts); delErr != nil {

@@ -537,6 +537,7 @@ func NewApplyOptions(yamlBody string) *apply.ApplyOptions {
 	}
 	return applyOptions
 }
+
 // resourceKubectlManifestApply is the SDK v2 adapter: it shapes
 // ApplyManifestOptions from *schema.ResourceData, calls the shared
 // ApplyManifest helper in manifest_lifecycle.go, and writes the result
@@ -546,6 +547,10 @@ func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, m
 	var ignoreFields []string
 	if raw, ok := d.GetOk("ignore_fields"); ok {
 		ignoreFields = expandStringList(raw.([]interface{}))
+	}
+	var sensitiveFields []string
+	if raw, ok := d.GetOk("sensitive_fields"); ok {
+		sensitiveFields = expandStringList(raw.([]interface{}))
 	}
 	var waitFor *types.WaitFor
 	if raw, ok := d.GetOk("wait_for"); ok {
@@ -571,6 +576,7 @@ func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, m
 		WaitFor:           waitFor,
 		Timeout:           d.Timeout(timeoutKey),
 		IgnoreFields:      ignoreFields,
+		SensitiveFields:   sensitiveFields,
 	})
 	if err != nil {
 		return err
@@ -628,6 +634,10 @@ func resourceKubectlManifestDelete(ctx context.Context, d *schema.ResourceData, 
 	if v, ok := d.GetOk("override_namespace"); ok {
 		overrideNs = v.(string)
 	}
+	var sensitiveFields []string
+	if raw, ok := d.GetOk("sensitive_fields"); ok {
+		sensitiveFields = expandStringList(raw.([]interface{}))
+	}
 	if err := DeleteManifest(ctx, meta.(*KubeProvider), DeleteManifestOptions{
 		YAMLBody:          d.Get("yaml_body").(string),
 		OverrideNamespace: overrideNs,
@@ -635,6 +645,7 @@ func resourceKubectlManifestDelete(ctx context.Context, d *schema.ResourceData, 
 		Wait:              d.Get("wait").(bool),
 		DeleteCascade:     d.Get("delete_cascade").(string),
 		Timeout:           d.Timeout(schema.TimeoutDelete),
+		SensitiveFields:   sensitiveFields,
 	}); err != nil {
 		return err
 	}

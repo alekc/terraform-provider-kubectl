@@ -42,6 +42,11 @@ type ApplyManifestOptions struct {
 	WaitFor           *types.WaitFor // nil if no wait_for block
 	Timeout           time.Duration  // applies to wait_for_rollout and wait_for
 	IgnoreFields      []string       // for fingerprint calc
+	// SensitiveFields lists dotted paths whose values are masked in
+	// any [DEBUG]-level log emission of the manifest. Defaults to
+	// "data" and "stringData" on Secret v1 when empty; same semantics
+	// as BuildObfuscatedYAML. Apply does not otherwise interpret it.
+	SensitiveFields []string
 }
 
 // ApplyManifestResult captures everything the caller needs to write back
@@ -69,7 +74,8 @@ func ApplyManifest(ctx context.Context, provider *KubeProvider, opts ApplyManife
 		manifest.SetNamespace(opts.OverrideNamespace)
 	}
 
-	log.Printf("[DEBUG] %v apply kubernetes resource:\n%s", manifest, opts.YAMLBody)
+	log.Printf("[DEBUG] %v apply kubernetes resource:\n%s",
+		manifest, obfuscateForLog(opts.YAMLBody, opts.OverrideNamespace, opts.SensitiveFields))
 
 	restClient := GetRestClientFromUnstructured(manifest, provider)
 	if restClient.Error != nil {
@@ -302,6 +308,29 @@ func BuildObfuscatedYAML(yamlBody, overrideNamespace string, sensitiveFields []s
 	return string(out), nil
 }
 
+// obfuscateForLog returns the manifest YAML with sensitive fields
+// masked, suitable for inclusion in [DEBUG] log output. Fails closed:
+// if BuildObfuscatedYAML errors (malformed YAML, invalid sensitive
+// field path) the raw body is suppressed and a placeholder is
+// returned, so secret material never reaches the log even when the
+// caller's sensitive_fields config is wrong.
+//
+// The wrapped error is deliberately NOT included in the returned
+// string. BuildObfuscatedYAML surfaces errors from the k8s
+// nested-field machinery, which embed the offending value verbatim
+// ("supersecret is of the type string, expected ..."); echoing the
+// error into the log would defeat the obfuscation. Operators can
+// re-derive the failure by running `terraform plan`, where the same
+// helper runs against yaml_body_parsed and the error surfaces as a
+// regular (non-secret) plan diagnostic.
+func obfuscateForLog(yamlBody, overrideNamespace string, sensitiveFields []string) string {
+	out, err := BuildObfuscatedYAML(yamlBody, overrideNamespace, sensitiveFields)
+	if err != nil {
+		return "(yaml obfuscation failed; body suppressed)"
+	}
+	return out
+}
+
 // DeleteManifestOptions captures everything DeleteManifest reads from the
 // caller.
 type DeleteManifestOptions struct {
@@ -311,6 +340,11 @@ type DeleteManifestOptions struct {
 	Wait              bool
 	DeleteCascade     string // "Background" | "Foreground" | "" (auto)
 	Timeout           time.Duration
+	// SensitiveFields lists dotted paths whose values are masked in
+	// any [DEBUG]-level log emission of the manifest. Defaults to
+	// "data" and "stringData" on Secret v1 when empty; same semantics
+	// as BuildObfuscatedYAML. Delete does not otherwise interpret it.
+	SensitiveFields []string
 }
 
 // DeleteManifest deletes the manifest from the cluster and (optionally)
@@ -327,7 +361,8 @@ func DeleteManifest(ctx context.Context, provider *KubeProvider, opts DeleteMani
 		manifest.SetNamespace(opts.OverrideNamespace)
 	}
 
-	log.Printf("[DEBUG] %v delete kubernetes resource:\n%s", manifest, opts.YAMLBody)
+	log.Printf("[DEBUG] %v delete kubernetes resource:\n%s",
+		manifest, obfuscateForLog(opts.YAMLBody, opts.OverrideNamespace, opts.SensitiveFields))
 
 	restClient := GetRestClientFromUnstructured(manifest, provider)
 	if restClient.Error != nil {
