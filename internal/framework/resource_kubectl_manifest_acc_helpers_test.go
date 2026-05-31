@@ -2,6 +2,7 @@ package framework_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"testing"
@@ -60,13 +61,21 @@ func testAccCheckkubectlExists(s *terraform.State) error {
 //
 //   - shouldExist=true: every resource must be reachable; NotFound/Gone and
 //     any other probe error (RBAC, transport, malformed self-link) fails.
-//   - shouldExist=false: every resource must be absent; a successful probe
-//     (object still present) fails, as do non-404 probe errors.
+//   - shouldExist=false: every resource must be absent OR mid-deletion (a
+//     non-nil metadata.deletionTimestamp; the controller has the delete
+//     request and is finishing cleanup, e.g. Namespace in Terminating phase,
+//     Pod in its terminationGracePeriodSeconds window). A successful probe
+//     with no deletionTimestamp fails, as do non-404 probe errors.
 //
 // The SDK v2 original was lenient on the destroy direction (it returned nil
 // even when the object was still present) and masked non-404 probe errors
 // in both directions. The strict semantics here are intentional: a leaky
 // CheckDestroy lets tests claim success while orphaning cluster objects.
+// The deletionTimestamp escape hatch is needed because the testing harness
+// calls CheckDestroy synchronously after `terraform destroy` returns and
+// some resources (Namespace, Pod) only disappear after the controller
+// finishes async finalisers; a delete that DID happen looks identical to a
+// delete that DIDN'T at that moment, except for the timestamp.
 func testAccCheckkubectlStatus(s *terraform.State, shouldExist bool) error {
 	cfg, err := clientcmd.BuildConfigFromFlags("", os.Getenv("KUBECONFIG"))
 	if err != nil {
@@ -85,6 +94,9 @@ func testAccCheckkubectlStatus(s *terraform.State, shouldExist bool) error {
 		case err == nil && shouldExist:
 			continue
 		case err == nil && !shouldExist:
+			if isDeleting(content) {
+				continue
+			}
 			return fmt.Errorf("resource still exists at %s: %s", rs.Primary.ID, string(content))
 		case errors.IsNotFound(err) || errors.IsGone(err):
 			if shouldExist {
@@ -96,6 +108,24 @@ func testAccCheckkubectlStatus(s *terraform.State, shouldExist bool) error {
 		}
 	}
 	return nil
+}
+
+// isDeleting returns true when the JSON body decoded from a Kubernetes API
+// response carries a non-empty metadata.deletionTimestamp, which means the
+// controller has accepted a delete request and is finishing async cleanup
+// (finaliser drain, terminationGracePeriodSeconds, etc.). Used by
+// testAccCheckkubectlStatus to distinguish "destroy did not run" from
+// "destroy ran and the resource is mid-teardown".
+func isDeleting(body []byte) bool {
+	var probe struct {
+		Metadata struct {
+			DeletionTimestamp string `json:"deletionTimestamp"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return false
+	}
+	return probe.Metadata.DeletionTimestamp != ""
 }
 
 // Fixture helpers for kubectl_manifest acc tests. Each helper returns a
