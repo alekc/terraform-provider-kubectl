@@ -1,0 +1,54 @@
+name: "docstring-coverage"
+
+on:
+  pull_request:
+    branches:
+      - master
+    # Only run on PRs that touch Go source. Markdown / docs-only PRs cannot
+    # change the exported godoc surface, so skipping them saves runner time
+    # without weakening the gate. tests-docs-skip.yaml provides a paired
+    # ghost workflow for the docs-only path if this check ever becomes a
+    # required status; today it does not need one because the check is
+    # advisory and a missing run is treated as "not required" by branch
+    # protection.
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'tools/godoc-coverage/**'
+      - '.github/workflows/docstring-coverage.yaml'
+
+concurrency:
+  group: docstring-coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+      - name: Run godoc-coverage
+        # Scope: the framework manifest port and the shared lifecycle
+        # helpers extracted in #306, plus the gate tool itself. Rest of
+        # internal/framework (data sources, ephemeral, server_version,
+        # provider) and the SDK v2 surface in kubernetes/ predate this
+        # gate and are intentionally out of scope until they are brought
+        # up to threshold or rewritten under the framework. Add files to
+        # this list (or switch to ./pkg/... once a whole package is
+        # documented) as the migration advances. Threshold matches the
+        # CodeRabbit pre-merge default; raise once the framework half is
+        # fully documented.
+        run: |
+          go run ./tools/godoc-coverage \
+            --threshold=80 \
+            ./internal/framework/resource_kubectl_manifest.go \
+            ./internal/framework/resource_kubectl_manifest_move.go \
+            ./kubernetes/manifest_lifecycle.go \
+            ./tools/godoc-coverage/...

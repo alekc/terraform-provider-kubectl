@@ -102,10 +102,17 @@ type waitForFieldModel struct {
 // timeouts {} block plumbing lands (separate Phase D follow-up commit).
 const defaultLifecycleTimeout = 10 * time.Minute
 
+// Metadata sets the Terraform type name for this resource to
+// "<provider>_manifest" (e.g. "kubectl_manifest"). Implements
+// resource.Resource.
 func (r *manifestResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_manifest"
 }
 
+// Schema returns the resource schema (Version 1) for kubectl_manifest.
+// The attribute set, types, and default values are byte-compatible with
+// the SDK v2 implementation so existing state round-trips without churn
+// after the cutover. Implements resource.Resource.
 func (r *manifestResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Version: 1,
@@ -211,9 +218,9 @@ func (r *manifestResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Description: "When true, any change to `yaml_body` re-creates the resource instead of updating it in place. Default false.",
 			},
 			"upgrade_api_version": schema.BoolAttribute{
-				Optional: true,
-				Computed: true,
-				Default:  booldefault.StaticBool(false),
+				Optional:    true,
+				Computed:    true,
+				Default:     booldefault.StaticBool(false),
 				Description: "When true, a change to `api_version` is applied as an in-place update rather than a delete-and-recreate. Relies on the Kubernetes API server's ability to represent the same object across multiple API versions. Default false.",
 			},
 			"server_side_apply": schema.BoolAttribute{
@@ -264,7 +271,7 @@ func (r *manifestResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Description: "When true, validate the YAML against the cluster's OpenAPI schema before applying. Default true.",
 			},
 			"delete_cascade": schema.StringAttribute{
-				Optional: true,
+				Optional:    true,
 				Description: "Propagation policy for Delete. One of `Background` or `Foreground`. When unset, defaults to `Foreground` if `wait = true`, otherwise `Background`.",
 				Validators: []validator.String{
 					stringOneOfValidator{allowed: []string{"Background", "Foreground"}},
@@ -320,6 +327,12 @@ func (r *manifestResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 	}
 }
 
+// Configure receives the muxed provider data: a callback that resolves
+// to the SDK v2 *KubeProvider once the SDK v2 half has Configure'd. The
+// callback is stored on the resource and dereferenced lazily inside
+// kubeProvider() so framework CRUD methods see the configured client
+// regardless of which half ran Configure first. Implements
+// resource.ResourceWithConfigure.
 func (r *manifestResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
@@ -424,6 +437,10 @@ func applyResultToModel(result *kubernetes.ApplyManifestResult, data *manifestRe
 	data.LiveManifestInCluster = types.StringValue(result.LiveManifestInClusterFingerprint)
 }
 
+// Create applies the manifest to the cluster and persists the resulting
+// fingerprints (uid, live_uid, yaml_incluster, live_manifest_incluster)
+// to state. Delegates to kubernetes.ApplyManifest, so behaviour matches
+// the SDK v2 half line-for-line. Implements resource.Resource.
 func (r *manifestResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var data manifestResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
@@ -453,6 +470,10 @@ func (r *manifestResource) Create(ctx context.Context, req resource.CreateReques
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
+// Read refreshes live_uid and live_manifest_incluster from the cluster.
+// If the resource has disappeared (ReadManifest reports !Found, or the
+// REST mapper rejects the kind), the resource is removed from state so
+// the next plan recreates it. Implements resource.Resource.
 func (r *manifestResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var data manifestResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
@@ -494,6 +515,10 @@ func (r *manifestResource) Read(ctx context.Context, req resource.ReadRequest, r
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
+// Update reapplies the manifest in place. The shared kubernetes.ApplyManifest
+// helper is idempotent, so Create and Update share the same code path; the
+// only difference is which framework request type the plan arrives on.
+// Implements resource.Resource.
 func (r *manifestResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var data manifestResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
@@ -523,6 +548,10 @@ func (r *manifestResource) Update(ctx context.Context, req resource.UpdateReques
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
+// Delete removes the manifest from the cluster, honouring apply_only,
+// wait, and delete_cascade. Delegates to kubernetes.DeleteManifest; with
+// apply_only = true the call is a no-op so the resource is simply
+// dropped from state. Implements resource.Resource.
 func (r *manifestResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	var data manifestResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
@@ -701,14 +730,23 @@ type stringOneOfValidator struct {
 	allowed []string
 }
 
+// Description returns a one-line plaintext summary of the allowed
+// values. Implements validator.String.
 func (v stringOneOfValidator) Description(_ context.Context) string {
 	return fmt.Sprintf("value must be one of %v", v.allowed)
 }
 
+// MarkdownDescription returns the same summary as Description; no
+// Markdown is needed for a list of allowed scalar values. Implements
+// validator.String.
 func (v stringOneOfValidator) MarkdownDescription(ctx context.Context) string {
 	return v.Description(ctx)
 }
 
+// ValidateString rejects any non-null, non-unknown value that does not
+// appear in the allowed slice. Null and unknown pass through so this
+// validator composes cleanly with Optional + Computed attributes.
+// Implements validator.String.
 func (v stringOneOfValidator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
 	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
 		return

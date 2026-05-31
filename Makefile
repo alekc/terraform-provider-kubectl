@@ -58,4 +58,14 @@ fmtcheck:
 errcheck:
 	@sh -c "'$(CURDIR)/scripts/errcheck.sh'"
 
-.PHONY: build dist test testacc publish vet fmt fmtcheck errcheck
+# Runs the same gate that .github/workflows/docstring-coverage.yaml runs in
+# CI. Keep the file list and threshold in lockstep with that workflow.
+doc-coverage:
+	go run ./tools/godoc-coverage \
+		--threshold=80 \
+		./internal/framework/resource_kubectl_manifest.go \
+		./internal/framework/resource_kubectl_manifest_move.go \
+		./kubernetes/manifest_lifecycle.go \
+		./tools/godoc-coverage/...
+
+.PHONY: build dist test testacc publish vet fmt fmtcheck errcheck doc-coverage
