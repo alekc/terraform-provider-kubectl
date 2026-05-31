@@ -228,6 +228,22 @@ metadata:
 		},
 		CustomizeDiff: func(context context.Context, d *schema.ResourceDiff, meta interface{}) error {
 
+			// Reject force_conflicts = true without server_side_apply = true.
+			// kubectl's apply.ApplyOptions.Validate() rejects this combination
+			// upstream, but ApplyOptions.Run() (the path the provider uses as a
+			// library consumer) never calls Validate(), so on the client-side
+			// apply branch ForceConflicts is silently dropped. Surfacing it
+			// here during `terraform plan` is the same gate the framework half
+			// applies in ModifyPlan; both paths must catch the misconfig so
+			// the muxed provider's behaviour is consistent. Unknown values on
+			// either side fall through; the check re-runs once they resolve.
+			if d.NewValueKnown("force_conflicts") && d.NewValueKnown("server_side_apply") &&
+				d.Get("force_conflicts").(bool) && !d.Get("server_side_apply").(bool) {
+				return fmt.Errorf("force_conflicts = true has no effect with the default " +
+					"client-side apply (server_side_apply = false). Set server_side_apply = true " +
+					"if you want server-side apply with conflict overrides, or remove force_conflicts")
+			}
+
 			// trigger a recreation if the yaml-body has any pending changes
 			if d.Get("force_new").(bool) {
 				_ = d.ForceNew("yaml_body")
