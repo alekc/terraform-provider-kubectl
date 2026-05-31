@@ -13,7 +13,7 @@ import (
 )
 
 func TestKubectlManifest_RetryOnFailure(t *testing.T) {
-	_ = os.Setenv("KUBECTL_PROVIDER_APPLY_RETRY_COUNT", "5")
+	t.Setenv("KUBECTL_PROVIDER_APPLY_RETRY_COUNT", "5")
 
 	config := `
 resource "kubectl_manifest" "test" {
@@ -1231,7 +1231,7 @@ func visit(files *[]string) filepath.WalkFunc {
 // state. Catches example drift (e.g. a YAML the reference docs claim
 // works but no longer does against the latest k8s).
 func TestAcckubectlYaml(t *testing.T) {
-	_ = os.Setenv("KUBECTL_PROVIDER_APPLY_RETRY_COUNT", "5")
+	t.Setenv("KUBECTL_PROVIDER_APPLY_RETRY_COUNT", "5")
 	var files []string
 	root := "../../_examples"
 	err := filepath.Walk(root, visit(&files))
