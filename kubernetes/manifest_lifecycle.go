@@ -283,7 +283,13 @@ func BuildObfuscatedYAML(yamlBody, overrideNamespace string, sensitiveFields []s
 	if overrideNamespace != "" {
 		obfuscated.SetNamespace(overrideNamespace)
 	}
-	fields := sensitiveFields
+	// Normalize before the Secret v1 default check. Without this,
+	// sensitiveFields = [""] (a common shape from a misconfigured HCL
+	// list or a templated variable that resolves to "") would make
+	// len(fields) != 0 and silently suppress the default "data" /
+	// "stringData" masking on a Secret manifest, leaking the very
+	// payload the masking exists to hide.
+	fields := NormalizeSensitiveFields(sensitiveFields)
 	if len(fields) == 0 && obfuscated.GetKind() == "Secret" && obfuscated.GetAPIVersion() == "v1" {
 		fields = []string{"data", "stringData"}
 	}
@@ -306,6 +312,31 @@ func BuildObfuscatedYAML(yamlBody, overrideNamespace string, sensitiveFields []s
 		return "", fmt.Errorf("failed to serialise obfuscated yaml: %v", marshalErr)
 	}
 	return string(out), nil
+}
+
+// NormalizeSensitiveFields returns s with empty / whitespace-only
+// entries removed. Returns nil rather than an empty slice so callers
+// that use `len(out) == 0` to detect "no fields" (e.g. for the
+// Secret v1 default in BuildObfuscatedYAML) behave the same way they
+// would for an unset input. SDK v2 and plugin-framework adapters
+// call this on user input from the sensitive_fields attribute
+// before populating ApplyManifestOptions / DeleteManifestOptions, so
+// a misconfigured `sensitive_fields = [""]` collapses to nil rather
+// than masking the default-secret-field path.
+func NormalizeSensitiveFields(s []string) []string {
+	if len(s) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(s))
+	for _, v := range s {
+		if strings.TrimSpace(v) != "" {
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // obfuscateForLog returns the manifest YAML with sensitive fields

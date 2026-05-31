@@ -54,6 +54,61 @@ data:
 		"non-sensitive sibling values must round-trip")
 }
 
+// TestObfuscateForLog_BlankEntriesDontSuppressSecretDefault covers the
+// CodeRabbit follow-up to #308: a misconfigured sensitive_fields list
+// like [""] previously made `len(fields) != 0` in BuildObfuscatedYAML,
+// silently skipping the Secret v1 default ("data" + "stringData") and
+// leaking the very payload the masking exists to hide. With the
+// NormalizeSensitiveFields fix, blank-only input collapses to nil and
+// the default re-activates.
+func TestObfuscateForLog_BlankEntriesDontSuppressSecretDefault(t *testing.T) {
+	const yamlBody = `apiVersion: v1
+kind: Secret
+metadata:
+  name: leak-demo
+  namespace: default
+stringData:
+  password: supersecret
+`
+	for name, in := range map[string][]string{
+		"single empty":     {""},
+		"whitespace only":  {"   ", "\t"},
+		"mixed empty real": {"", "   "},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out := obfuscateForLog(yamlBody, "", in)
+			assert.NotContains(t, out, "supersecret",
+				"blank-only sensitive_fields must still trigger Secret v1 default masking, got: %q", out)
+			assert.Contains(t, out, "(sensitive value)")
+		})
+	}
+}
+
+// TestNormalizeSensitiveFields exercises the exported normalizer
+// directly: empties / whitespace / nil collapse to nil; real entries
+// pass through unchanged.
+func TestNormalizeSensitiveFields(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"nil", nil, nil},
+		{"empty slice", []string{}, nil},
+		{"single empty", []string{""}, nil},
+		{"whitespace only", []string{"  ", "\t\n"}, nil},
+		{"real entry", []string{"data.password"}, []string{"data.password"}},
+		{"real + blank", []string{"data.password", ""}, []string{"data.password"}},
+		{"blank + real", []string{"", "data.token"}, []string{"data.token"}},
+		{"two reals", []string{"a", "b"}, []string{"a", "b"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, NormalizeSensitiveFields(tc.in))
+		})
+	}
+}
+
 // TestObfuscateForLog_FailsClosed covers the security-critical fallback:
 // a malformed sensitive_fields path makes BuildObfuscatedYAML return an
 // error, and the helper must NOT emit the raw body in that case.
