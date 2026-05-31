@@ -170,6 +170,28 @@ func TestMoveFromGavinbunney_Skips(t *testing.T) {
 	}
 }
 
+// TestMoveFromGavinbunney_UnsupportedSchemaVersion asserts that a matched
+// request with a source schema version other than 1 is rejected with an
+// error rather than decoded against the version-1 source schema.
+func TestMoveFromGavinbunney_UnsupportedSchemaVersion(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	req := resource.MoveStateRequest{
+		SourceTypeName:        gavinbunneyManifestTypeName,
+		SourceProviderAddress: "registry.terraform.io/gavinbunney/kubectl",
+		SourceSchemaVersion:   2,
+		SourceState:           newSourceState(ctx, t, sampleGavinbunneySource()),
+	}
+	resp := &resource.MoveStateResponse{TargetState: newTargetState(ctx, t)}
+
+	moveFromGavinbunneyManifest(ctx, req, resp)
+
+	if !resp.Diagnostics.HasError() {
+		t.Fatalf("expected an error diagnostic for unsupported source schema version")
+	}
+}
+
 // TestMoveFromGavinbunney_MatchedButNilSource asserts that once the type name
 // and provider address match, a nil SourceState is a hard error (not a silent
 // skip), so the practitioner sees a real message instead of "implementation

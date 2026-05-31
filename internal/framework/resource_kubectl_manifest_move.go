@@ -159,6 +159,18 @@ func moveFromGavinbunneyManifest(ctx context.Context, req resource.MoveStateRequ
 	// From here the request is unambiguously ours, so a failure must surface
 	// as an error rather than a silent skip (a silent skip would make the
 	// framework report "implementation not found", masking the real cause).
+
+	// gavinbunneyManifestSourceSchema is Version 1. Refuse any other source
+	// schema version rather than decoding an incompatible shape against it.
+	if req.SourceSchemaVersion != 1 {
+		resp.Diagnostics.AddError(
+			"Unable to move kubectl_manifest from gavinbunney/kubectl",
+			"Unsupported source schema version "+strconv.FormatInt(req.SourceSchemaVersion, 10)+". "+
+				"This provider can only move from gavinbunney/kubectl kubectl_manifest at schema version 1.",
+		)
+		return
+	}
+
 	if req.SourceState == nil {
 		resp.Diagnostics.AddError(
 			"Unable to move kubectl_manifest from gavinbunney/kubectl",

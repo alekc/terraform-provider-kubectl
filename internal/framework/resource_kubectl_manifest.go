@@ -585,6 +585,18 @@ func (r *manifestResource) ModifyPlan(ctx context.Context, req resource.ModifyPl
 		resp.RequiresReplace = append(resp.RequiresReplace, path.Root("yaml_body"))
 	}
 
+	// Enforce MaxItems = 1 on wait_for here, since the schema's ListNestedBlock
+	// cannot express it (framework limitation). Runs for both create and update
+	// plans because ModifyPlan fires for both.
+	if !plan.WaitFor.IsNull() && !plan.WaitFor.IsUnknown() && len(plan.WaitFor.Elements()) > 1 {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("wait_for"),
+			"too many wait_for blocks",
+			"only a single wait_for block is allowed (MaxItems=1)",
+		)
+		return
+	}
+
 	if plan.YAMLBody.IsUnknown() {
 		return
 	}

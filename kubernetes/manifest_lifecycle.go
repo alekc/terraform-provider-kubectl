@@ -13,7 +13,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	meta_v1_unstruct "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/cli-runtime/pkg/printers"
 	k8sresource "k8s.io/cli-runtime/pkg/resource"
 	"k8s.io/client-go/dynamic"
@@ -84,10 +83,21 @@ func ApplyManifest(ctx context.Context, provider *KubeProvider, opts ApplyManife
 		return nil, fmt.Errorf("%v failed to convert to yaml: %+v", manifest, err)
 	}
 
-	tmpfile, _ := os.CreateTemp("", "*kubectl_manifest.yaml")
-	_, _ = tmpfile.Write([]byte(yamlBody))
-	_ = tmpfile.Close()
-	defer os.Remove(tmpfile.Name())
+	tmpfile, err := os.CreateTemp("", "*kubectl_manifest.yaml")
+	if err != nil {
+		return nil, fmt.Errorf("%v failed to create temp file for apply: %+v", manifest, err)
+	}
+	defer func() {
+		if rmErr := os.Remove(tmpfile.Name()); rmErr != nil {
+			log.Printf("[WARN] failed to remove temp file %s: %v", tmpfile.Name(), rmErr)
+		}
+	}()
+	if _, err := tmpfile.Write([]byte(yamlBody)); err != nil {
+		return nil, fmt.Errorf("%v failed to write temp file for apply: %+v", manifest, err)
+	}
+	if err := tmpfile.Close(); err != nil {
+		return nil, fmt.Errorf("%v failed to close temp file for apply: %+v", manifest, err)
+	}
 
 	applyOptions := NewApplyOptions(yamlBody)
 	applyOptions.Builder = k8sresource.NewBuilder(k8sresource.RESTClientGetter(provider))
@@ -112,10 +122,6 @@ func ApplyManifest(ctx context.Context, provider *KubeProvider, opts ApplyManife
 	if manifest.HasNamespace() {
 		applyOptions.Namespace = manifest.GetNamespace()
 	}
-	// Reference genericclioptions to keep the import meaningful even if a
-	// future refactor drops some of the fields above; the apply options
-	// constructor itself uses the package internally.
-	_ = genericclioptions.NoopRecorder{}
 
 	log.Printf("[INFO] %s perform apply of manifest", manifest)
 
