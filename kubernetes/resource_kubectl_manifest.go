@@ -6,14 +6,12 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
-	"os"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"k8s.io/cli-runtime/pkg/genericiooptions"
-	k8sdelete "k8s.io/kubectl/pkg/cmd/delete"
 
 	"github.com/alekc/terraform-provider-kubectl/flatten"
 	"github.com/alekc/terraform-provider-kubectl/internal/types"
@@ -27,14 +25,11 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
-	"k8s.io/cli-runtime/pkg/printers"
 	"k8s.io/kubectl/pkg/scheme"
-	"k8s.io/kubectl/pkg/validation"
 
 	backoff "github.com/cenkalti/backoff/v4"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	apiMachineryTypes "k8s.io/apimachinery/pkg/types"
-	k8sresource "k8s.io/cli-runtime/pkg/resource"
 	apiregistration "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
 	"k8s.io/kubectl/pkg/cmd/apply"
 
@@ -44,7 +39,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	meta_v1_unstruct "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	k8sschema "k8s.io/apimachinery/pkg/runtime/schema"
-	yamlWriter "sigs.k8s.io/yaml"
 
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
@@ -171,7 +165,7 @@ metadata:
 				if err != nil {
 					return nil, err
 				}
-				restClient := getRestClientFromUnstructured(manifest, meta.(*KubeProvider))
+				restClient := GetRestClientFromUnstructured(manifest, meta.(*KubeProvider))
 
 				if restClient.Error != nil {
 					return []*schema.ResourceData{}, fmt.Errorf("failed to create kubernetes rest client for import of resource: %s %s %s %+v %s %s", apiVersion, kind, name, restClient.Error, yamlString, manifest.Raw)
@@ -193,7 +187,9 @@ metadata:
 				_ = d.Set("uid", metaObjLive.GetUID())
 				_ = d.Set("live_uid", metaObjLive.GetUID())
 
-				liveManifestFingerprint := getLiveManifestFingerprint(d, metaObjLive, metaObjLive)
+				// Import has no user-provided manifest yet, so ignore_fields
+				// is always empty; pass nil for the trim list.
+				liveManifestFingerprint := GetLiveManifestFields(nil, metaObjLive, metaObjLive)
 				_ = d.Set("yaml_incluster", liveManifestFingerprint)
 				_ = d.Set("live_manifest_incluster", liveManifestFingerprint)
 
@@ -266,45 +262,24 @@ metadata:
 				_ = d.ForceNew("api_version")
 			}
 
-			// set the yaml_body_parsed field to provided value and obfuscate the yaml_body values manually
-			// this allows us to show a nice diff to the users with specific fields obfuscated, whilst storing the
-			// real value to apply in yaml_body
-			obfuscatedYaml, _ := yaml.ParseYAML(d.Get("yaml_body").(string))
-			if obfuscatedYaml.Raw.Object == nil {
-				obfuscatedYaml.Raw.Object = make(map[string]interface{})
-			}
-
-			if overrideNamespace, ok := d.GetOk("override_namespace"); ok {
-				obfuscatedYaml.SetNamespace(overrideNamespace.(string))
-			}
-
+			// Set yaml_body_parsed to the manifest with sensitive fields
+			// masked, so the plan shows a useful diff without leaking secret
+			// values. Shared with the plugin-framework half via
+			// BuildObfuscatedYAML so both code paths obfuscate identically.
 			var sensitiveFields []string
-			sensitiveFieldsRaw, hasSensitiveFields := d.GetOk("sensitive_fields")
-			if hasSensitiveFields {
+			if sensitiveFieldsRaw, ok := d.GetOk("sensitive_fields"); ok {
 				sensitiveFields = expandStringList(sensitiveFieldsRaw.([]interface{}))
-			} else if parsedYaml.GetKind() == "Secret" && parsedYaml.GetAPIVersion() == "v1" {
-				sensitiveFields = []string{"data", "stringData"}
+			}
+			overrideNs := ""
+			if ns, ok := d.GetOk("override_namespace"); ok {
+				overrideNs = ns.(string)
+			}
+			obfuscatedYaml, obfErr := BuildObfuscatedYAML(d.Get("yaml_body").(string), overrideNs, sensitiveFields)
+			if obfErr != nil {
+				return obfErr
 			}
 
-			for _, s := range sensitiveFields {
-				fields := strings.Split(s, ".")
-				_, fieldExists, err := meta_v1_unstruct.NestedFieldNoCopy(obfuscatedYaml.Raw.Object, fields...)
-				if fieldExists {
-					err = meta_v1_unstruct.SetNestedField(obfuscatedYaml.Raw.Object, "(sensitive value)", fields...)
-					if err != nil {
-						return fmt.Errorf("failed to obfuscate sensitive field '%s': %+v\nNote: only map values are supported!", s, err)
-					}
-				} else {
-					log.Printf("[TRACE] sensitive field %s skipped does not exist", s)
-				}
-			}
-
-			obfuscatedYamlBytes, obfuscatedYamlBytesErr := yamlWriter.Marshal(obfuscatedYaml.Raw.Object)
-			if obfuscatedYamlBytesErr != nil {
-				return fmt.Errorf("failed to serialized obfuscated yaml: %+v", obfuscatedYamlBytesErr)
-			}
-
-			_ = d.SetNew("yaml_body_parsed", string(obfuscatedYamlBytes))
+			_ = d.SetNew("yaml_body_parsed", obfuscatedYaml)
 
 			// Get the UID of the K8s resource as it was when the `resourceKubectlManifestCreate` func completed.
 			createdAtUID := d.Get("uid").(string)
@@ -342,8 +317,8 @@ metadata:
 				Version: 0,
 				Type:    resourceKubectlManifestV0().CoreConfigSchema().ImpliedType(),
 				Upgrade: func(ctx context.Context, rawState map[string]interface{}, meta interface{}) (map[string]interface{}, error) {
-					rawState["yaml_incluster"] = getFingerprint(rawState["yaml_incluster"].(string))
-					rawState["live_manifest_incluster"] = getFingerprint(rawState["live_manifest_incluster"].(string))
+					rawState["yaml_incluster"] = GetFingerprint(rawState["yaml_incluster"].(string))
+					rawState["live_manifest_incluster"] = GetFingerprint(rawState["live_manifest_incluster"].(string))
 					return rawState, nil
 				},
 			},
@@ -542,8 +517,8 @@ var (
 	}
 )
 
-// newApplyOptions defines flags and other configuration parameters for the `apply` command
-func newApplyOptions(yamlBody string) *apply.ApplyOptions {
+// NewApplyOptions defines flags and other configuration parameters for the `apply` command
+func NewApplyOptions(yamlBody string) *apply.ApplyOptions {
 	applyOptions := &apply.ApplyOptions{
 		PrintFlags: genericclioptions.NewPrintFlags("created").WithTypeSetter(scheme.Scheme),
 
@@ -562,271 +537,108 @@ func newApplyOptions(yamlBody string) *apply.ApplyOptions {
 	}
 	return applyOptions
 }
-// resourceKubectlManifestApply applies the manifest and (when configured)
-// waits for the resource's rollout to complete. The caller passes the
-// timeout key matching the active operation (schema.TimeoutCreate or
-// schema.TimeoutUpdate); it determines which user-configured `timeouts`
-// block governs the wait_for_rollout / wait_for loops.
+// resourceKubectlManifestApply is the SDK v2 adapter: it shapes
+// ApplyManifestOptions from *schema.ResourceData, calls the shared
+// ApplyManifest helper in manifest_lifecycle.go, and writes the result
+// back to state. All real apply logic lives in ApplyManifest so the
+// plugin-framework half can call the same code path.
 func resourceKubectlManifestApply(ctx context.Context, d *schema.ResourceData, meta interface{}, timeoutKey string) error {
-	yamlBody := d.Get("yaml_body").(string)
-
-	// convert hcl into an unstructured object
-	manifest, err := yaml.ParseYAML(yamlBody)
-	if err != nil {
-		return fmt.Errorf("failed to parse kubernetes resource: %+v", err)
+	var ignoreFields []string
+	if raw, ok := d.GetOk("ignore_fields"); ok {
+		ignoreFields = expandStringList(raw.([]interface{}))
 	}
-
-	if overrideNamespace, ok := d.GetOk("override_namespace"); ok {
-		manifest.SetNamespace(overrideNamespace.(string))
-	}
-
-	log.Printf("[DEBUG] %v apply kubernetes resource:\n%s", manifest, yamlBody)
-
-	// Create a client to talk to the resource API based on the APIVersion and Kind
-	// defined in the YAML
-	restClient := getRestClientFromUnstructured(manifest, meta.(*KubeProvider))
-	if restClient.Error != nil {
-		return fmt.Errorf("%v failed to create kubernetes rest client for update of resource: %+v", manifest, restClient.Error)
-	}
-
-	// Update the resource in Kubernetes, using a temp file
-	yamlBody, err = manifest.AsYAML()
-	if err != nil {
-		return fmt.Errorf("%v failed to convert to yaml: %+v", manifest, err)
-	}
-
-	tmpfile, _ := os.CreateTemp("", "*kubectl_manifest.yaml")
-	_, _ = tmpfile.Write([]byte(yamlBody))
-	_ = tmpfile.Close()
-
-	applyOptions := newApplyOptions(yamlBody)
-	applyOptions.Builder = k8sresource.NewBuilder(k8sresource.RESTClientGetter(meta.(*KubeProvider)))
-	applyOptions.DeleteOptions = &k8sdelete.DeleteOptions{
-		FilenameOptions: k8sresource.FilenameOptions{
-			Filenames: []string{tmpfile.Name()},
-		},
-	}
-	applyOptions.ToPrinter = func(string) (printers.ResourcePrinter, error) {
-		return printers.NewDiscardingPrinter(), nil
-	}
-	if !d.Get("validate_schema").(bool) {
-		applyOptions.Validator = validation.NullSchema{}
-	}
-	if d.Get("server_side_apply").(bool) {
-		applyOptions.ServerSideApply = true
-		applyOptions.FieldManager = d.Get("field_manager").(string)
-	}
-	if d.Get("force_conflicts").(bool) {
-		applyOptions.ForceConflicts = true
-	}
-	if manifest.HasNamespace() {
-		applyOptions.Namespace = manifest.GetNamespace()
-	}
-
-	log.Printf("[INFO] %s perform apply of manifest", manifest)
-
-	err = applyOptions.Run()
-	_ = os.Remove(tmpfile.Name())
-	if err != nil {
-		return fmt.Errorf("%v failed to run apply: %+v", manifest, err)
-	}
-
-	log.Printf("[INFO] %v manifest applied, fetch resource from kubernetes", manifest)
-
-	// get the resource from Kubernetes
-	rawResponse, err := restClient.ResourceInterface.Get(ctx, manifest.GetName(), meta_v1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("%v failed to fetch resource from kubernetes: %+v", manifest, err)
-	}
-	// set a wrapper from unstructured raw manifest
-	response := yaml.NewFromUnstructured(rawResponse)
-
-	d.SetId(response.GetSelfLink())
-	log.Printf("[DEBUG] %v fetched successfully, set id to: %v", manifest, d.Id())
-
-	// Preserve config-only computed fields in state
-	_ = d.Set("upgrade_api_version", d.Get("upgrade_api_version").(bool))
-
-	// Capture the UID at time of update
-	// this allows us to diff these against the actual values
-	// read in by the 'resourceKubectlManifestRead'
-	_ = d.Set("uid", response.GetUID())
-	_ = d.Set("live_uid", response.GetUID())
-
-	liveManifestFingerprint := getLiveManifestFingerprint(d, manifest, response)
-	_ = d.Set("yaml_incluster", liveManifestFingerprint)
-	_ = d.Set("live_manifest_incluster", liveManifestFingerprint)
-
-	if d.Get("wait_for_rollout").(bool) {
-		timeout := d.Timeout(timeoutKey)
-
-		switch {
-		case manifest.GetKind() == "Deployment":
-			log.Printf("[INFO] %v waiting for Deployment rollout for %vmin", manifest, timeout.Minutes())
-			err = waitForDeploymentRollout(ctx, meta.(*KubeProvider), manifest.GetNamespace(), manifest.GetName(), timeout)
-			if err != nil {
-				return err
-			}
-		case manifest.GetKind() == "DaemonSet":
-			log.Printf("[INFO] %v waiting for DaemonSet rollout for %vmin", manifest, timeout.Minutes())
-			err = waitForDaemonSetRollout(ctx, meta.(*KubeProvider), manifest.GetNamespace(), manifest.GetName(), timeout)
-			if err != nil {
-				return err
-			}
-		case manifest.GetKind() == "StatefulSet":
-			log.Printf("[INFO] %v waiting for v rollout for %vmin", manifest, timeout.Minutes())
-			err = waitForStatefulSetRollout(ctx, meta.(*KubeProvider), manifest.GetNamespace(), manifest.GetName(), timeout)
-			if err != nil {
-				return err
-			}
-		case manifest.GetKind() == "APIService" && manifest.GetAPIVersion() == "apiregistration.k8s.io/v1":
-			log.Printf("[INFO] %v waiting for APIService for %vmin", manifest, timeout.Minutes())
-			err = waitForApiService(ctx, meta.(*KubeProvider), manifest.GetName(), timeout)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	if v, ok := d.GetOk("wait_for"); ok {
-		timeout := d.Timeout(timeoutKey)
-
-		waitFor := types.WaitFor{}
-		if err := mapstructure.Decode((v.([]interface{}))[0], &waitFor); err != nil {
+	var waitFor *types.WaitFor
+	if raw, ok := d.GetOk("wait_for"); ok {
+		wf := types.WaitFor{}
+		if err := mapstructure.Decode((raw.([]interface{}))[0], &wf); err != nil {
 			return fmt.Errorf("cannot decode wait for conditions %v", err)
 		}
-		if len(waitFor.Field) == 0 && len(waitFor.Condition) == 0 {
-			return fmt.Errorf("at least one of `field` or `condition` must be provided in `wait_for` block")
-		}
-
-		log.Printf("[INFO] %v waiting for wait conditions for %vmin", manifest, timeout.Minutes())
-		err = waitForConditions(ctx, restClient, waitFor.Field, waitFor.Condition, manifest.GetName(), timeout)
-		if err != nil {
-			return err
-		}
+		waitFor = &wf
+	}
+	overrideNs := ""
+	if v, ok := d.GetOk("override_namespace"); ok {
+		overrideNs = v.(string)
 	}
 
-	// So far we have set (live_)uid and (live_)yaml_incluster.
-	// Perform the full read of the object
-	return resourceKubectlManifestReadUsingClient(ctx, d, meta, restClient.ResourceInterface, manifest)
+	result, err := ApplyManifest(ctx, meta.(*KubeProvider), ApplyManifestOptions{
+		YAMLBody:          d.Get("yaml_body").(string),
+		OverrideNamespace: overrideNs,
+		ValidateSchema:    d.Get("validate_schema").(bool),
+		ServerSideApply:   d.Get("server_side_apply").(bool),
+		FieldManager:      d.Get("field_manager").(string),
+		ForceConflicts:    d.Get("force_conflicts").(bool),
+		WaitForRollout:    d.Get("wait_for_rollout").(bool),
+		WaitFor:           waitFor,
+		Timeout:           d.Timeout(timeoutKey),
+		IgnoreFields:      ignoreFields,
+	})
+	if err != nil {
+		return err
+	}
+
+	d.SetId(result.SelfLink)
+	_ = d.Set("uid", result.UID)
+	_ = d.Set("live_uid", result.LiveUID)
+	_ = d.Set("yaml_incluster", result.YAMLInClusterFingerprint)
+	_ = d.Set("live_manifest_incluster", result.LiveManifestInClusterFingerprint)
+	// Preserve config-only computed field; ApplyManifest doesn't carry it.
+	_ = d.Set("upgrade_api_version", d.Get("upgrade_api_version").(bool))
+	return nil
 }
 
+// resourceKubectlManifestRead is the SDK v2 adapter over ReadManifest.
 func resourceKubectlManifestRead(ctx context.Context, d *schema.ResourceData, meta interface{}) error {
-	yamlBody := d.Get("yaml_body").(string)
-	manifest, err := yaml.ParseYAML(yamlBody)
+	var ignoreFields []string
+	if raw, ok := d.GetOk("ignore_fields"); ok {
+		ignoreFields = expandStringList(raw.([]interface{}))
+	}
+	overrideNs := ""
+	if v, ok := d.GetOk("override_namespace"); ok {
+		overrideNs = v.(string)
+	}
+
+	result, err := ReadManifest(ctx, meta.(*KubeProvider), ReadManifestOptions{
+		YAMLBody:          d.Get("yaml_body").(string),
+		OverrideNamespace: overrideNs,
+		IgnoreFields:      ignoreFields,
+	})
 	if err != nil {
-		return fmt.Errorf("failed to parse kubernetes resource: %+v", err)
+		return err
 	}
-
-	if overrideNamespace, ok := d.GetOk("override_namespace"); ok {
-		manifest.SetNamespace(overrideNamespace.(string))
-	}
-
-	// Create a client to talk to the resource API based on the APIVersion and Kind
-	// defined in the YAML
-	restClient := getRestClientFromUnstructured(manifest, meta.(*KubeProvider))
-	if restClient.Status == RestClientInvalidTypeError {
+	if result.InvalidType {
 		log.Printf("[WARN] kubernetes resource (%s) has an invalid type, removing from state", d.Id())
 		d.SetId("")
 		return nil
 	}
-
-	if restClient.Error != nil {
-		return fmt.Errorf("failed to create kubernetes rest client for read of resource: %+v", restClient.Error)
+	if !result.Found {
+		log.Printf("[WARN] kubernetes resource (%s) not found, removing from state", d.Id())
+		d.SetId("")
+		return nil
 	}
 
-	return resourceKubectlManifestReadUsingClient(ctx, d, meta, restClient.ResourceInterface, manifest)
-}
-
-// resourceKubectlManifestReadUsingClient reads the object data from the cluster based on it's UID
-// and sets live_uid and live_manifest_incluster to the latest values
-func resourceKubectlManifestReadUsingClient(ctx context.Context, d *schema.ResourceData, meta interface{}, client dynamic.ResourceInterface, manifest *yaml.Manifest) error {
-
-	log.Printf("[DEBUG] %v fetch from kubernetes", manifest)
-
-	// Get the resource from Kubernetes
-	metaObjLiveRaw, err := client.Get(ctx, manifest.GetName(), meta_v1.GetOptions{})
-	if err != nil {
-		if errors.IsGone(err) || errors.IsNotFound(err) {
-			log.Printf("[WARN] kubernetes resource (%s) not found, removing from state", d.Id())
-			d.SetId("")
-			return nil
-		}
-		return fmt.Errorf("%v failed to get resource from kubernetes: %+v", manifest, err)
-	}
-
-	if metaObjLiveRaw.GetUID() == "" {
-		return fmt.Errorf("%v failed to parse item and get UUID: %+v", manifest, metaObjLiveRaw)
-	}
-
-	metaObjLive := yaml.NewFromUnstructured(metaObjLiveRaw)
-
-	// Capture the UID from the cluster at the current time
-	_ = d.Set("live_uid", metaObjLive.GetUID())
-
-	// Preserve config-only computed fields in state
+	_ = d.Set("live_uid", result.LiveUID)
+	_ = d.Set("live_manifest_incluster", result.LiveManifestInClusterFingerprint)
+	// Preserve config-only computed field.
 	_ = d.Set("upgrade_api_version", d.Get("upgrade_api_version").(bool))
-
-	liveManifestFingerprint := getLiveManifestFingerprint(d, manifest, metaObjLive)
-	_ = d.Set("live_manifest_incluster", liveManifestFingerprint)
-
 	return nil
 }
 
 func resourceKubectlManifestDelete(ctx context.Context, d *schema.ResourceData, meta interface{}) error {
-	if d.Get("apply_only").(bool) {
-		return nil
+	overrideNs := ""
+	if v, ok := d.GetOk("override_namespace"); ok {
+		overrideNs = v.(string)
 	}
-	yamlBody := d.Get("yaml_body").(string)
-	manifest, err := yaml.ParseYAML(yamlBody)
-	if err != nil {
-		return fmt.Errorf("failed to parse kubernetes resource: %+v", err)
-	}
-
-	if overrideNamespace, ok := d.GetOk("override_namespace"); ok {
-		manifest.SetNamespace(overrideNamespace.(string))
-	}
-
-	log.Printf("[DEBUG] %v delete kubernetes resource:\n%s", manifest, yamlBody)
-
-	restClient := getRestClientFromUnstructured(manifest, meta.(*KubeProvider))
-	if restClient.Error != nil {
-		return fmt.Errorf("%v failed to create kubernetes rest client for delete of resource: %+v", manifest, restClient.Error)
+	if err := DeleteManifest(ctx, meta.(*KubeProvider), DeleteManifestOptions{
+		YAMLBody:          d.Get("yaml_body").(string),
+		OverrideNamespace: overrideNs,
+		ApplyOnly:         d.Get("apply_only").(bool),
+		Wait:              d.Get("wait").(bool),
+		DeleteCascade:     d.Get("delete_cascade").(string),
+		Timeout:           d.Timeout(schema.TimeoutDelete),
+	}); err != nil {
+		return err
 	}
 
-	log.Printf("[INFO] %s perform delete of manifest", manifest)
-
-	wait := d.Get("wait").(bool)
-
-	var propagationPolicy meta_v1.DeletionPropagation
-	cascadeInput := d.Get("delete_cascade").(string)
-	if len(cascadeInput) > 0 {
-		propagationPolicy = meta_v1.DeletionPropagation(cascadeInput)
-	} else if wait {
-		propagationPolicy = meta_v1.DeletePropagationForeground
-	} else {
-		propagationPolicy = meta_v1.DeletePropagationBackground
-	}
-
-	err = restClient.ResourceInterface.Delete(ctx, manifest.GetName(), meta_v1.DeleteOptions{PropagationPolicy: &propagationPolicy})
-	resourceGone := errors.IsGone(err) || errors.IsNotFound(err)
-	if err != nil && !resourceGone {
-		return fmt.Errorf("%v failed to delete kubernetes resource: %+v", manifest, err)
-	}
-
-	// The rest client doesn't wait for the delete so we need custom logic
-	if wait && !resourceGone {
-		log.Printf("[INFO] %s waiting for delete of manifest to complete", manifest)
-
-		timeout := d.Timeout(schema.TimeoutDelete)
-
-		err = waitForDelete(ctx, restClient, manifest.GetName(), timeout)
-		if err != nil {
-			return err
-		}
-	}
-
-	// Success remove it from state
 	d.SetId("")
 	return nil
 }
@@ -869,8 +681,8 @@ func RestClientResultFromInvalidTypeErr(err error) *RestClientResult {
 	}
 }
 
-// getRestClientFromUnstructured creates a dynamic k8s client based on the provided manifest
-func getRestClientFromUnstructured(manifest *yaml.Manifest, provider *KubeProvider) *RestClientResult {
+// GetRestClientFromUnstructured creates a dynamic k8s client based on the provided manifest
+func GetRestClientFromUnstructured(manifest *yaml.Manifest, provider *KubeProvider) *RestClientResult {
 
 	doGetRestClientFromUnstructured := func(manifest *yaml.Manifest, provider *KubeProvider) *RestClientResult {
 		// Use the k8s Discovery service to find all valid APIs for this cluster
@@ -979,7 +791,7 @@ func checkAPIResourceIsPresent(available []*meta_v1.APIResourceList, resource me
 	return nil, false
 }
 
-func waitForDelete(ctx context.Context, restClient *RestClientResult, name string, timeout time.Duration) error {
+func WaitForDelete(ctx context.Context, restClient *RestClientResult, name string, timeout time.Duration) error {
 	timeoutSeconds := int64(timeout.Seconds())
 
 	rawResponse, err := restClient.ResourceInterface.Get(ctx, name, meta_v1.GetOptions{})
@@ -1054,7 +866,7 @@ func deploymentRolloutComplete(deployment *apps_v1.Deployment) bool {
 	return true
 }
 
-func waitForDeploymentRollout(ctx context.Context, provider *KubeProvider, ns string, name string, timeout time.Duration) error {
+func WaitForDeploymentRollout(ctx context.Context, provider *KubeProvider, ns string, name string, timeout time.Duration) error {
 	deploymentClient := provider.MainClientset.AppsV1().Deployments(ns)
 
 	// Probe current state and capture ResourceVersion before opening the
@@ -1139,7 +951,7 @@ func daemonSetRolloutComplete(daemon *apps_v1.DaemonSet) bool {
 	return true
 }
 
-func waitForDaemonSetRollout(ctx context.Context, provider *KubeProvider, ns string, name string, timeout time.Duration) error {
+func WaitForDaemonSetRollout(ctx context.Context, provider *KubeProvider, ns string, name string, timeout time.Duration) error {
 	daemonClient := provider.MainClientset.AppsV1().DaemonSets(ns)
 
 	// Probe the current state before opening a watch. The DaemonSet
@@ -1229,7 +1041,7 @@ func statefulSetRolloutComplete(sts *apps_v1.StatefulSet) bool {
 	return true
 }
 
-func waitForStatefulSetRollout(ctx context.Context, provider *KubeProvider, ns string, name string, timeout time.Duration) error {
+func WaitForStatefulSetRollout(ctx context.Context, provider *KubeProvider, ns string, name string, timeout time.Duration) error {
 	stsClient := provider.MainClientset.AppsV1().StatefulSets(ns)
 
 	resourceVersion := ""
@@ -1277,7 +1089,7 @@ func waitForStatefulSetRollout(ctx context.Context, provider *KubeProvider, ns s
 	}
 }
 
-func waitForApiService(ctx context.Context, provider *KubeProvider, name string, timeout time.Duration) error {
+func WaitForApiService(ctx context.Context, provider *KubeProvider, name string, timeout time.Duration) error {
 	timeoutSeconds := int64(timeout.Seconds())
 
 	watcher, err := provider.AggregatorClientset.ApiregistrationV1().APIServices().Watch(ctx, meta_v1.ListOptions{Watch: true, TimeoutSeconds: &timeoutSeconds, FieldSelector: fields.OneTermEqualSelector("metadata.name", name).String()})
@@ -1313,7 +1125,7 @@ func waitForApiService(ctx context.Context, provider *KubeProvider, name string,
 	return nil
 }
 
-func waitForConditions(ctx context.Context, restClient *RestClientResult, waitFields []types.WaitForField, waitConditions []types.WaitForStatusCondition, name string, timeout time.Duration) error {
+func WaitForConditions(ctx context.Context, restClient *RestClientResult, waitFields []types.WaitForField, waitConditions []types.WaitForStatusCondition, name string, timeout time.Duration) error {
 	timeoutSeconds := int64(timeout.Seconds())
 
 	watcher, err := restClient.ResourceInterface.Watch(
@@ -1426,22 +1238,13 @@ func expandStringList(configured []interface{}) []string {
 	return vs
 }
 
-func getLiveManifestFingerprint(d *schema.ResourceData, userProvided *yaml.Manifest, liveManifest *yaml.Manifest) string {
-	var ignoreFields []string = nil
-	ignoreFieldsRaw, hasIgnoreFields := d.GetOk("ignore_fields")
-	if hasIgnoreFields {
-		ignoreFields = expandStringList(ignoreFieldsRaw.([]interface{}))
-	}
-	return getLiveManifestFields_WithIgnoredFields(ignoreFields, userProvided, liveManifest)
-}
-
-func getFingerprint(s string) string {
+func GetFingerprint(s string) string {
 	fingerprint := sha256.New()
 	fingerprint.Write([]byte(s))
 	return fmt.Sprintf("%x", fingerprint.Sum(nil))
 }
 
-func getLiveManifestFields_WithIgnoredFields(ignoredFields []string, userProvided *yaml.Manifest, liveManifest *yaml.Manifest) string {
+func GetLiveManifestFields(ignoredFields []string, userProvided *yaml.Manifest, liveManifest *yaml.Manifest) string {
 
 	// there is a special user case for secrets.
 	// If they are defined as manifests with StringData, it will always provide a non-empty plan
@@ -1492,7 +1295,7 @@ func getLiveManifestFields_WithIgnoredFields(ignoredFields []string, userProvide
 			if normalizedUserValue != normalizedLiveValue {
 				log.Printf("[TRACE] yaml drift detected in %s for %s, was: %s now: %s", userProvided.GetSelfLink(), userKey, normalizedUserValue, normalizedLiveValue)
 			}
-			flattenedUser[userKey] = getFingerprint(normalizedLiveValue)
+			flattenedUser[userKey] = GetFingerprint(normalizedLiveValue)
 		} else {
 			if normalizedUserValue != "" {
 				log.Printf("[TRACE] yaml drift detected in %s for %s, was %s now blank", userProvided.GetSelfLink(), userKey, normalizedUserValue)

@@ -54,7 +54,7 @@ func FetchManifest(
 	}
 	manifest := yaml.NewFromUnstructured(lookup)
 
-	clientResult := getRestClientFromUnstructured(manifest, provider)
+	clientResult := GetRestClientFromUnstructured(manifest, provider)
 	if clientResult.Error != nil {
 		return nil, clientResult.Error
 	}

@@ -173,11 +173,47 @@ Building from source, pointing Terraform at a local build with
 documented in [CONTRIBUTING.md](./CONTRIBUTING.md). Start there if you
 want to try an unreleased fix from `master` or submit a change.
 
-## Changing providers for existing resources
+## Migrating from gavinbunney/kubectl
 
-When you used another fork of this provider in the past, you can switch the provider on all existing resources within your state. A common use-case is moving from `gavinbunney/kubectl` to this fork.
+If you previously used `gavinbunney/kubectl`, you can switch existing `kubectl_manifest` resources to this fork without destroying and recreating anything. There are two ways to do it; pick based on your Terraform / OpenTofu version.
 
-Change the `required_providers` block in your root module and all child modules to use `alekc/kubectl` as shown in the [Installation](#terraform-013) section above. Then use `state replace-provider` to update existing state:
+### Recommended: a `moved` block (Terraform 1.8+ / OpenTofu 1.8+)
+
+This provider implements native cross-provider state move for `kubectl_manifest`, so a `moved` block migrates state in place during a normal `plan` / `apply`, with no separate state surgery and no resource churn. Cross-provider move support requires the framework-based release of this provider (the release that ships the plugin-framework `kubectl_manifest`); pin to that release or newer in `required_providers`.
+
+Point `required_providers` at this fork and add a `moved` block whose `from` is the gavinbunney address and whose `to` is the same resource under this provider:
+
+```hcl
+terraform {
+  required_providers {
+    kubectl = {
+      source = "alekc/kubectl"
+    }
+  }
+}
+
+moved {
+  from = kubectl_manifest.my_app   # was gavinbunney/kubectl
+  to   = kubectl_manifest.my_app   # now alekc/kubectl
+}
+```
+
+Run `terraform init -upgrade` then `terraform plan`. The plan should report the resource as moved with no in-place changes (an empty diff). Run `terraform apply` to commit the move. Once the move has applied, delete the `moved` block.
+
+The 20 attributes shared with gavinbunney carry over unchanged. The four attributes that exist only on this fork take their defaults on the moved resource, all of which are no-ops for an unchanged manifest:
+
+| Attribute | Default after move | Effect |
+| --- | --- | --- |
+| `upgrade_api_version` | `false` | Keeps the conservative behaviour: an `api_version` change still forces replacement unless you opt in. |
+| `field_manager` | `kubectl` | Only consulted when `server_side_apply = true`; matches the historic default. |
+| `wait_for` | unset | No extra cluster-side wait conditions. |
+| `delete_cascade` | unset | Delete propagation stays automatic (`Foreground` when `wait = true`, else `Background`). |
+
+One behaviour changes, for the better: on `gavinbunney/kubectl` an `api_version` change always forced a destroy-and-recreate; on this fork it applies in place when `upgrade_api_version = true`. The default (`false`) matches gavinbunney, so the move itself never changes how your existing resources plan.
+
+### Alternative: `state replace-provider` (older Terraform)
+
+On Terraform older than 1.8 (which has no cross-provider `moved` support), switch the provider across all existing resources with `state replace-provider`. Change the `required_providers` block in your root module and all child modules to use `alekc/kubectl` as shown in the [Installation](#terraform-013) section above, then:
 
 ```sh
 terraform state replace-provider gavinbunney/kubectl alekc/kubectl
@@ -185,6 +221,10 @@ terraform state replace-provider gavinbunney/kubectl alekc/kubectl
 
 Run `terraform init` afterwards; subsequent terraform actions will use this provider.
 
+### Note on `kubectl_kustomize_documents`
+
+`gavinbunney/kubectl` added a `kubectl_kustomize_documents` data source after this fork diverged, and this fork does not (yet) provide it. If your configuration uses that data source, a full switch is not possible without re-architecting that part (for example, rendering `kustomize build` output through the `external` data source, or keeping `gavinbunney/kubectl` aliased alongside this provider for that one data source). Everything else migrates cleanly.
+
 ### Inspiration
 
-Thanks to the original provider by [gavinbunney](https://github.com/gavinbunney/terraform-provider-kubectl) — this fork was originally based on version 1.14 and has followed a separate development path since.
+Thanks to the original provider by [gavinbunney](https://github.com/gavinbunney/terraform-provider-kubectl), this fork was originally based on version 1.14 and has followed a separate development path since.
