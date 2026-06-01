@@ -1023,15 +1023,27 @@ jobs:
         run: terraform destroy -auto-approve || true
   cross_provider_upgrade_smoke_opentofu:
     # OpenTofu sibling of cross_provider_upgrade_smoke_terraform. Same
-    # scenario, same expectations, OpenTofu CLI throughout. Now
-    # unconditional after #295's Phase D cutover (#314); see the
-    # Terraform job's comment for the full rationale.
+    # scenario, OpenTofu CLI throughout.
+    #
+    # Advisory only (continue-on-error). OpenTofu 1.11.x does not
+    # invoke MoveStateResource on cross-provider transitions: the
+    # state is moved by address but the destination provider's
+    # translator never runs, so alekc-only attributes and the
+    # recomputed yaml_incluster fingerprint never land in state.
+    # Plan-no-op is therefore unachievable on OpenTofu via `moved {}`
+    # blocks. OpenTofu users should use
+    # `tofu state replace-provider gavinbunney/kubectl alekc/kubectl`
+    # (documented in the README migration section) instead. The job
+    # stays in CI as a regression signal: when OpenTofu ships
+    # MoveStateResource dispatch, this should start passing and we
+    # can flip continue-on-error off.
     needs:
       - get_version_matrix
       - unit_test
       - build_provider_binary
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    continue-on-error: true
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Download provider binary
