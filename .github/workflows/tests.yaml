@@ -801,27 +801,21 @@ jobs:
             exit 1
           fi
   cross_provider_upgrade_smoke_terraform:
-    # Phase A of the v3.0.0 framework-migration epic (issue #123 / milestone
-    # v3.0.0). Cross-provider `moved {}` block smoke: install the published
-    # gavinbunney/kubectl provider from the public registry, apply a small
-    # manifest set, then swap `required_providers` to alekc/kubectl (via
-    # dev_overrides pointing at the just-built binary), add `moved {}`
-    # blocks for each resource, and assert `terraform plan` is a no-op
-    # (state must round-trip cleanly across the provider boundary).
+    # Cross-provider `moved {}` block smoke (Phase A of the v3.0.0
+    # framework-migration epic, issue #123 / milestone v3.0.0). Installs
+    # the published gavinbunney/kubectl provider from the public
+    # registry, applies a small manifest set, swaps `required_providers`
+    # to alekc/kubectl (via dev_overrides pointing at the just-built
+    # binary), adds `moved {}` blocks for each resource, and asserts
+    # `terraform plan` is a no-op so state round-trips cleanly across
+    # the provider boundary.
     #
-    # Gated by the `CROSS_PROVIDER_SMOKE_ENABLED` repository variable;
-    # stays skipped while that variable is unset (default) and runs only
-    # once an admin sets it to `true`. The gate exists because
-    # cross-provider `moved {}` uses same-address `from`/`to`
-    # declarations, and Terraform's HCL validator rejects those as
-    # redundant unless the destination resource type implements
-    # MoveStateResource. Without that, the smoke would fail at
-    # config-validate time on every run before reaching the cross-provider
-    # plan-no-op assertion. Phase D adds the destination implementation
-    # and removes this `if:` guard in the same PR, at which point the
-    # smoke runs unconditionally and the plan-no-op assertion becomes
-    # load-bearing. See docs/adr/0001 for the full plan.
-    if: ${{ vars.CROSS_PROVIDER_SMOKE_ENABLED == 'true' }}
+    # Now unconditional after #295's Phase D (cutover landed in #314):
+    # the framework-side kubectl_manifest implements MoveStateResource,
+    # so the HCL validator accepts the cross-provider `moved {}` block
+    # and the plan-no-op assertion is the load-bearing check. The old
+    # CROSS_PROVIDER_SMOKE_ENABLED repository-variable gate has been
+    # removed.
     needs:
       - get_version_matrix
       - unit_test
@@ -971,22 +965,22 @@ jobs:
         env:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
         # -detailed-exitcode: 0 = no diff (success), 2 = diff (fail),
-        # 1 = error. Until Phase D ships, expect this to exit non-zero
-        # because alekc's kubectl_manifest is still SDK v2 and cannot
-        # accept the cross-provider move. continue-on-error at the job
-        # level absorbs the red.
+        # 1 = error. Post-#314 cutover this assertion is load-bearing:
+        # any drift or hard error here means the framework-side
+        # MoveStateResource handler is no longer producing byte-compat
+        # state for gavinbunney/kubectl source resources.
         run: |
           set +e
           terraform plan -detailed-exitcode -no-color
           rc=$?
           set -e
           if [ $rc -eq 0 ]; then
-            echo "Phase 2: plan is a no-op as required (Phase D has shipped)"
+            echo "Phase 2: plan is a no-op as required"
           elif [ $rc -eq 2 ]; then
-            echo "Phase 2: plan reports drift -- expected until Phase D" >&2
+            echo "Phase 2 FAIL: cross-provider move caused drift" >&2
             exit 1
           else
-            echo "Phase 2: terraform plan errored (rc=$rc) -- expected until Phase D" >&2
+            echo "Phase 2 FAIL: terraform plan errored (rc=$rc)" >&2
             exit $rc
           fi
       - name: Phase 2 - terraform apply must be a no-op
@@ -1006,11 +1000,9 @@ jobs:
         run: terraform destroy -auto-approve || true
   cross_provider_upgrade_smoke_opentofu:
     # OpenTofu sibling of cross_provider_upgrade_smoke_terraform. Same
-    # scenario, same expectations, OpenTofu CLI throughout. See the
-    # Terraform job's comment for the `CROSS_PROVIDER_SMOKE_ENABLED`
-    # gate rationale until Phase D ships MoveStateResource on the
-    # framework-side kubectl_manifest.
-    if: ${{ vars.CROSS_PROVIDER_SMOKE_ENABLED == 'true' }}
+    # scenario, same expectations, OpenTofu CLI throughout. Now
+    # unconditional after #295's Phase D cutover (#314); see the
+    # Terraform job's comment for the full rationale.
     needs:
       - get_version_matrix
       - unit_test
@@ -1153,18 +1145,20 @@ jobs:
         working-directory: cross-smoke
         env:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        # See cross_provider_upgrade_smoke_terraform for the
+        # post-#314 load-bearing semantics on each rc branch.
         run: |
           set +e
           tofu plan -detailed-exitcode -no-color
           rc=$?
           set -e
           if [ $rc -eq 0 ]; then
-            echo "Phase 2: plan is a no-op as required (Phase D has shipped)"
+            echo "Phase 2: plan is a no-op as required"
           elif [ $rc -eq 2 ]; then
-            echo "Phase 2: plan reports drift -- expected until Phase D" >&2
+            echo "Phase 2 FAIL: cross-provider move caused drift" >&2
             exit 1
           else
-            echo "Phase 2: tofu plan errored (rc=$rc) -- expected until Phase D" >&2
+            echo "Phase 2 FAIL: tofu plan errored (rc=$rc)" >&2
             exit $rc
           fi
       - name: Phase 2 - tofu apply must be a no-op
