@@ -764,6 +764,11 @@ func (r *manifestResource) ModifyPlan(ctx context.Context, req resource.ModifyPl
 
 		if state.YAMLInCluster.ValueString() != state.LiveManifestInCluster.ValueString() {
 			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("yaml_incluster"), types.StringUnknown())...)
+			// Drift-driven applies recompute both fingerprints; pinning
+			// live_manifest_incluster to the stale state value triggers
+			// the post-apply consistency check when Apply returns the
+			// new value.
+			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("live_manifest_incluster"), types.StringUnknown())...)
 		}
 
 		// When inputs that feed Apply differ between state and plan,
@@ -786,16 +791,17 @@ func (r *manifestResource) ModifyPlan(ctx context.Context, req resource.ModifyPl
 		}
 
 		// id is the self-link (apiVersion + kind + namespace + name) of
-		// the applied object. It only needs to be marked Unknown when
-		// one of those four identifier components changes: a yaml_body
-		// data-field change keeps the same object id. Marking id
-		// Unknown more aggressively (e.g. on any input change) produces
-		// a "was known, but now unknown" final-plan inconsistency
-		// error, because UseStateForUnknown already set id = state value
-		// in the initial plan and Terraform forbids known to Unknown
-		// transitions during plan expansion.
+		// the applied object. It must go Unknown whenever any of those
+		// four identifier components changes, regardless of whether
+		// the change happens through the in-place upgrade_api_version
+		// path or the force-replace path: in both cases the self-link
+		// recomputes during Apply. The earlier gate on
+		// plan.UpgradeAPIVersion was wrong for the replace path. The
+		// "was known, but now unknown" final-plan inconsistency check
+		// still passes because Terraform skips known-to-Unknown
+		// validation when the resource is being replaced.
 		parsedNamespace := parsed.GetNamespace()
-		idChanged := (plan.UpgradeAPIVersion.ValueBool() && state.APIVersion.ValueString() != parsed.GetAPIVersion()) ||
+		idChanged := state.APIVersion.ValueString() != parsed.GetAPIVersion() ||
 			state.Kind.ValueString() != parsed.GetKind() ||
 			state.Name.ValueString() != parsed.GetName() ||
 			state.Namespace.ValueString() != parsedNamespace

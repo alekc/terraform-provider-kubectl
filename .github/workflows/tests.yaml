@@ -566,7 +566,7 @@ jobs:
             echo "Phase 2a: plan is a no-op as required"
           elif [ $rc -eq 2 ]; then
             echo "Phase 2a FAIL: upgrade caused drift" >&2
-            terraform show -no-color -json plan.bin | jq '.resource_changes[] | select(.change.actions[] | contains("update")) | {address, change: {before: .change.before, after: .change.after}}' >&2 || true
+            terraform show -no-color -json plan.bin | jq '.resource_changes[] | select(.change.actions[] | contains("update")) | {address, change: {before: .change.before, after: .change.after}}' >&2 || terraform show -no-color plan.bin >&2
             exit 1
           else
             exit $rc
@@ -1297,9 +1297,9 @@ jobs:
         id: tfpath
         run: echo "path=$(which terraform)" >> "${GITHUB_OUTPUT}"
       - name: Prepare runtime directory
-        # Sparse checkout (above) did not materialize kubernetes/;
+        # Sparse checkout (above) did not materialize internal/framework/;
         # create an empty placeholder so `working-directory:
-        # kubernetes` resolves and the test binary's references to
+        # internal/framework` resolves and the test binary's references to
         # `../../_examples/` reach the cone we did check out.
         run: mkdir -p internal/framework
       - name: Acceptance Tests
@@ -1368,9 +1368,9 @@ jobs:
         id: tfpath
         run: echo "path=$(which tofu)" >> "${GITHUB_OUTPUT}"
       - name: Prepare runtime directory
-        # Sparse checkout (above) did not materialize kubernetes/;
+        # Sparse checkout (above) did not materialize internal/framework/;
         # create an empty placeholder so `working-directory:
-        # kubernetes` resolves and the test binary's references to
+        # internal/framework` resolves and the test binary's references to
         # `../../_examples/` reach the cone we did check out.
         run: mkdir -p internal/framework
       - name: Acceptance Tests
@@ -1470,9 +1470,9 @@ jobs:
         id: tfpath
         run: echo "path=$(which terraform)" >> "${GITHUB_OUTPUT}"
       - name: Prepare runtime directory
-        # Sparse checkout (above) did not materialize kubernetes/;
+        # Sparse checkout (above) did not materialize internal/framework/;
         # create an empty placeholder so `working-directory:
-        # kubernetes` resolves and the test binary's references to
+        # internal/framework` resolves and the test binary's references to
         # `../../_examples/` reach the cone we did check out.
         run: mkdir -p internal/framework
       - name: Acceptance Tests
@@ -1538,9 +1538,9 @@ jobs:
         id: tfpath
         run: echo "path=$(which tofu)" >> "${GITHUB_OUTPUT}"
       - name: Prepare runtime directory
-        # Sparse checkout (above) did not materialize kubernetes/;
+        # Sparse checkout (above) did not materialize internal/framework/;
         # create an empty placeholder so `working-directory:
-        # kubernetes` resolves and the test binary's references to
+        # internal/framework` resolves and the test binary's references to
         # `../../_examples/` reach the cone we did check out.
         run: mkdir -p internal/framework
       - name: Acceptance Tests
