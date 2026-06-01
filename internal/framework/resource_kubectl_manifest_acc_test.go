@@ -1044,10 +1044,13 @@ spec:
 YAML
 }
 `, name)
-	// (?s) lets `.` match newlines because the framework error formatter
-	// wraps "Invalid value:" and the offending value onto separate lines
-	// (the SDK v2 wrapper kept them on a single line).
-	expectedError := regexp.MustCompile("(?s)Invalid value:\\s*\"nginx.test-a.svc.cluster.local\":\\s*a DNS-1035 label must consist of lower case alphanumeric characters")
+	// The framework error formatter wraps the K8s API error across
+	// multiple lines, including breaks inside what the SDK v2 wrapper
+	// kept as one line. Match on the two stable substrings ("nginx
+	// service-name DNS label" and "DNS-1035 label") that bracket the
+	// failure rather than trying to thread an exact phrase through
+	// the formatter's line breaks.
+	expectedError := regexp.MustCompile(`(?s)nginx\.test-a\.svc\.cluster\.local.*DNS-1035 label`)
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{

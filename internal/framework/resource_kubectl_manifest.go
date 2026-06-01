@@ -749,26 +749,39 @@ func (r *manifestResource) ModifyPlan(ctx context.Context, req resource.ModifyPl
 		}
 
 		// When inputs that feed Apply differ between state and plan,
-		// the computed attributes Apply returns cannot be predicted at
-		// plan time: yaml_incluster / live_manifest_incluster are
-		// GetLiveManifestFields fingerprints over the new manifest
-		// against the post-apply cluster state; id is the self-link
-		// (apiVersion + kind + namespace + name) of the applied
-		// object. The SDK v2 diff engine marked these "(known after
-		// apply)" automatically; the framework requires it to be
-		// explicit via Unknown. Without this, the framework's
-		// post-apply consistency check raises "Provider produced
-		// inconsistent result after apply" whenever the recomputed
-		// values differ from what state preserved via
-		// UseStateForUnknown.
+		// the computed fingerprints Apply returns cannot be predicted
+		// at plan time: yaml_incluster / live_manifest_incluster are
+		// GetLiveManifestFields hashes over the new manifest against
+		// the post-apply cluster state. The SDK v2 diff engine marked
+		// these "(known after apply)" automatically when relevant
+		// inputs changed; the framework requires it to be explicit.
+		// Without this, the framework's post-apply consistency check
+		// raises "Provider produced inconsistent result after apply"
+		// whenever Apply's recomputed values differ from what state
+		// preserved via UseStateForUnknown.
 		inputsChanged := plan.YAMLBody.ValueString() != state.YAMLBody.ValueString() ||
 			plan.OverrideNamespace.ValueString() != state.OverrideNamespace.ValueString() ||
 			!plan.IgnoreFields.Equal(state.IgnoreFields)
-		apiVersionChanging := plan.UpgradeAPIVersion.ValueBool() &&
-			state.APIVersion.ValueString() != parsed.GetAPIVersion()
-		if inputsChanged || apiVersionChanging {
+		if inputsChanged {
 			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("yaml_incluster"), types.StringUnknown())...)
 			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("live_manifest_incluster"), types.StringUnknown())...)
+		}
+
+		// id is the self-link (apiVersion + kind + namespace + name) of
+		// the applied object. It only needs to be marked Unknown when
+		// one of those four identifier components changes: a yaml_body
+		// data-field change keeps the same object id. Marking id
+		// Unknown more aggressively (e.g. on any input change) produces
+		// a "was known, but now unknown" final-plan inconsistency
+		// error, because UseStateForUnknown already set id = state value
+		// in the initial plan and Terraform forbids known to Unknown
+		// transitions during plan expansion.
+		parsedNamespace := parsed.GetNamespace()
+		idChanged := (plan.UpgradeAPIVersion.ValueBool() && state.APIVersion.ValueString() != parsed.GetAPIVersion()) ||
+			state.Kind.ValueString() != parsed.GetKind() ||
+			state.Name.ValueString() != parsed.GetName() ||
+			state.Namespace.ValueString() != parsedNamespace
+		if idChanged {
 			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("id"), types.StringUnknown())...)
 		}
 
