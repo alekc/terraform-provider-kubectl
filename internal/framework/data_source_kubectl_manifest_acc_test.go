@@ -1,17 +1,17 @@
-package kubernetes
+package framework_test
 
 import (
 	"fmt"
 	"regexp"
 	"testing"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/acctest"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
+	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
 
 // TestAccKubectlDataSourceManifest_namespacedConfigMap creates a ConfigMap via
-// the kubectl_manifest resource, then reads it back through the new data
-// source and extracts a scalar field.
+// the kubectl_manifest resource, then reads it back through the data source
+// and extracts a scalar field.
 func TestAccKubectlDataSourceManifest_namespacedConfigMap(t *testing.T) {
 	t.Parallel()
 
@@ -43,9 +43,9 @@ data "kubectl_manifest" "read" {
 `, name, name)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:     func() { testAccPreCheck(t) },
-		Providers:    testAccProviders,
-		CheckDestroy: testAccCheckkubectlDestroy,
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckkubectlDestroy,
 		Steps: []resource.TestStep{
 			{
 				Config: cfg,
@@ -81,8 +81,8 @@ data "kubectl_manifest" "ns" {
 `
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:  func() { testAccPreCheck(t) },
-		Providers: testAccProviders,
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
 				Config: cfg,
@@ -99,7 +99,7 @@ data "kubectl_manifest" "ns" {
 // TestAccKubectlDataSourceManifest_clusterScopedClusterRole reads a second
 // cluster-scoped kind (ClusterRole) to ensure the cluster-scope detection
 // is not implicitly relying on `Namespace` being a special-case GVK.
-// `cluster-admin` ships in every kubeadm/kind/eks/gke cluster.
+// `cluster-admin` ships in every kubeadm / kind / eks / gke cluster.
 func TestAccKubectlDataSourceManifest_clusterScopedClusterRole(t *testing.T) {
 	t.Parallel()
 
@@ -116,8 +116,8 @@ data "kubectl_manifest" "cr" {
 `
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:  func() { testAccPreCheck(t) },
-		Providers: testAccProviders,
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
 				Config: cfg,
@@ -177,9 +177,9 @@ data "kubectl_manifest" "read" {
 `, name, name, name, name)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:     func() { testAccPreCheck(t) },
-		Providers:    testAccProviders,
-		CheckDestroy: testAccCheckkubectlDestroy,
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckkubectlDestroy,
 		Steps: []resource.TestStep{
 			{
 				Config: cfg,
@@ -207,8 +207,8 @@ data "kubectl_manifest" "missing" {
 `
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:  func() { testAccPreCheck(t) },
-		Providers: testAccProviders,
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
 				Config:      cfg,
@@ -236,8 +236,8 @@ data "kubectl_manifest" "ns" {
 `
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:  func() { testAccPreCheck(t) },
-		Providers: testAccProviders,
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
 				Config:      cfg,

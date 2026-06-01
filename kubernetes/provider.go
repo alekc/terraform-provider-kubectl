@@ -180,20 +180,18 @@ func Provider() *schema.Provider {
 			},
 		},
 
-		DataSourcesMap: map[string]*schema.Resource{
-			"kubectl_manifest": dataSourceKubectlManifest(),
-		},
+		// DataSourcesMap is empty after Phase E (#296): kubectl_manifest
+		// data source is now served by the plugin-framework half via
+		// kubectlFrameworkProvider.DataSources(). The SDK v2 provider
+		// configuration (KubeProvider) remains the muxed provider's
+		// Configure target, which is why this provider object still
+		// exists.
+		DataSourcesMap: map[string]*schema.Resource{},
 
 		// ResourcesMap is intentionally empty after the v3 cutover (#62 /
 		// #295): kubectl_manifest is now served by the plugin-framework
 		// half of the muxed provider, registered via
-		// kubectlFrameworkProvider.Resources(). The SDK v2 schema and the
-		// resourceKubectlManifest constructor remain in this package for
-		// now because dataSourceKubectlManifest still depends on shared
-		// helpers and the SDK v2 provider configuration (KubeProvider)
-		// remains the muxed provider's Configure target. Once the data
-		// source migrates, the whole resource_kubectl_manifest.go file
-		// can be retired.
+		// kubectlFrameworkProvider.Resources().
 		ResourcesMap: map[string]*schema.Resource{},
 	}
 
