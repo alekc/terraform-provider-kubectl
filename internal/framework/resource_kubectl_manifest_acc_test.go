@@ -289,7 +289,7 @@ EOF
   }
 }
 `, ns)
-	errorRegex := regexp.MustCompile(".*Wait returned an error*")
+	errorRegex := regexp.MustCompile("failed to wait for resource")
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
@@ -332,7 +332,7 @@ spec:
 YAML
 }
 `, name)
-	errorRegex := regexp.MustCompile(".*Wait returned an error*")
+	errorRegex := regexp.MustCompile("failed to wait for resource")
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
