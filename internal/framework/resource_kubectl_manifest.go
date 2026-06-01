@@ -478,6 +478,14 @@ func (r *manifestResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
+	// The terraform-plugin-framework-timeouts package returns the
+	// duration only; unlike SDK v2's Resource.Timeouts the framework
+	// does NOT auto-apply that timeout to ctx. Wrap explicitly so
+	// downstream code (WaitForRollout, WaitForConditions, etc.) that
+	// loops on ctx.Done() observes the user-configured deadline.
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	opts, d := r.buildApplyOptions(ctx, data, timeout)
 	resp.Diagnostics.Append(d...)
 	if resp.Diagnostics.HasError() {
@@ -562,6 +570,11 @@ func (r *manifestResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 
+	// See Create: framework-timeouts returns the duration only, the
+	// framework does not auto-apply it to ctx like SDK v2 did.
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	opts, d := r.buildApplyOptions(ctx, data, timeout)
 	resp.Diagnostics.Append(d...)
 	if resp.Diagnostics.HasError() {
@@ -607,6 +620,11 @@ func (r *manifestResource) Delete(ctx context.Context, req resource.DeleteReques
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	// See Create: framework-timeouts returns the duration only, the
+	// framework does not auto-apply it to ctx like SDK v2 did.
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
 	opts := kubernetes.DeleteManifestOptions{
 		YAMLBody:          data.YAMLBody.ValueString(),
