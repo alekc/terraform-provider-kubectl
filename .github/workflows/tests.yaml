@@ -975,30 +975,42 @@ jobs:
         working-directory: cross-smoke
         env:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
-        # -detailed-exitcode: 0 = no diff (success), 2 = diff (fail),
-        # 1 = error. Post-#314 cutover this assertion is load-bearing:
-        # any drift or hard error here means the framework-side
-        # MoveStateResource handler is no longer producing byte-compat
-        # state for gavinbunney/kubectl source resources.
+        # We cannot use `-detailed-exitcode` here: terraform treats
+        # `moved {}` block annotations as a non-empty plan and returns
+        # rc=2 even when the underlying `Plan: 0 to add, 0 to change,
+        # 0 to destroy` summary confirms a clean state move. Capture
+        # the plan output and assert that summary directly; the
+        # downstream `terraform apply` step then commits the move and
+        # the follow-up plan confirms idempotence with `-detailed-exitcode`.
         run: |
           set +e
-          terraform plan -detailed-exitcode -no-color
-          rc=$?
+          terraform plan -no-color | tee plan.out
+          rc=${PIPESTATUS[0]}
           set -e
-          if [ $rc -eq 0 ]; then
-            echo "Phase 2: plan is a no-op as required"
-          elif [ $rc -eq 2 ]; then
+          if [ "$rc" -ne 0 ]; then
+            echo "Phase 2 FAIL: terraform plan errored (rc=$rc)" >&2
+            exit "$rc"
+          fi
+          if ! grep -qE '^Plan: 0 to add, 0 to change, 0 to destroy\.' plan.out; then
             echo "Phase 2 FAIL: cross-provider move caused drift" >&2
             exit 1
-          else
-            echo "Phase 2 FAIL: terraform plan errored (rc=$rc)" >&2
-            exit $rc
           fi
+          echo "Phase 2: plan is a no-op (moved-only) as required"
       - name: Phase 2 - terraform apply must be a no-op
         working-directory: cross-smoke
         env:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
         run: terraform apply -auto-approve
+      - name: Phase 2 - second plan must be cleanly empty
+        working-directory: cross-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        # After apply commits the rename, the state addresses match
+        # the config addresses and the `moved` blocks become no-ops.
+        # A second plan with `-detailed-exitcode` must return 0,
+        # proving the cross-provider migration is fully absorbed and
+        # routine future plans see no drift.
+        run: terraform plan -detailed-exitcode -no-color
       - name: Verify resources survived the move
         run: |
           kubectl get namespace cross-provider-smoke
@@ -1160,27 +1172,40 @@ jobs:
         working-directory: cross-smoke
         env:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
-        # See cross_provider_upgrade_smoke_terraform for the
-        # post-#314 load-bearing semantics on each rc branch.
+        # See cross_provider_upgrade_smoke_terraform for the rationale:
+        # `-detailed-exitcode` returns rc=2 on a plan that carries only
+        # `moved {}` block annotations, even when the resource summary
+        # is 0/0/0. Parse the summary line directly and let the
+        # follow-up `tofu apply` + second plan act as the round-trip
+        # assertion.
         run: |
           set +e
-          tofu plan -detailed-exitcode -no-color
-          rc=$?
+          tofu plan -no-color | tee plan.out
+          rc=${PIPESTATUS[0]}
           set -e
-          if [ $rc -eq 0 ]; then
-            echo "Phase 2: plan is a no-op as required"
-          elif [ $rc -eq 2 ]; then
+          if [ "$rc" -ne 0 ]; then
+            echo "Phase 2 FAIL: tofu plan errored (rc=$rc)" >&2
+            exit "$rc"
+          fi
+          if ! grep -qE '^Plan: 0 to add, 0 to change, 0 to destroy\.' plan.out; then
             echo "Phase 2 FAIL: cross-provider move caused drift" >&2
             exit 1
-          else
-            echo "Phase 2 FAIL: tofu plan errored (rc=$rc)" >&2
-            exit $rc
           fi
+          echo "Phase 2: plan is a no-op (moved-only) as required"
       - name: Phase 2 - tofu apply must be a no-op
         working-directory: cross-smoke
         env:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
         run: tofu apply -auto-approve
+      - name: Phase 2 - second plan must be cleanly empty
+        working-directory: cross-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        # After apply commits the rename, the state addresses match
+        # the config addresses and the `moved` blocks become no-ops.
+        # The second plan must return rc=0 under `-detailed-exitcode`,
+        # proving the cross-provider migration is fully absorbed.
+        run: tofu plan -detailed-exitcode -no-color
       - name: Verify resources survived the move
         run: |
           kubectl get namespace cross-provider-smoke
