@@ -58,8 +58,11 @@ func TestManifestResource_SchemaShape(t *testing.T) {
 	if _, ok := s.Blocks["wait_for"]; !ok {
 		t.Errorf("Schema.Blocks missing %q", "wait_for")
 	}
-	if len(s.Blocks) != 1 {
-		t.Errorf("Schema.Blocks count: got %d, want 1", len(s.Blocks))
+	if _, ok := s.Blocks["timeouts"]; !ok {
+		t.Errorf("Schema.Blocks missing %q", "timeouts")
+	}
+	if len(s.Blocks) != 2 {
+		t.Errorf("Schema.Blocks count: got %d, want 2 (wait_for, timeouts)", len(s.Blocks))
 	}
 }
 
@@ -79,4 +82,3 @@ func extraAttrs[T any](got map[string]T, want []string) []string {
 	}
 	return extras
 }
-

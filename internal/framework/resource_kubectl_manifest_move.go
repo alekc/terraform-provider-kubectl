@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -220,6 +221,13 @@ func moveFromGavinbunneyManifest(ctx context.Context, req resource.MoveStateRequ
 		FieldManager:      types.StringValue(defaultFieldManager),
 		DeleteCascade:     types.StringNull(),
 		WaitFor:           types.ListNull(waitForObjectType()),
+		Timeouts: timeouts.Value{
+			Object: types.ObjectNull(map[string]attr.Type{
+				"create": types.StringType,
+				"update": types.StringType,
+				"delete": types.StringType,
+			}),
+		},
 	}
 
 	resp.Diagnostics.Append(resp.TargetState.Set(ctx, &target)...)

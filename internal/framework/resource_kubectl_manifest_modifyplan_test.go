@@ -5,12 +5,27 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
+
+// nullTimeouts returns a typed-null timeouts.Value whose Object knows the
+// create/update/delete attribute layout the schema block declares. Models
+// going through tfsdk.Plan.Set need the Value's underlying ObjectType to
+// match the schema or Set fails with a Value Conversion Error.
+func nullTimeouts() timeouts.Value {
+	return timeouts.Value{
+		Object: types.ObjectNull(map[string]attr.Type{
+			"create": types.StringType,
+			"update": types.StringType,
+			"delete": types.StringType,
+		}),
+	}
+}
 
 // waitForListWith builds a wait_for list with n empty blocks (condition and
 // field both null), typed to match the schema's ListNestedBlock element.
@@ -59,6 +74,7 @@ func baseModel() manifestResourceModel {
 		SensitiveFields: types.ListNull(types.StringType),
 		IgnoreFields:    types.ListNull(types.StringType),
 		WaitFor:         types.ListNull(waitForObjectType()),
+		Timeouts:        nullTimeouts(),
 	}
 }
 

@@ -1318,7 +1318,7 @@ jobs:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
           TF_ACC_TERRAFORM_PATH: ${{ steps.tfpath.outputs.path }}
           TF_ACC_TERRAFORM_VERSION: ${{ needs.get_version_matrix.outputs.latest_terraform_version }}
-        run: ../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
+        run: ../../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
   acc_test_opentofu_smoke:
     # OpenTofu sibling of acc_test_terraform_smoke. Same shape, swapped
     # setup action. terraform-plugin-testing execs whatever binary sits
@@ -1398,7 +1398,7 @@ jobs:
           # either var.
           TF_ACC_PROVIDER_NAMESPACE: hashicorp
           TF_ACC_PROVIDER_HOST: registry.opentofu.org
-        run: ../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
+        run: ../../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
   acc_test_terraform:
     # Full Kubernetes × Terraform matrix, gated on both Terraform smokes:
     #   * acc_test_terraform_smoke catches "syntax error / missing
@@ -1476,7 +1476,7 @@ jobs:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
           TF_ACC_TERRAFORM_PATH: ${{ steps.tfpath.outputs.path }}
           TF_ACC_TERRAFORM_VERSION: ${{ matrix.terraform_version }}
-        run: ../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
+        run: ../../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
   acc_test_opentofu:
     # Full Kubernetes × OpenTofu matrix, gated on both OpenTofu smokes
     # (acc_test_opentofu_smoke + real_opentofu_smoke) for the same
@@ -1547,4 +1547,4 @@ jobs:
           # See acc_test_opentofu_smoke for why these are set.
           TF_ACC_PROVIDER_NAMESPACE: hashicorp
           TF_ACC_PROVIDER_HOST: registry.opentofu.org
-        run: ../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
+        run: ../../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1

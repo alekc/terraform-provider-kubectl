@@ -1044,7 +1044,10 @@ spec:
 YAML
 }
 `, name)
-	expectedError := regexp.MustCompile(".*Invalid value: \"nginx.test-a.svc.cluster.local\": a DNS-1035 label must consist of lower case alphanumeric characters.*")
+	// (?s) lets `.` match newlines because the framework error formatter
+	// wraps "Invalid value:" and the offending value onto separate lines
+	// (the SDK v2 wrapper kept them on a single line).
+	expectedError := regexp.MustCompile("(?s)Invalid value:\\s*\"nginx.test-a.svc.cluster.local\":\\s*a DNS-1035 label must consist of lower case alphanumeric characters")
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
