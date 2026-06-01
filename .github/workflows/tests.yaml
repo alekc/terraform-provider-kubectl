@@ -914,14 +914,17 @@ jobs:
             direct {}
           }
           EOF
-      - name: Phase 2 - rewrite main.tf to use alekc
-        # Swap required_providers from gavinbunney/kubectl to alekc/kubectl.
-        # Terraform 1.8+ detects the cross-provider transition from the
-        # state's recorded provider FQN vs the new required_providers
-        # entry, and invokes MoveStateResource on the destination provider
-        # automatically. Same-address `moved {}` blocks are rejected by
-        # the HCL validator as redundant and are not needed for the
-        # cross-provider case.
+      - name: Phase 2 - rewrite main.tf to use alekc with renamed addresses + moved blocks
+        # Cross-provider state move with same-address moved blocks is
+        # rejected by the HCL validator as redundant; Terraform doesn't
+        # treat the provider FQN change in required_providers as a
+        # distinguishing factor in moved-block validation. To get the
+        # validator to accept the move and to give Terraform's
+        # MoveStateResource trigger a different from/to to point at,
+        # rename each resource block locally during migration:
+        # kubectl_manifest.ns -> kubectl_manifest.ns_v3 and similarly for
+        # cm. Users following the migration can rename back in a
+        # subsequent apply once the state has moved.
         run: |
           cat > cross-smoke/main.tf <<'EOF'
           terraform {
@@ -934,7 +937,17 @@ jobs:
 
           provider "kubectl" {}
 
-          resource "kubectl_manifest" "ns" {
+          moved {
+            from = kubectl_manifest.ns
+            to   = kubectl_manifest.ns_v3
+          }
+
+          moved {
+            from = kubectl_manifest.cm
+            to   = kubectl_manifest.cm_v3
+          }
+
+          resource "kubectl_manifest" "ns_v3" {
             wait      = true
             yaml_body = <<-YAML
               apiVersion: v1
@@ -944,9 +957,9 @@ jobs:
             YAML
           }
 
-          resource "kubectl_manifest" "cm" {
+          resource "kubectl_manifest" "cm_v3" {
             wait       = true
-            depends_on = [kubectl_manifest.ns]
+            depends_on = [kubectl_manifest.ns_v3]
             yaml_body  = <<-YAML
               apiVersion: v1
               kind: ConfigMap
@@ -1092,11 +1105,11 @@ jobs:
             direct {}
           }
           EOF
-      - name: Phase 2 - rewrite main.tf to use alekc
-        # See cross_provider_upgrade_smoke_terraform's Phase 2 step:
-        # OpenTofu 1.8+ matches Terraform's cross-provider detection
-        # behaviour, so swapping required_providers is enough; same-
-        # address `moved {}` blocks are rejected as redundant.
+      - name: Phase 2 - rewrite main.tf to use alekc with renamed addresses + moved blocks
+        # OpenTofu mirrors Terraform's moved-block validator behaviour:
+        # same-address blocks are rejected as redundant. See the Phase
+        # 2 step on cross_provider_upgrade_smoke_terraform for the
+        # rename-during-migration recipe.
         run: |
           cat > cross-smoke/main.tf <<'EOF'
           terraform {
@@ -1109,7 +1122,17 @@ jobs:
 
           provider "kubectl" {}
 
-          resource "kubectl_manifest" "ns" {
+          moved {
+            from = kubectl_manifest.ns
+            to   = kubectl_manifest.ns_v3
+          }
+
+          moved {
+            from = kubectl_manifest.cm
+            to   = kubectl_manifest.cm_v3
+          }
+
+          resource "kubectl_manifest" "ns_v3" {
             wait      = true
             yaml_body = <<-YAML
               apiVersion: v1
@@ -1119,9 +1142,9 @@ jobs:
             YAML
           }
 
-          resource "kubectl_manifest" "cm" {
+          resource "kubectl_manifest" "cm_v3" {
             wait       = true
-            depends_on = [kubectl_manifest.ns]
+            depends_on = [kubectl_manifest.ns_v3]
             yaml_body  = <<-YAML
               apiVersion: v1
               kind: ConfigMap
