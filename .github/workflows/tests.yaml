@@ -553,8 +553,10 @@ jobs:
         # `-detailed-exitcode` returns 0 = no diff, 2 = diff, 1 = error.
         # A no-diff is the contract: state from the published version must
         # round-trip cleanly through the built binary's Read / refresh
-        # path. On diff we dump the planned JSON so debugging the v2.x to
-        # v3 upgrade gap does not require log-spelunking.
+        # path. On diff we dump the planned JSON for triage; the diff is
+        # almost always in a single Sensitive attribute that the default
+        # plan output hides, so the JSON is the only way to see it
+        # without log-spelunking.
         run: |
           set +e
           terraform plan -detailed-exitcode -no-color -out=plan.bin
@@ -564,8 +566,7 @@ jobs:
             echo "Phase 2a: plan is a no-op as required"
           elif [ $rc -eq 2 ]; then
             echo "Phase 2a FAIL: upgrade caused drift" >&2
-            echo "=== terraform show -json plan.bin ===" >&2
-            terraform show -no-color -json plan.bin | jq '.resource_changes[] | select(.change.actions[] | contains("update")) | {address, change: {before: .change.before, after: .change.after}}' >&2 || terraform show -no-color plan.bin >&2
+            terraform show -no-color -json plan.bin | jq '.resource_changes[] | select(.change.actions[] | contains("update")) | {address, change: {before: .change.before, after: .change.after}}' >&2 || true
             exit 1
           else
             exit $rc

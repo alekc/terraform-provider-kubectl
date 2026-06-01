@@ -714,7 +714,17 @@ func (r *manifestResource) ModifyPlan(ctx context.Context, req resource.ModifyPl
 	resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("api_version"), parsed.GetAPIVersion())...)
 	resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("kind"), parsed.GetKind())...)
 	resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("name"), parsed.GetName())...)
-	resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("namespace"), parsed.GetNamespace())...)
+	// Cluster-scoped kinds (Namespace, ClusterRole, ...) have no
+	// metadata.namespace. parsed.GetNamespace() returns "" in that case,
+	// but the SDK v2 schema stored a null. Coerce empty string to a typed
+	// null so v2.x to v3 state round-trips cleanly (caught by
+	// upgrade_path_smoke: Namespace state had namespace=null and the
+	// framework rewriting it to "" produced a no-op-looking diff).
+	if ns := parsed.GetNamespace(); ns == "" {
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("namespace"), types.StringNull())...)
+	} else {
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("namespace"), ns)...)
+	}
 	if resp.Diagnostics.HasError() {
 		return
 	}
