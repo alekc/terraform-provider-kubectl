@@ -801,19 +801,24 @@ jobs:
             exit 1
           fi
   cross_provider_upgrade_smoke_terraform:
-    # Cross-provider `moved {}` block smoke (Phase A of the v3.0.0
+    # Cross-provider state-move smoke (Phase A of the v3.0.0
     # framework-migration epic, issue #123 / milestone v3.0.0). Installs
     # the published gavinbunney/kubectl provider from the public
     # registry, applies a small manifest set, swaps `required_providers`
     # to alekc/kubectl (via dev_overrides pointing at the just-built
-    # binary), adds `moved {}` blocks for each resource, and asserts
-    # `terraform plan` is a no-op so state round-trips cleanly across
-    # the provider boundary.
+    # binary), and asserts `terraform plan` is a no-op so state
+    # round-trips cleanly across the provider boundary.
+    #
+    # Terraform 1.8+ detects the cross-provider transition automatically
+    # from the state's recorded provider FQN vs the new
+    # required_providers entry, and invokes MoveStateResource on the
+    # destination provider. No `moved {}` block is needed (and the
+    # same-address shape that the README suggested earlier is in fact
+    # rejected by the HCL validator as redundant).
     #
     # Now unconditional after #295's Phase D (cutover landed in #314):
     # the framework-side kubectl_manifest implements MoveStateResource,
-    # so the HCL validator accepts the cross-provider `moved {}` block
-    # and the plan-no-op assertion is the load-bearing check. The old
+    # so the plan-no-op assertion is the load-bearing check. The old
     # CROSS_PROVIDER_SMOKE_ENABLED repository-variable gate has been
     # removed.
     needs:
@@ -909,11 +914,14 @@ jobs:
             direct {}
           }
           EOF
-      - name: Phase 2 - rewrite main.tf to use alekc with moved blocks
-        # Swap required_providers from gavinbunney/kubectl to alekc/kubectl
-        # and add `moved {}` blocks for each resource so Terraform knows
-        # the state should transition between providers rather than be
-        # destroyed and re-created.
+      - name: Phase 2 - rewrite main.tf to use alekc
+        # Swap required_providers from gavinbunney/kubectl to alekc/kubectl.
+        # Terraform 1.8+ detects the cross-provider transition from the
+        # state's recorded provider FQN vs the new required_providers
+        # entry, and invokes MoveStateResource on the destination provider
+        # automatically. Same-address `moved {}` blocks are rejected by
+        # the HCL validator as redundant and are not needed for the
+        # cross-provider case.
         run: |
           cat > cross-smoke/main.tf <<'EOF'
           terraform {
@@ -925,16 +933,6 @@ jobs:
           }
 
           provider "kubectl" {}
-
-          moved {
-            from = kubectl_manifest.ns
-            to   = kubectl_manifest.ns
-          }
-
-          moved {
-            from = kubectl_manifest.cm
-            to   = kubectl_manifest.cm
-          }
 
           resource "kubectl_manifest" "ns" {
             wait      = true
@@ -1094,7 +1092,11 @@ jobs:
             direct {}
           }
           EOF
-      - name: Phase 2 - rewrite main.tf to use alekc with moved blocks
+      - name: Phase 2 - rewrite main.tf to use alekc
+        # See cross_provider_upgrade_smoke_terraform's Phase 2 step:
+        # OpenTofu 1.8+ matches Terraform's cross-provider detection
+        # behaviour, so swapping required_providers is enough; same-
+        # address `moved {}` blocks are rejected as redundant.
         run: |
           cat > cross-smoke/main.tf <<'EOF'
           terraform {
@@ -1106,16 +1108,6 @@ jobs:
           }
 
           provider "kubectl" {}
-
-          moved {
-            from = kubectl_manifest.ns
-            to   = kubectl_manifest.ns
-          }
-
-          moved {
-            from = kubectl_manifest.cm
-            to   = kubectl_manifest.cm
-          }
 
           resource "kubectl_manifest" "ns" {
             wait      = true
