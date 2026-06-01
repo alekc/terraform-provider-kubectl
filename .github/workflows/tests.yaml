@@ -88,11 +88,19 @@ jobs:
           make test
           make vet
   build_acc_test_binary:
-    # Compile the kubernetes acceptance-test binary once per CI run.
+    # Compile the framework acceptance-test binary once per CI run.
     # The four acc_test_* jobs download this artifact and execute it
     # directly via `./acc.test` instead of each invoking
-    # `go test ./kubernetes`, which re-links the same binary 50+
-    # times across the matrix fan-out.
+    # `go test ./internal/framework`, which re-links the same binary
+    # 50+ times across the matrix fan-out.
+    #
+    # As of the #62 cutover this binary compiles `./internal/framework`
+    # (where the kubectl_manifest acc suite lives post-migration); the
+    # `./kubernetes` package's remaining acc tests are the 5 SDK v2
+    # data source manifest tests, scheduled to migrate with the data
+    # source port. Until that lands they are not exercised by this
+    # matrix; the smoke and real_*_smoke jobs above still cover the
+    # critical mux + apply paths against a real CLI.
     #
     # Runs in the same first wave as get_version_matrix and unit_test
     # (no `needs:`), so it does not extend critical-path wall time.
@@ -120,7 +128,7 @@ jobs:
         # paths it would strip) and added ~60 s to the first-wave
         # critical path. The strip flags do not invalidate the
         # cache and stand on their own.
-        run: go test -c -ldflags="-s -w" -o acc.test ./kubernetes
+        run: go test -c -ldflags="-s -w" -o acc.test ./internal/framework
       - name: Upload acceptance-test binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -545,16 +553,20 @@ jobs:
         # `-detailed-exitcode` returns 0 = no diff, 2 = diff, 1 = error.
         # A no-diff is the contract: state from the published version must
         # round-trip cleanly through the built binary's Read / refresh
-        # path.
+        # path. On diff we dump the planned JSON for triage; the diff is
+        # almost always in a single Sensitive attribute that the default
+        # plan output hides, so the JSON is the only way to see it
+        # without log-spelunking.
         run: |
           set +e
-          terraform plan -detailed-exitcode -no-color
+          terraform plan -detailed-exitcode -no-color -out=plan.bin
           rc=$?
           set -e
           if [ $rc -eq 0 ]; then
             echo "Phase 2a: plan is a no-op as required"
           elif [ $rc -eq 2 ]; then
             echo "Phase 2a FAIL: upgrade caused drift" >&2
+            terraform show -no-color -json plan.bin | jq '.resource_changes[] | select(.change.actions[] | contains("update")) | {address, change: {before: .change.before, after: .change.after}}' >&2 || terraform show -no-color plan.bin >&2
             exit 1
           else
             exit $rc
@@ -745,13 +757,15 @@ jobs:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
         run: |
           set +e
-          tofu plan -detailed-exitcode -no-color
+          tofu plan -detailed-exitcode -no-color -out=plan.bin
           rc=$?
           set -e
           if [ $rc -eq 0 ]; then
             echo "Phase 2a: plan is a no-op as required"
           elif [ $rc -eq 2 ]; then
             echo "Phase 2a FAIL: upgrade caused drift" >&2
+            echo "=== tofu show -json plan.bin ===" >&2
+            tofu show -no-color -json plan.bin | jq '.resource_changes[] | select(.change.actions[] | contains("update")) | {address, change: {before: .change.before, after: .change.after}}' >&2 || tofu show -no-color plan.bin >&2
             exit 1
           else
             exit $rc
@@ -1248,8 +1262,8 @@ jobs:
           # The acceptance-test binary downloaded below embeds the
           # compiled test code; the only repo content this job needs
           # at runtime is the example .tf files under `_examples/`
-          # (the tests reference them via `../_examples/` from
-          # working-directory: kubernetes). Sparse checkout in cone
+          # (the tests reference them via `../../_examples/` from
+          # working-directory: internal/framework). Sparse checkout in cone
           # mode keeps the top-level files plus the named cone, so
           # the rest of the source tree is skipped.
           sparse-checkout: |
@@ -1283,15 +1297,15 @@ jobs:
         id: tfpath
         run: echo "path=$(which terraform)" >> "${GITHUB_OUTPUT}"
       - name: Prepare runtime directory
-        # Sparse checkout (above) did not materialize kubernetes/;
+        # Sparse checkout (above) did not materialize internal/framework/;
         # create an empty placeholder so `working-directory:
-        # kubernetes` resolves and the test binary's references to
-        # `../_examples/` reach the cone we did check out.
-        run: mkdir -p kubernetes
+        # internal/framework` resolves and the test binary's references to
+        # `../../_examples/` reach the cone we did check out.
+        run: mkdir -p internal/framework
       - name: Acceptance Tests
-        # `working-directory: kubernetes` so the tests resolve
-        # ../_examples/ correctly (same effective cwd that
-        # `go test ./kubernetes` provides).
+        # `working-directory: internal/framework` so the tests resolve
+        # ../../_examples/ correctly (same effective cwd that
+        # `go test ./internal/framework` provides).
         # `-test.parallel=4`: tests that opt in via `t.Parallel()` run
         # up to 4 at a time; tests without it still run serially. A
         # bump to 8 was tested and reverted -- one of every ~50 cells
@@ -1304,13 +1318,13 @@ jobs:
         # No `-race`: the SDK v2 harness shares a *schema.Provider
         # across parallel tests and races inside
         # `GRPCProviderServer.ConfigureProvider`.
-        working-directory: kubernetes
+        working-directory: internal/framework
         env:
           TF_ACC: "1"
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
           TF_ACC_TERRAFORM_PATH: ${{ steps.tfpath.outputs.path }}
           TF_ACC_TERRAFORM_VERSION: ${{ needs.get_version_matrix.outputs.latest_terraform_version }}
-        run: ../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
+        run: ../../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
   acc_test_opentofu_smoke:
     # OpenTofu sibling of acc_test_terraform_smoke. Same shape, swapped
     # setup action. terraform-plugin-testing execs whatever binary sits
@@ -1329,8 +1343,8 @@ jobs:
           # The acceptance-test binary downloaded below embeds the
           # compiled test code; the only repo content this job needs
           # at runtime is the example .tf files under `_examples/`
-          # (the tests reference them via `../_examples/` from
-          # working-directory: kubernetes). Sparse checkout in cone
+          # (the tests reference them via `../../_examples/` from
+          # working-directory: internal/framework). Sparse checkout in cone
           # mode keeps the top-level files plus the named cone, so
           # the rest of the source tree is skipped.
           sparse-checkout: |
@@ -1354,13 +1368,13 @@ jobs:
         id: tfpath
         run: echo "path=$(which tofu)" >> "${GITHUB_OUTPUT}"
       - name: Prepare runtime directory
-        # Sparse checkout (above) did not materialize kubernetes/;
+        # Sparse checkout (above) did not materialize internal/framework/;
         # create an empty placeholder so `working-directory:
-        # kubernetes` resolves and the test binary's references to
-        # `../_examples/` reach the cone we did check out.
-        run: mkdir -p kubernetes
+        # internal/framework` resolves and the test binary's references to
+        # `../../_examples/` reach the cone we did check out.
+        run: mkdir -p internal/framework
       - name: Acceptance Tests
-        working-directory: kubernetes
+        working-directory: internal/framework
         env:
           TF_ACC: "1"
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
@@ -1390,7 +1404,7 @@ jobs:
           # either var.
           TF_ACC_PROVIDER_NAMESPACE: hashicorp
           TF_ACC_PROVIDER_HOST: registry.opentofu.org
-        run: ../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
+        run: ../../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
   acc_test_terraform:
     # Full Kubernetes × Terraform matrix, gated on both Terraform smokes:
     #   * acc_test_terraform_smoke catches "syntax error / missing
@@ -1430,8 +1444,8 @@ jobs:
           # The acceptance-test binary downloaded below embeds the
           # compiled test code; the only repo content this job needs
           # at runtime is the example .tf files under `_examples/`
-          # (the tests reference them via `../_examples/` from
-          # working-directory: kubernetes). Sparse checkout in cone
+          # (the tests reference them via `../../_examples/` from
+          # working-directory: internal/framework). Sparse checkout in cone
           # mode keeps the top-level files plus the named cone, so
           # the rest of the source tree is skipped.
           sparse-checkout: |
@@ -1456,19 +1470,19 @@ jobs:
         id: tfpath
         run: echo "path=$(which terraform)" >> "${GITHUB_OUTPUT}"
       - name: Prepare runtime directory
-        # Sparse checkout (above) did not materialize kubernetes/;
+        # Sparse checkout (above) did not materialize internal/framework/;
         # create an empty placeholder so `working-directory:
-        # kubernetes` resolves and the test binary's references to
-        # `../_examples/` reach the cone we did check out.
-        run: mkdir -p kubernetes
+        # internal/framework` resolves and the test binary's references to
+        # `../../_examples/` reach the cone we did check out.
+        run: mkdir -p internal/framework
       - name: Acceptance Tests
-        working-directory: kubernetes
+        working-directory: internal/framework
         env:
           TF_ACC: "1"
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
           TF_ACC_TERRAFORM_PATH: ${{ steps.tfpath.outputs.path }}
           TF_ACC_TERRAFORM_VERSION: ${{ matrix.terraform_version }}
-        run: ../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
+        run: ../../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
   acc_test_opentofu:
     # Full Kubernetes × OpenTofu matrix, gated on both OpenTofu smokes
     # (acc_test_opentofu_smoke + real_opentofu_smoke) for the same
@@ -1499,8 +1513,8 @@ jobs:
           # The acceptance-test binary downloaded below embeds the
           # compiled test code; the only repo content this job needs
           # at runtime is the example .tf files under `_examples/`
-          # (the tests reference them via `../_examples/` from
-          # working-directory: kubernetes). Sparse checkout in cone
+          # (the tests reference them via `../../_examples/` from
+          # working-directory: internal/framework). Sparse checkout in cone
           # mode keeps the top-level files plus the named cone, so
           # the rest of the source tree is skipped.
           sparse-checkout: |
@@ -1524,13 +1538,13 @@ jobs:
         id: tfpath
         run: echo "path=$(which tofu)" >> "${GITHUB_OUTPUT}"
       - name: Prepare runtime directory
-        # Sparse checkout (above) did not materialize kubernetes/;
+        # Sparse checkout (above) did not materialize internal/framework/;
         # create an empty placeholder so `working-directory:
-        # kubernetes` resolves and the test binary's references to
-        # `../_examples/` reach the cone we did check out.
-        run: mkdir -p kubernetes
+        # internal/framework` resolves and the test binary's references to
+        # `../../_examples/` reach the cone we did check out.
+        run: mkdir -p internal/framework
       - name: Acceptance Tests
-        working-directory: kubernetes
+        working-directory: internal/framework
         env:
           TF_ACC: "1"
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
@@ -1539,4 +1553,4 @@ jobs:
           # See acc_test_opentofu_smoke for why these are set.
           TF_ACC_PROVIDER_NAMESPACE: hashicorp
           TF_ACC_PROVIDER_HOST: registry.opentofu.org
-        run: ../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1
+        run: ../../acc.test -test.v -test.parallel=4 -test.timeout=25m -test.count=1

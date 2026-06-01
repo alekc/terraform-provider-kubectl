@@ -167,6 +167,7 @@ func (p *kubectlFrameworkProvider) Configure(_ context.Context, _ provider.Confi
 func (p *kubectlFrameworkProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewServerVersionResource,
+		NewManifestResource,
 	}
 }
 

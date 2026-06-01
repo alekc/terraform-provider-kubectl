@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -54,31 +55,32 @@ func NewManifestResource() resource.Resource {
 // the SDK v2 file for diff review. The tfsdk tags are the source of truth
 // for attribute names.
 type manifestResourceModel struct {
-	ID                    types.String `tfsdk:"id"`
-	UID                   types.String `tfsdk:"uid"`
-	LiveUID               types.String `tfsdk:"live_uid"`
-	YAMLInCluster         types.String `tfsdk:"yaml_incluster"`
-	LiveManifestInCluster types.String `tfsdk:"live_manifest_incluster"`
-	APIVersion            types.String `tfsdk:"api_version"`
-	Kind                  types.String `tfsdk:"kind"`
-	Name                  types.String `tfsdk:"name"`
-	Namespace             types.String `tfsdk:"namespace"`
-	OverrideNamespace     types.String `tfsdk:"override_namespace"`
-	YAMLBody              types.String `tfsdk:"yaml_body"`
-	YAMLBodyParsed        types.String `tfsdk:"yaml_body_parsed"`
-	SensitiveFields       types.List   `tfsdk:"sensitive_fields"`
-	ForceNew              types.Bool   `tfsdk:"force_new"`
-	UpgradeAPIVersion     types.Bool   `tfsdk:"upgrade_api_version"`
-	ServerSideApply       types.Bool   `tfsdk:"server_side_apply"`
-	FieldManager          types.String `tfsdk:"field_manager"`
-	ForceConflicts        types.Bool   `tfsdk:"force_conflicts"`
-	ApplyOnly             types.Bool   `tfsdk:"apply_only"`
-	IgnoreFields          types.List   `tfsdk:"ignore_fields"`
-	Wait                  types.Bool   `tfsdk:"wait"`
-	WaitForRollout        types.Bool   `tfsdk:"wait_for_rollout"`
-	ValidateSchema        types.Bool   `tfsdk:"validate_schema"`
-	DeleteCascade         types.String `tfsdk:"delete_cascade"`
-	WaitFor               types.List   `tfsdk:"wait_for"`
+	ID                    types.String   `tfsdk:"id"`
+	UID                   types.String   `tfsdk:"uid"`
+	LiveUID               types.String   `tfsdk:"live_uid"`
+	YAMLInCluster         types.String   `tfsdk:"yaml_incluster"`
+	LiveManifestInCluster types.String   `tfsdk:"live_manifest_incluster"`
+	APIVersion            types.String   `tfsdk:"api_version"`
+	Kind                  types.String   `tfsdk:"kind"`
+	Name                  types.String   `tfsdk:"name"`
+	Namespace             types.String   `tfsdk:"namespace"`
+	OverrideNamespace     types.String   `tfsdk:"override_namespace"`
+	YAMLBody              types.String   `tfsdk:"yaml_body"`
+	YAMLBodyParsed        types.String   `tfsdk:"yaml_body_parsed"`
+	SensitiveFields       types.List     `tfsdk:"sensitive_fields"`
+	ForceNew              types.Bool     `tfsdk:"force_new"`
+	UpgradeAPIVersion     types.Bool     `tfsdk:"upgrade_api_version"`
+	ServerSideApply       types.Bool     `tfsdk:"server_side_apply"`
+	FieldManager          types.String   `tfsdk:"field_manager"`
+	ForceConflicts        types.Bool     `tfsdk:"force_conflicts"`
+	ApplyOnly             types.Bool     `tfsdk:"apply_only"`
+	IgnoreFields          types.List     `tfsdk:"ignore_fields"`
+	Wait                  types.Bool     `tfsdk:"wait"`
+	WaitForRollout        types.Bool     `tfsdk:"wait_for_rollout"`
+	ValidateSchema        types.Bool     `tfsdk:"validate_schema"`
+	DeleteCascade         types.String   `tfsdk:"delete_cascade"`
+	WaitFor               types.List     `tfsdk:"wait_for"`
+	Timeouts              timeouts.Value `tfsdk:"timeouts"`
 }
 
 // waitForBlockModel is the inline shape of a single wait_for block.
@@ -113,7 +115,7 @@ func (r *manifestResource) Metadata(_ context.Context, req resource.MetadataRequ
 // The attribute set, types, and default values are byte-compatible with
 // the SDK v2 implementation so existing state round-trips without churn
 // after the cutover. Implements resource.Resource.
-func (r *manifestResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *manifestResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Version: 1,
 		Description: "Apply a Kubernetes manifest from raw YAML. Tracks the live resource by UID; reapplies " +
@@ -323,6 +325,11 @@ func (r *manifestResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				},
 				Description: "Wait for cluster-side conditions or field values after Apply. A single block is supported; nested `condition` and `field` blocks combine (all must be satisfied) before the apply completes. MaxItems = 1 is not enforced in the schema (framework limitation) and is checked in ModifyPlan instead.",
 			},
+			"timeouts": timeouts.Block(ctx, timeouts.Opts{
+				Create: true,
+				Update: true,
+				Delete: true,
+			}),
 		},
 	}
 }
@@ -405,9 +412,13 @@ func extractWaitFor(ctx context.Context, list types.List) (*internaltypes.WaitFo
 }
 
 // buildApplyOptions constructs an ApplyManifestOptions struct from the
-// plan model. Shared between Create and Update. Returns any decoding
-// diagnostics so the caller can short-circuit on error.
-func (r *manifestResource) buildApplyOptions(ctx context.Context, data manifestResourceModel) (kubernetes.ApplyManifestOptions, diag.Diagnostics) {
+// plan model. Shared between Create and Update. The timeout argument
+// is resolved by the caller (Create vs Update each pulls a different
+// timeouts attribute and falls back to defaultLifecycleTimeout) so the
+// helper does not need to know which lifecycle phase is running.
+// Returns any decoding diagnostics so the caller can short-circuit on
+// error.
+func (r *manifestResource) buildApplyOptions(ctx context.Context, data manifestResourceModel, timeout time.Duration) (kubernetes.ApplyManifestOptions, diag.Diagnostics) {
 	var allDiags diag.Diagnostics
 	waitFor, d := extractWaitFor(ctx, data.WaitFor)
 	allDiags.Append(d...)
@@ -428,7 +439,7 @@ func (r *manifestResource) buildApplyOptions(ctx context.Context, data manifestR
 		ForceConflicts:    data.ForceConflicts.ValueBool(),
 		WaitForRollout:    boolOrTrue(data.WaitForRollout),
 		WaitFor:           waitFor,
-		Timeout:           defaultLifecycleTimeout,
+		Timeout:           timeout,
 		IgnoreFields:      ignoreFields,
 		SensitiveFields:   sensitiveFields,
 	}, allDiags
@@ -461,7 +472,21 @@ func (r *manifestResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
-	opts, d := r.buildApplyOptions(ctx, data)
+	timeout, d := data.Timeouts.Create(ctx, defaultLifecycleTimeout)
+	resp.Diagnostics.Append(d...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// The terraform-plugin-framework-timeouts package returns the
+	// duration only; unlike SDK v2's Resource.Timeouts the framework
+	// does NOT auto-apply that timeout to ctx. Wrap explicitly so
+	// downstream code (WaitForRollout, WaitForConditions, etc.) that
+	// loops on ctx.Done() observes the user-configured deadline.
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	opts, d := r.buildApplyOptions(ctx, data, timeout)
 	resp.Diagnostics.Append(d...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -539,7 +564,18 @@ func (r *manifestResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 
-	opts, d := r.buildApplyOptions(ctx, data)
+	timeout, d := data.Timeouts.Update(ctx, defaultLifecycleTimeout)
+	resp.Diagnostics.Append(d...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// See Create: framework-timeouts returns the duration only, the
+	// framework does not auto-apply it to ctx like SDK v2 did.
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	opts, d := r.buildApplyOptions(ctx, data, timeout)
 	resp.Diagnostics.Append(d...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -579,13 +615,24 @@ func (r *manifestResource) Delete(ctx context.Context, req resource.DeleteReques
 	}
 	sensitiveFields = kubernetes.NormalizeSensitiveFields(sensitiveFields)
 
+	timeout, td := data.Timeouts.Delete(ctx, defaultLifecycleTimeout)
+	resp.Diagnostics.Append(td...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// See Create: framework-timeouts returns the duration only, the
+	// framework does not auto-apply it to ctx like SDK v2 did.
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	opts := kubernetes.DeleteManifestOptions{
 		YAMLBody:          data.YAMLBody.ValueString(),
 		OverrideNamespace: data.OverrideNamespace.ValueString(),
 		ApplyOnly:         data.ApplyOnly.ValueBool(),
 		Wait:              data.Wait.ValueBool(),
 		DeleteCascade:     data.DeleteCascade.ValueString(),
-		Timeout:           defaultLifecycleTimeout,
+		Timeout:           timeout,
 		SensitiveFields:   sensitiveFields,
 	}
 
@@ -685,7 +732,17 @@ func (r *manifestResource) ModifyPlan(ctx context.Context, req resource.ModifyPl
 	resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("api_version"), parsed.GetAPIVersion())...)
 	resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("kind"), parsed.GetKind())...)
 	resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("name"), parsed.GetName())...)
-	resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("namespace"), parsed.GetNamespace())...)
+	// Cluster-scoped kinds (Namespace, ClusterRole, ...) have no
+	// metadata.namespace. parsed.GetNamespace() returns "" in that case,
+	// but the SDK v2 schema stored a null. Coerce empty string to a typed
+	// null so v2.x to v3 state round-trips cleanly (caught by
+	// upgrade_path_smoke: Namespace state had namespace=null and the
+	// framework rewriting it to "" produced a no-op-looking diff).
+	if ns := parsed.GetNamespace(); ns == "" {
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("namespace"), types.StringNull())...)
+	} else {
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("namespace"), ns)...)
+	}
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -707,7 +764,51 @@ func (r *manifestResource) ModifyPlan(ctx context.Context, req resource.ModifyPl
 
 		if state.YAMLInCluster.ValueString() != state.LiveManifestInCluster.ValueString() {
 			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("yaml_incluster"), types.StringUnknown())...)
+			// Drift-driven applies recompute both fingerprints; pinning
+			// live_manifest_incluster to the stale state value triggers
+			// the post-apply consistency check when Apply returns the
+			// new value.
+			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("live_manifest_incluster"), types.StringUnknown())...)
 		}
+
+		// When inputs that feed Apply differ between state and plan,
+		// the computed fingerprints Apply returns cannot be predicted
+		// at plan time: yaml_incluster / live_manifest_incluster are
+		// GetLiveManifestFields hashes over the new manifest against
+		// the post-apply cluster state. The SDK v2 diff engine marked
+		// these "(known after apply)" automatically when relevant
+		// inputs changed; the framework requires it to be explicit.
+		// Without this, the framework's post-apply consistency check
+		// raises "Provider produced inconsistent result after apply"
+		// whenever Apply's recomputed values differ from what state
+		// preserved via UseStateForUnknown.
+		inputsChanged := plan.YAMLBody.ValueString() != state.YAMLBody.ValueString() ||
+			plan.OverrideNamespace.ValueString() != state.OverrideNamespace.ValueString() ||
+			!plan.IgnoreFields.Equal(state.IgnoreFields)
+		if inputsChanged {
+			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("yaml_incluster"), types.StringUnknown())...)
+			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("live_manifest_incluster"), types.StringUnknown())...)
+		}
+
+		// id is the self-link (apiVersion + kind + namespace + name) of
+		// the applied object. It must go Unknown whenever any of those
+		// four identifier components changes, regardless of whether
+		// the change happens through the in-place upgrade_api_version
+		// path or the force-replace path: in both cases the self-link
+		// recomputes during Apply. The earlier gate on
+		// plan.UpgradeAPIVersion was wrong for the replace path. The
+		// "was known, but now unknown" final-plan inconsistency check
+		// still passes because Terraform skips known-to-Unknown
+		// validation when the resource is being replaced.
+		parsedNamespace := parsed.GetNamespace()
+		idChanged := state.APIVersion.ValueString() != parsed.GetAPIVersion() ||
+			state.Kind.ValueString() != parsed.GetKind() ||
+			state.Name.ValueString() != parsed.GetName() ||
+			state.Namespace.ValueString() != parsedNamespace
+		if idChanged {
+			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("id"), types.StringUnknown())...)
+		}
+
 		if resp.Diagnostics.HasError() {
 			return
 		}

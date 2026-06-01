@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -16,6 +17,20 @@ import (
 
 	"github.com/alekc/terraform-provider-kubectl/internal/mux"
 )
+
+// skipIfOpenTofu marks the test as skipped when the CI runner pointed the
+// test framework at the OpenTofu binary via TF_ACC_TERRAFORM_PATH (i.e.
+// the basename is tofu rather than terraform). Ephemeral resources are a
+// Terraform 1.10+ protocol feature; OpenTofu 1.10+ understands the
+// protocol but its plan-walker reports a non-empty plan on the ephemeral
+// refresh step in cases Terraform considers empty. Until that divergence
+// resolves upstream the ephemeral acc suite is gated to Terraform only.
+func skipIfOpenTofu(t *testing.T) {
+	t.Helper()
+	if path := os.Getenv("TF_ACC_TERRAFORM_PATH"); strings.Contains(filepath.Base(path), "tofu") {
+		t.Skip("ephemeral acc tests gated to Terraform; OpenTofu reports a non-empty refresh plan for ephemeral reads")
+	}
+}
 
 // testAccProtoV6ProviderFactories returns the muxed provider (SDK v2 + framework)
 // under the `kubectl` type name. Mirrors the pattern used by
@@ -40,6 +55,7 @@ func testAccPreCheck(t *testing.T) {
 // `check` block that asserts on `phase`. A failing check produces a test
 // failure with a stable error message we can match.
 func TestAccKubectlEphemeralManifest_clusterScoped(t *testing.T) {
+	skipIfOpenTofu(t)
 	t.Parallel()
 
 	cfg := `
@@ -88,6 +104,7 @@ check "ns_active" {
 // ephemeral block plus the assertion. By the time step 2's plan runs, the
 // ConfigMap is on the cluster and the ephemeral read succeeds.
 func TestAccKubectlEphemeralManifest_namespacedConfigMap(t *testing.T) {
+	skipIfOpenTofu(t)
 	t.Parallel()
 
 	name := fmt.Sprintf("acc-ephemeral-cm-%s", acctest.RandString(8))
@@ -148,6 +165,7 @@ check "region_ok" {
 // half surfaces the same error shape as the SDK v2 data source when a
 // gojsonq path under `fields` does not resolve.
 func TestAccKubectlEphemeralManifest_missingFieldPath(t *testing.T) {
+	skipIfOpenTofu(t)
 	t.Parallel()
 
 	cfg := `
@@ -185,6 +203,7 @@ check "stub" {
 // TestAccKubectlEphemeralManifest_notFound asserts the ephemeral resource
 // errors when the target object does not exist.
 func TestAccKubectlEphemeralManifest_notFound(t *testing.T) {
+	skipIfOpenTofu(t)
 	t.Parallel()
 
 	cfg := `
@@ -255,6 +274,7 @@ var _ statecheck.StateCheck = ephemeralNotInState{}
 // the ephemeral before the seed has been applied. The state-not-in
 // assertion lives on step 2, after both seed and ephemeral are in play.
 func TestAccKubectlEphemeralManifest_notInState(t *testing.T) {
+	skipIfOpenTofu(t)
 	t.Parallel()
 
 	name := fmt.Sprintf("acc-ephemeral-state-%s", acctest.RandString(8))
