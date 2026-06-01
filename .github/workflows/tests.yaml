@@ -553,16 +553,19 @@ jobs:
         # `-detailed-exitcode` returns 0 = no diff, 2 = diff, 1 = error.
         # A no-diff is the contract: state from the published version must
         # round-trip cleanly through the built binary's Read / refresh
-        # path.
+        # path. On diff we dump the planned JSON so debugging the v2.x to
+        # v3 upgrade gap does not require log-spelunking.
         run: |
           set +e
-          terraform plan -detailed-exitcode -no-color
+          terraform plan -detailed-exitcode -no-color -out=plan.bin
           rc=$?
           set -e
           if [ $rc -eq 0 ]; then
             echo "Phase 2a: plan is a no-op as required"
           elif [ $rc -eq 2 ]; then
             echo "Phase 2a FAIL: upgrade caused drift" >&2
+            echo "=== terraform show -json plan.bin ===" >&2
+            terraform show -no-color -json plan.bin | jq '.resource_changes[] | select(.change.actions[] | contains("update")) | {address, change: {before: .change.before, after: .change.after}}' >&2 || terraform show -no-color plan.bin >&2
             exit 1
           else
             exit $rc
@@ -753,13 +756,15 @@ jobs:
           KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
         run: |
           set +e
-          tofu plan -detailed-exitcode -no-color
+          tofu plan -detailed-exitcode -no-color -out=plan.bin
           rc=$?
           set -e
           if [ $rc -eq 0 ]; then
             echo "Phase 2a: plan is a no-op as required"
           elif [ $rc -eq 2 ]; then
             echo "Phase 2a FAIL: upgrade caused drift" >&2
+            echo "=== tofu show -json plan.bin ===" >&2
+            tofu show -no-color -json plan.bin | jq '.resource_changes[] | select(.change.actions[] | contains("update")) | {address, change: {before: .change.before, after: .change.after}}' >&2 || tofu show -no-color plan.bin >&2
             exit 1
           else
             exit $rc
