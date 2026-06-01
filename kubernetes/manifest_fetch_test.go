@@ -196,7 +196,7 @@ func TestBuildSelfLinkID(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, buildSelfLinkID(tc.apiVersion, tc.namespace, tc.kind, tc.resourceName))
+			assert.Equal(t, tc.want, BuildSelfLinkID(tc.apiVersion, tc.namespace, tc.kind, tc.resourceName))
 		})
 	}
 }

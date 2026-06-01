@@ -178,6 +178,7 @@ func (p *kubectlFrameworkProvider) DataSources(_ context.Context) []func() datas
 		NewFileDocumentsDataSource,
 		NewPathDocumentsDataSource,
 		NewKustomizeDocumentsDataSource,
+		NewManifestDataSource,
 	}
 }
 

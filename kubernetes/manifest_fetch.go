@@ -29,6 +29,18 @@ type ManifestFetchResult struct {
 // (data sources) or open-time error (ephemeral resources).
 var ErrManifestNotFound = fmt.Errorf("manifest not found")
 
+// BuildSelfLinkID returns the deterministic identifier the kubectl_manifest
+// data source uses for state. Shape:
+//
+//	<apiVersion>/<namespace>/<kind>/<name>
+//
+// Cluster-scoped objects collapse the namespace segment to empty. The shape
+// is part of the data source's state contract; changing it forces a replace
+// on every consumer, so treat it as stable.
+func BuildSelfLinkID(apiVersion, namespace, kind, name string) string {
+	return fmt.Sprintf("%s/%s/%s/%s", apiVersion, namespace, kind, name)
+}
+
 // FetchManifest fetches a single Kubernetes object by GVK + name (+ namespace)
 // and optionally extracts user-supplied dot-path fields into a string map.
 // Shared by the SDK v2 data source and the plugin-framework ephemeral resource.
