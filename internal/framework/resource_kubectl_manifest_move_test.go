@@ -127,6 +127,57 @@ func TestMoveFromGavinbunney_HappyPath(t *testing.T) {
 	}
 }
 
+// TestMoveFromGavinbunney_RecomputesYAMLFingerprint asserts the mover
+// replaces the gavinbunney-stored yaml_incluster (and live_manifest_incluster)
+// with an alekc-canonical baseline computed from src.YAMLBody via
+// kubernetes.GetLiveManifestFields. The cross-provider smoke job depends on
+// this: if we passed gavinbunney's fingerprint through unchanged, alekc's
+// drift check in ModifyPlan would fire post-Read against alekc's freshly
+// computed live fingerprint, producing a non-empty plan on the first
+// terraform plan after the move.
+func TestMoveFromGavinbunney_RecomputesYAMLFingerprint(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	src := sampleGavinbunneySource()
+	// Sentinel value the recomputation must overwrite.
+	src.YAMLInCluster = types.StringValue("gavinbunney-style-fp")
+	src.LiveManifestInCluster = types.StringValue("gavinbunney-style-fp")
+
+	req := resource.MoveStateRequest{
+		SourceTypeName:        gavinbunneyManifestTypeName,
+		SourceProviderAddress: "registry.terraform.io/gavinbunney/kubectl",
+		SourceSchemaVersion:   1,
+		SourceState:           newSourceState(ctx, t, src),
+	}
+	resp := &resource.MoveStateResponse{TargetState: newTargetState(ctx, t)}
+
+	moveFromGavinbunneyManifest(ctx, req, resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected diagnostics: %+v", resp.Diagnostics)
+	}
+
+	var got manifestResourceModel
+	if diags := resp.TargetState.Get(ctx, &got); diags.HasError() {
+		t.Fatalf("reading target state: %+v", diags)
+	}
+
+	if got.YAMLInCluster.ValueString() == "gavinbunney-style-fp" {
+		t.Errorf("yaml_incluster should be recomputed, still equals sentinel")
+	}
+	if got.LiveManifestInCluster.ValueString() == "gavinbunney-style-fp" {
+		t.Errorf("live_manifest_incluster should be recomputed, still equals sentinel")
+	}
+	if got.YAMLInCluster.ValueString() != got.LiveManifestInCluster.ValueString() {
+		t.Errorf("post-move yaml_incluster and live_manifest_incluster must match: %q vs %q",
+			got.YAMLInCluster.ValueString(), got.LiveManifestInCluster.ValueString())
+	}
+	if got.YAMLInCluster.ValueString() == "" {
+		t.Errorf("expected a non-empty alekc-canonical fingerprint, got empty")
+	}
+}
+
 // TestMoveFromGavinbunney_Skips asserts the mover stays silent (no state, no
 // diagnostics) when the source is not gavinbunney/kubectl kubectl_manifest, so
 // the framework can try other movers.

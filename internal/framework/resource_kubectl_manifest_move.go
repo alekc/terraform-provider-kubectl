@@ -10,6 +10,9 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+
+	"github.com/alekc/terraform-provider-kubectl/kubernetes"
+	"github.com/alekc/terraform-provider-kubectl/yaml"
 )
 
 // Cross-provider state move support: lets practitioners migrate existing
@@ -189,6 +192,45 @@ func moveFromGavinbunneyManifest(ctx context.Context, req resource.MoveStateRequ
 		return
 	}
 
+	// Recompute the yaml_incluster fingerprint using alekc's
+	// GetLiveManifestFields algorithm against the source yaml_body.
+	// gavinbunney's stored fingerprint was computed by gavinbunney's
+	// algorithm against the apply response; alekc's Read post-move
+	// recomputes live_manifest_incluster against the live cluster using
+	// alekc's algorithm. If we passed gavinbunney's fingerprint through
+	// unchanged, alekc's drift detection in ModifyPlan (compares
+	// yaml_incluster to live_manifest_incluster) would fire on the first
+	// plan after the move, producing a non-empty plan that the
+	// cross-provider smoke job rejects. Computing the baseline here as
+	// GetLiveManifestFields(ignored, parsed, parsed) approximates what
+	// Read produces for a no-drift resource: identical for any kind that
+	// the server does not mutate beyond control fields (Namespace,
+	// ConfigMap, Secret, simple CRDs), which is the typical migration
+	// shape. Resources that get heavy server-side defaulting (admission
+	// webhooks rewriting spec fields) may still see a one-time refresh
+	// diff on the first plan after move; that's a documented caveat in
+	// the migration recipe.
+	yamlFingerprint := src.YAMLInCluster
+	if !src.YAMLBody.IsNull() && !src.YAMLBody.IsUnknown() {
+		parsed, parseErr := yaml.ParseYAML(src.YAMLBody.ValueString())
+		if parseErr == nil {
+			if !src.OverrideNamespace.IsNull() && src.OverrideNamespace.ValueString() != "" {
+				parsed.SetNamespace(src.OverrideNamespace.ValueString())
+			}
+			var ignored []string
+			if !src.IgnoreFields.IsNull() && !src.IgnoreFields.IsUnknown() {
+				for _, elem := range src.IgnoreFields.Elements() {
+					if s, ok := elem.(types.String); ok && !s.IsNull() && !s.IsUnknown() {
+						ignored = append(ignored, s.ValueString())
+					}
+				}
+			}
+			yamlFingerprint = types.StringValue(
+				kubernetes.GetLiveManifestFields(ignored, parsed, parsed),
+			)
+		}
+	}
+
 	// Passthrough of the 20 shared attributes plus id. The 4 alekc-only
 	// attributes take their schema defaults: upgrade_api_version=false
 	// (matches gavinbunney's always-recreate-on-api_version behaviour being
@@ -198,8 +240,8 @@ func moveFromGavinbunneyManifest(ctx context.Context, req resource.MoveStateRequ
 		ID:                    src.ID,
 		UID:                   src.UID,
 		LiveUID:               src.LiveUID,
-		YAMLInCluster:         src.YAMLInCluster,
-		LiveManifestInCluster: src.LiveManifestInCluster,
+		YAMLInCluster:         yamlFingerprint,
+		LiveManifestInCluster: yamlFingerprint,
 		APIVersion:            src.APIVersion,
 		Kind:                  src.Kind,
 		Name:                  src.Name,
