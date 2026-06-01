@@ -175,13 +175,13 @@ want to try an unreleased fix from `master` or submit a change.
 
 ## Migrating from gavinbunney/kubectl
 
-If you previously used `gavinbunney/kubectl`, you can switch existing `kubectl_manifest` resources to this fork without destroying and recreating anything. There are two ways to do it; pick based on your Terraform / OpenTofu version.
+If you previously used `gavinbunney/kubectl`, you can switch existing `kubectl_manifest` resources to this fork without destroying and recreating anything. Pick the recipe that matches your CLI.
 
-### Recommended: a `moved` block (Terraform 1.8+ / OpenTofu 1.8+)
+### Terraform 1.8+: a `moved` block
 
 This provider implements native cross-provider state move for `kubectl_manifest`, so a `moved` block migrates state in place during a normal `plan` / `apply`, with no separate state surgery and no resource churn. Cross-provider move support requires the framework-based release of this provider (the release that ships the plugin-framework `kubectl_manifest`); pin to that release or newer in `required_providers`.
 
-Point `required_providers` at this fork and add a `moved` block whose `from` is the gavinbunney address and whose `to` is the same resource under this provider:
+Terraform's HCL validator rejects `moved` blocks whose `from` and `to` addresses are identical, even when the provider FQN differs, so the migration uses a rename-and-rename-back pattern. Pick a transitional address (any unused name; `_v3` works):
 
 ```hcl
 terraform {
@@ -193,12 +193,28 @@ terraform {
 }
 
 moved {
-  from = kubectl_manifest.my_app   # was gavinbunney/kubectl
-  to   = kubectl_manifest.my_app   # now alekc/kubectl
+  from = kubectl_manifest.my_app          # was gavinbunney/kubectl
+  to   = kubectl_manifest.my_app_v3       # now alekc/kubectl
+}
+
+resource "kubectl_manifest" "my_app_v3" {
+  # ... same yaml_body / attributes as before
 }
 ```
 
-Run `terraform init -upgrade` then `terraform plan`. The plan should report the resource as moved with no in-place changes (an empty diff). Run `terraform apply` to commit the move. Once the move has applied, delete the `moved` block.
+Run `terraform init -upgrade`, then `terraform plan`. The plan reports the resource as moved with no in-place changes:
+
+```
+# kubectl_manifest.my_app has moved to kubectl_manifest.my_app_v3
+    resource "kubectl_manifest" "my_app_v3" {
+        # (N unchanged attributes hidden)
+    }
+Plan: 0 to add, 0 to change, 0 to destroy.
+```
+
+Run `terraform apply` to commit the move (no-op for the resource itself; only the state address changes). After the move applies you can either keep the new name or rename back: drop the `_v3` from the resource block, add a second `moved` block pointing `my_app_v3` to `my_app`, and apply again. Once the addresses match, remove the `moved` blocks entirely.
+
+Note that `terraform plan -detailed-exitcode` returns 2 on the first plan because `moved` annotations count as "changes present" even when the resource summary is `0 to add, 0 to change, 0 to destroy`. The second plan after apply returns 0 cleanly. Treat the summary line as authoritative.
 
 The 20 attributes shared with gavinbunney carry over unchanged. The four attributes that exist only on this fork take their defaults on the moved resource, all of which are no-ops for an unchanged manifest:
 
@@ -211,15 +227,20 @@ The 20 attributes shared with gavinbunney carry over unchanged. The four attribu
 
 One behaviour changes, for the better: on `gavinbunney/kubectl` an `api_version` change always forced a destroy-and-recreate; on this fork it applies in place when `upgrade_api_version = true`. The default (`false`) matches gavinbunney, so the move itself never changes how your existing resources plan.
 
-### Alternative: `state replace-provider` (older Terraform)
+### OpenTofu: `state replace-provider`
 
-On Terraform older than 1.8 (which has no cross-provider `moved` support), switch the provider across all existing resources with `state replace-provider`. Change the `required_providers` block in your root module and all child modules to use `alekc/kubectl` as shown in the [Installation](#terraform-013) section above, then:
+OpenTofu 1.11.x does not invoke the destination provider's `MoveStateResource` handler on cross-provider transitions, so a `moved` block migrates the state address but leaves the attribute payload untranslated. The first plan on OpenTofu after a `moved`-block migration therefore reports an in-place change on every moved resource, which is not what you want. Until OpenTofu ships cross-provider move dispatch, use `state replace-provider` instead. Change the `required_providers` block in your root module and all child modules to use `alekc/kubectl`, then run:
 
 ```sh
-terraform state replace-provider gavinbunney/kubectl alekc/kubectl
+tofu state replace-provider gavinbunney/kubectl alekc/kubectl
+tofu init
 ```
 
-Run `terraform init` afterwards; subsequent terraform actions will use this provider.
+The next `tofu plan` is a no-op. The four alekc-only attributes show as `+ field_manager`, `+ upgrade_api_version`, etc. on the first plan because `state replace-provider` does not invoke `MoveStateResource` either; running `tofu apply` once absorbs them and subsequent plans are clean.
+
+### Terraform older than 1.8
+
+Same recipe as OpenTofu: use `terraform state replace-provider gavinbunney/kubectl alekc/kubectl` to flip the provider FQN on every resource, then `terraform init`. The first plan after the swap shows the four alekc-only attributes as additions; one `terraform apply` absorbs them.
 
 ### Note on `kubectl_kustomize_documents`
 
