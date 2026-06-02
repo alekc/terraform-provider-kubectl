@@ -18,7 +18,7 @@ import (
 // `triggers` map forces a destroy + recreate, which refetches the apiserver
 // version into state. All other attributes are Computed.
 type serverVersionResource struct {
-	sdkV2Meta func() any
+	kubeProvider *kubernetes.KubeProvider
 }
 
 var (
@@ -80,30 +80,28 @@ func (r *serverVersionResource) Schema(_ context.Context, _ resource.SchemaReque
 	}
 }
 
+// Configure caches the *kubernetes.KubeProvider produced by the framework
+// provider's Configure pass. Implements resource.ResourceWithConfigure.
 func (r *serverVersionResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
-	cb, ok := req.ProviderData.(func() any)
+	kp, ok := req.ProviderData.(*kubernetes.KubeProvider)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"unexpected resource configuration",
-			fmt.Sprintf("expected func() any from provider data, got %T", req.ProviderData),
+			fmt.Sprintf("expected *kubernetes.KubeProvider from provider data, got %T", req.ProviderData),
 		)
 		return
 	}
-	r.sdkV2Meta = cb
+	r.kubeProvider = kp
 }
 
 func (r *serverVersionResource) fetch(ctx context.Context, data *serverVersionResourceModel) error {
-	if r.sdkV2Meta == nil {
-		return fmt.Errorf("provider not configured: SDK v2 meta missing (mux wiring bug)")
+	if r.kubeProvider == nil {
+		return fmt.Errorf("provider not configured: kubeProvider unset")
 	}
-	provider, ok := r.sdkV2Meta().(*kubernetes.KubeProvider)
-	if !ok {
-		return fmt.Errorf("provider type mismatch: expected *kubernetes.KubeProvider, got %T", r.sdkV2Meta())
-	}
-	info, err := kubernetes.FetchServerVersion(provider)
+	info, err := kubernetes.FetchServerVersion(r.kubeProvider)
 	if err != nil {
 		return err
 	}

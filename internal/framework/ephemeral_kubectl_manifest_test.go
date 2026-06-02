@@ -9,13 +9,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/statecheck"
 	"github.com/hashicorp/terraform-plugin-testing/tfversion"
 
-	"github.com/alekc/terraform-provider-kubectl/internal/mux"
+	"github.com/alekc/terraform-provider-kubectl/internal/framework"
 )
 
 // skipIfOpenTofu marks the test as skipped when the CI runner pointed the
@@ -32,12 +33,12 @@ func skipIfOpenTofu(t *testing.T) {
 	}
 }
 
-// testAccProtoV6ProviderFactories returns the muxed provider (SDK v2 + framework)
-// under the `kubectl` type name. Mirrors the pattern used by
-// terraform-provider-kubernetes for ephemeral resource acceptance tests.
+// testAccProtoV6ProviderFactories returns the framework-only provider
+// under the `kubectl` type name. Post-#297 the SDK v2 half is gone, so
+// the factory wraps framework.New directly via providerserver.NewProtocol6.
 var testAccProtoV6ProviderFactories = map[string]func() (tfprotov6.ProviderServer, error){
 	"kubectl": func() (tfprotov6.ProviderServer, error) {
-		return mux.MuxServer(context.Background(), "test")
+		return providerserver.NewProtocol6(framework.New("test"))(), nil
 	},
 }
 

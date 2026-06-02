@@ -19,7 +19,7 @@ import (
 // instead. The input/output shape mirrors the ephemeral sibling; both share
 // the kubernetes.FetchManifest helper.
 type manifestDataSource struct {
-	sdkV2Meta func() any
+	kubeProvider *kubernetes.KubeProvider
 }
 
 var (
@@ -119,23 +119,22 @@ func (d *manifestDataSource) Schema(_ context.Context, _ datasource.SchemaReques
 	}
 }
 
-// Configure receives the muxed provider's late-bound *KubeProvider via the
-// shared func() any callback registered in provider.go. Stored on the
-// receiver so Read can resolve the client at request time. Implements
-// datasource.DataSourceWithConfigure.
+// Configure caches the *kubernetes.KubeProvider produced by the framework
+// provider's Configure pass so Read can use it directly without callback
+// indirection. Implements datasource.DataSourceWithConfigure.
 func (d *manifestDataSource) Configure(_ context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
-	cb, ok := req.ProviderData.(func() any)
+	kp, ok := req.ProviderData.(*kubernetes.KubeProvider)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"unexpected data source configuration",
-			fmt.Sprintf("expected func() any from provider data, got %T", req.ProviderData),
+			fmt.Sprintf("expected *kubernetes.KubeProvider from provider data, got %T", req.ProviderData),
 		)
 		return
 	}
-	d.sdkV2Meta = cb
+	d.kubeProvider = kp
 }
 
 // Read fetches the target object from the cluster via
@@ -150,18 +149,10 @@ func (d *manifestDataSource) Read(ctx context.Context, req datasource.ReadReques
 		return
 	}
 
-	if d.sdkV2Meta == nil {
+	if d.kubeProvider == nil {
 		resp.Diagnostics.AddError(
 			"provider not configured",
-			"the SDK v2 provider must configure before the data source can run; this indicates a mux wiring bug",
-		)
-		return
-	}
-	provider, ok := d.sdkV2Meta().(*kubernetes.KubeProvider)
-	if !ok {
-		resp.Diagnostics.AddError(
-			"provider type mismatch",
-			fmt.Sprintf("expected *kubernetes.KubeProvider from SDKv2Meta, got %T", d.sdkV2Meta()),
+			"the framework provider's Configure pass must run before the data source; this indicates a wiring bug",
 		)
 		return
 	}
@@ -181,7 +172,7 @@ func (d *manifestDataSource) Read(ctx context.Context, req datasource.ReadReques
 	name := data.Name.ValueString()
 	namespace := data.Namespace.ValueString()
 
-	result, err := kubernetes.FetchManifest(ctx, provider, apiVersion, kind, name, namespace, fields)
+	result, err := kubernetes.FetchManifest(ctx, d.kubeProvider, apiVersion, kind, name, namespace, fields)
 	if err != nil {
 		if errors.Is(err, kubernetes.ErrManifestNotFound) {
 			resp.Diagnostics.AddError("kubectl_manifest: resource not found", err.Error())
