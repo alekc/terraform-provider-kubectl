@@ -1,0 +1,243 @@
+name: "cross-provider-smoke-opentofu"
+
+# Weekly regression watch for OpenTofu's cross-provider MoveStateResource
+# dispatch. OpenTofu 1.11.x silently moves the state address but never
+# invokes the destination provider's MoveStateResource handler, so the
+# alekc-only attributes and recomputed yaml_incluster fingerprint never
+# land in state and the first plan after a moved-block migration reports
+# in-place updates instead of the no-op the Terraform sibling sees.
+#
+# This was previously a continue-on-error job on every PR (see PR #316).
+# The permanent red entry was noise: nothing in any PR could fix it.
+# Moved to a weekly cron so the regression signal survives (when
+# OpenTofu ships the dispatch, this workflow turns green and we know
+# we can wire the test back into the PR matrix) without polluting the
+# PR check rollup.
+#
+# Same scenario as the cross_provider_upgrade_smoke_terraform job in
+# tests.yaml: apply a small manifest set against published
+# gavinbunney/kubectl, swap required_providers to alekc/kubectl via
+# dev_overrides, assert that a `moved {}` block-driven migration is
+# a clean plan + apply round-trip.
+
+on:
+  schedule:
+    # Mondays 09:00 UTC. Cron syntax fields: min hour dom month dow.
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: cross-provider-smoke-opentofu
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  KUBECONFIG: ${{ github.workspace }}/.kube/config
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Skip the cron tick on forks: the schedule fires on every fork
+    # GitHub knows about and would consume runner minutes that don't
+    # exercise the canonical repo's master.
+    if: github.event_name == 'workflow_dispatch' || github.repository == 'alekc/terraform-provider-kubectl'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+      - name: Build provider binary
+        # Standalone build: this workflow does not share the PR
+        # workflow's build_provider_binary artifact, so it compiles
+        # master fresh. Strip debug info to match the PR-side flags.
+        run: |
+          go build -ldflags="-s -w" -o terraform-provider-kubectl .
+          chmod +x terraform-provider-kubectl
+          mv terraform-provider-kubectl "${HOME}/"
+      - name: Look up latest OpenTofu + Kubernetes versions
+        id: versions
+        run: |
+          set -euo pipefail
+          opentofu="$(curl -sSfL https://endoflife.date/api/opentofu.json | jq -rc 'sort_by(.releaseDate) | reverse | .[0].latest')"
+          k8s_cycles="$(curl -sSfL https://endoflife.date/api/kubernetes.json | jq -rc '[sort_by(.releaseDate) | reverse | .[0:5] | .[].cycle]')"
+          k8s="$(curl -sSfL "https://endoflife.date/api/kubernetes/$(echo "${k8s_cycles}" | jq -r '.[0]').json" | jq -rc '.latest')"
+          echo "opentofu=${opentofu}" >> "${GITHUB_OUTPUT}"
+          echo "k8s=${k8s}" >> "${GITHUB_OUTPUT}"
+          echo "OpenTofu: ${opentofu} / Kubernetes: ${k8s}"
+      - name: Look up latest published gavinbunney version
+        id: gb
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=$(gh release view --repo gavinbunney/terraform-provider-kubectl \
+            --json tagName --jq .tagName)
+          VERSION="${TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Latest published gavinbunney: ${VERSION}"
+      - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          wait: 2m
+          node_image: kindest/node:v${{ steps.versions.outputs.k8s }}
+      - uses: opentofu/setup-opentofu@847eaa4afeb791b06daa46e8eafa8b1b68d7cfb4 # v2.0.1
+        with:
+          tofu_version: ${{ steps.versions.outputs.opentofu }}
+          tofu_wrapper: false
+      - name: Phase 1 - write config pinned to gavinbunney
+        run: |
+          mkdir -p cross-smoke
+          cat > cross-smoke/main.tf <<'EOF'
+          terraform {
+            required_providers {
+              kubectl = {
+                source  = "gavinbunney/kubectl"
+                version = "${{ steps.gb.outputs.version }}"
+              }
+            }
+          }
+
+          provider "kubectl" {}
+
+          resource "kubectl_manifest" "ns" {
+            wait      = true
+            yaml_body = <<-YAML
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: cross-provider-smoke
+            YAML
+          }
+
+          resource "kubectl_manifest" "cm" {
+            wait       = true
+            depends_on = [kubectl_manifest.ns]
+            yaml_body  = <<-YAML
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: cross-provider-smoke-cm
+                namespace: cross-provider-smoke
+              data:
+                phase: "1"
+            YAML
+          }
+          EOF
+      - name: Phase 1 - tofu init (registry install of gavinbunney)
+        working-directory: cross-smoke
+        run: tofu init
+      - name: Phase 1 - tofu apply (against gavinbunney provider)
+        working-directory: cross-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: tofu apply -auto-approve
+      - name: Configure dev_overrides for built alekc binary
+        run: |
+          cat > "${HOME}/.tofurc" <<EOF
+          provider_installation {
+            dev_overrides {
+              "alekc/kubectl" = "${HOME}"
+            }
+            direct {}
+          }
+          EOF
+      - name: Phase 2 - rewrite main.tf with renamed addresses + moved blocks
+        # OpenTofu mirrors Terraform's HCL validator on moved blocks:
+        # same-address from/to is rejected as redundant. The rename-
+        # during-migration pattern (ns -> ns_v3, cm -> cm_v3) is the
+        # only shape both validators accept. See README "Migrating from
+        # gavinbunney/kubectl".
+        run: |
+          cat > cross-smoke/main.tf <<'EOF'
+          terraform {
+            required_providers {
+              kubectl = {
+                source = "alekc/kubectl"
+              }
+            }
+          }
+
+          provider "kubectl" {}
+
+          moved {
+            from = kubectl_manifest.ns
+            to   = kubectl_manifest.ns_v3
+          }
+
+          moved {
+            from = kubectl_manifest.cm
+            to   = kubectl_manifest.cm_v3
+          }
+
+          resource "kubectl_manifest" "ns_v3" {
+            wait      = true
+            yaml_body = <<-YAML
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: cross-provider-smoke
+            YAML
+          }
+
+          resource "kubectl_manifest" "cm_v3" {
+            wait       = true
+            depends_on = [kubectl_manifest.ns_v3]
+            yaml_body  = <<-YAML
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: cross-provider-smoke-cm
+                namespace: cross-provider-smoke
+              data:
+                phase: "1"
+            YAML
+          }
+          EOF
+      - name: Phase 2 - tofu plan must be a no-op after the move
+        working-directory: cross-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        # See cross_provider_upgrade_smoke_terraform in tests.yaml for
+        # the rationale: -detailed-exitcode returns rc=2 on a plan that
+        # carries only moved-block annotations, even when the resource
+        # summary is 0/0/0. Parse the summary line directly.
+        run: |
+          set +e
+          tofu plan -no-color | tee plan.out
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "Phase 2 FAIL: tofu plan errored (rc=$rc)" >&2
+            exit "$rc"
+          fi
+          if ! grep -qE '^Plan: 0 to add, 0 to change, 0 to destroy\.' plan.out; then
+            echo "Phase 2 FAIL: cross-provider move caused drift" >&2
+            exit 1
+          fi
+          echo "Phase 2: plan is a no-op (moved-only) as required"
+      - name: Phase 2 - tofu apply must be a no-op
+        working-directory: cross-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: tofu apply -auto-approve
+      - name: Phase 2 - second plan must be cleanly empty
+        working-directory: cross-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        # After apply commits the rename, the state addresses match
+        # the config addresses and the moved blocks become no-ops.
+        # The second plan must return rc=0 under -detailed-exitcode,
+        # proving the cross-provider migration is fully absorbed.
+        run: tofu plan -detailed-exitcode -no-color
+      - name: Verify resources survived the move
+        run: |
+          kubectl get namespace cross-provider-smoke
+          kubectl get configmap -n cross-provider-smoke cross-provider-smoke-cm
+      - name: Cleanup - tofu destroy
+        if: always()
+        working-directory: cross-smoke
+        env:
+          KUBE_CONFIG_PATH: ${{ env.KUBECONFIG }}
+        run: tofu destroy -auto-approve || true

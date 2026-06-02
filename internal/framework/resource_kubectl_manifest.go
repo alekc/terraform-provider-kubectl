@@ -35,7 +35,7 @@ import (
 // cutover commit, the resource is NOT registered in provider.Resources()
 // so the SDK v2 implementation remains the live one.
 type manifestResource struct {
-	sdkV2Meta func() any
+	kubeProviderCache *kubernetes.KubeProvider
 }
 
 var (
@@ -334,39 +334,34 @@ func (r *manifestResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 	}
 }
 
-// Configure receives the muxed provider data: a callback that resolves
-// to the SDK v2 *KubeProvider once the SDK v2 half has Configure'd. The
-// callback is stored on the resource and dereferenced lazily inside
-// kubeProvider() so framework CRUD methods see the configured client
-// regardless of which half ran Configure first. Implements
-// resource.ResourceWithConfigure.
+// Configure caches the *kubernetes.KubeProvider produced by the framework
+// provider's Configure pass. Resource CRUD methods read it directly via
+// kubeProvider() — there is no callback indirection now that the SDK v2
+// half is gone (#297). Implements resource.ResourceWithConfigure.
 func (r *manifestResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
-	cb, ok := req.ProviderData.(func() any)
+	kp, ok := req.ProviderData.(*kubernetes.KubeProvider)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"unexpected resource configuration",
-			fmt.Sprintf("expected func() any from provider data, got %T", req.ProviderData),
+			fmt.Sprintf("expected *kubernetes.KubeProvider from provider data, got %T", req.ProviderData),
 		)
 		return
 	}
-	r.sdkV2Meta = cb
+	r.kubeProviderCache = kp
 }
 
-// kubeProvider resolves the SDK v2 *KubeProvider from the configured
-// sdkV2Meta callback. Returns nil + an error diagnostic if the callback
-// is missing or returns the wrong type.
+// kubeProvider returns the cached *kubernetes.KubeProvider, or an error
+// if Configure has not yet run. The error path is defensive: the framework
+// guarantees Configure precedes CRUD for resources that implement
+// ResourceWithConfigure, so reaching it indicates a deeper wiring bug.
 func (r *manifestResource) kubeProvider() (*kubernetes.KubeProvider, error) {
-	if r.sdkV2Meta == nil {
-		return nil, fmt.Errorf("provider not configured: the SDK v2 provider must configure before kubectl_manifest can run (mux wiring bug)")
+	if r.kubeProviderCache == nil {
+		return nil, fmt.Errorf("provider not configured: kubeProviderCache unset")
 	}
-	p, ok := r.sdkV2Meta().(*kubernetes.KubeProvider)
-	if !ok {
-		return nil, fmt.Errorf("provider type mismatch: expected *kubernetes.KubeProvider from SDKv2Meta, got %T", r.sdkV2Meta())
-	}
-	return p, nil
+	return r.kubeProviderCache, nil
 }
 
 // extractStringList materialises a types.List of strings into a plain

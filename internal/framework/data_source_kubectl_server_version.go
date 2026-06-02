@@ -16,7 +16,7 @@ import (
 // `id` attribute is declared explicitly here because the framework does not
 // emit one automatically the way SDK v2 did.
 type serverVersionDataSource struct {
-	sdkV2Meta func() any
+	kubeProvider *kubernetes.KubeProvider
 }
 
 var (
@@ -70,35 +70,27 @@ func (d *serverVersionDataSource) Configure(_ context.Context, req datasource.Co
 	if req.ProviderData == nil {
 		return
 	}
-	cb, ok := req.ProviderData.(func() any)
+	kp, ok := req.ProviderData.(*kubernetes.KubeProvider)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"unexpected data source configuration",
-			fmt.Sprintf("expected func() any from provider data, got %T", req.ProviderData),
+			fmt.Sprintf("expected *kubernetes.KubeProvider from provider data, got %T", req.ProviderData),
 		)
 		return
 	}
-	d.sdkV2Meta = cb
+	d.kubeProvider = kp
 }
 
 func (d *serverVersionDataSource) Read(ctx context.Context, _ datasource.ReadRequest, resp *datasource.ReadResponse) {
-	if d.sdkV2Meta == nil {
+	if d.kubeProvider == nil {
 		resp.Diagnostics.AddError(
 			"provider not configured",
-			"the SDK v2 provider must configure before the data source can run; this indicates a mux wiring bug",
-		)
-		return
-	}
-	provider, ok := d.sdkV2Meta().(*kubernetes.KubeProvider)
-	if !ok {
-		resp.Diagnostics.AddError(
-			"provider type mismatch",
-			fmt.Sprintf("expected *kubernetes.KubeProvider from SDKv2Meta, got %T", d.sdkV2Meta()),
+			"the framework provider's Configure pass must run before the data source; this indicates a wiring bug",
 		)
 		return
 	}
 
-	info, err := kubernetes.FetchServerVersion(provider)
+	info, err := kubernetes.FetchServerVersion(d.kubeProvider)
 	if err != nil {
 		resp.Diagnostics.AddError("kubectl_server_version: discovery failed", err.Error())
 		return

@@ -9,13 +9,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/statecheck"
 	"github.com/hashicorp/terraform-plugin-testing/tfversion"
 
-	"github.com/alekc/terraform-provider-kubectl/internal/mux"
+	"github.com/alekc/terraform-provider-kubectl/internal/framework"
 )
 
 // skipIfOpenTofu marks the test as skipped when the CI runner pointed the
@@ -32,12 +33,12 @@ func skipIfOpenTofu(t *testing.T) {
 	}
 }
 
-// testAccProtoV6ProviderFactories returns the muxed provider (SDK v2 + framework)
-// under the `kubectl` type name. Mirrors the pattern used by
-// terraform-provider-kubernetes for ephemeral resource acceptance tests.
+// testAccProtoV6ProviderFactories returns the framework-only provider
+// under the `kubectl` type name. Post-#297 the SDK v2 half is gone, so
+// the factory wraps framework.New directly via providerserver.NewProtocol6.
 var testAccProtoV6ProviderFactories = map[string]func() (tfprotov6.ProviderServer, error){
 	"kubectl": func() (tfprotov6.ProviderServer, error) {
-		return mux.MuxServer(context.Background(), "test")
+		return providerserver.NewProtocol6(framework.New("test"))(), nil
 	},
 }
 
@@ -48,8 +49,8 @@ func testAccPreCheck(t *testing.T) {
 }
 
 // TestAccKubectlEphemeralManifest_clusterScoped reads the kube-system
-// Namespace via the ephemeral resource. Verifies the mux + framework
-// resource + shared FetchManifest helper all wire up correctly.
+// Namespace via the ephemeral resource. Verifies the framework resource
+// and shared FetchManifest helper wire up correctly.
 //
 // Ephemeral values cannot flow into outputs, so we consume the result via a
 // `check` block that asserts on `phase`. A failing check produces a test
@@ -89,11 +90,11 @@ check "ns_active" {
 	})
 }
 
-// TestAccKubectlEphemeralManifest_namespacedConfigMap seeds a ConfigMap via
-// the SDK v2 kubectl_manifest resource (same muxed provider) and reads it
-// back via the ephemeral resource, asserting on an extracted scalar field.
-// Confirms the namespaced path through GetRestClientFromUnstructured works
-// from the framework half too, not just cluster-scoped.
+// TestAccKubectlEphemeralManifest_namespacedConfigMap seeds a ConfigMap
+// via the kubectl_manifest resource and reads it back via the ephemeral
+// resource, asserting on an extracted scalar field. Confirms the
+// namespaced path through GetRestClientFromUnstructured works through
+// the ephemeral handler, not just the cluster-scoped path.
 //
 // Split across two TestSteps because Terraform evaluates ephemeral resources
 // at pre-apply plan time even when `depends_on` points at a managed resource

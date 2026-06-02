@@ -82,8 +82,6 @@ github.com/bmatcuk/doublestar v1.1.5/go.mod h1:wiQtGV+rzVYxB7WIlirSN++5HPtPlXEo9
 github.com/boltdb/bolt v1.3.1/go.mod h1:clJnj/oiGkjum5o1McbSZDSLxVThjynRyGBgiAx27Ps=
 github.com/bufbuild/protocompile v0.14.1 h1:iA73zAf/fyljNjQKwYzUHD6AD4R8KMasmwa/FBatYVw=
 github.com/bufbuild/protocompile v0.14.1/go.mod h1:ppVdAIhbr2H8asPk6k4pY7t9zB1OU5DoEw9xY/FUi1c=
-github.com/cenkalti/backoff/v4 v4.3.0 h1:MyRJ/UdXutAwSAT+s3wNd7MfTIcy71VQueUuFK343L8=
-github.com/cenkalti/backoff/v4 v4.3.0/go.mod h1:Y3VNntkOUPxTVeUxJ/G5vcM//AlwfmyYozVcomhLiZE=
 github.com/census-instrumentation/opencensus-proto v0.2.1/go.mod h1:f6KPmirojxKA12rnyqOA5BBL4O983OfeGPqjHWSTneU=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
@@ -284,8 +282,6 @@ github.com/hashicorp/terraform-plugin-go v0.31.0 h1:0Fz2r9DQ+kNNl6bx8HRxFd1TfMKU
 github.com/hashicorp/terraform-plugin-go v0.31.0/go.mod h1:A88bDhd/cW7FnwqxQRz3slT+QY6yzbHKc6AOTtmdeS8=
 github.com/hashicorp/terraform-plugin-log v0.10.0 h1:eu2kW6/QBVdN4P3Ju2WiB2W3ObjkAsyfBsL3Wh1fj3g=
 github.com/hashicorp/terraform-plugin-log v0.10.0/go.mod h1:/9RR5Cv2aAbrqcTSdNmY1NRHP4E3ekrXRGjqORpXyB0=
-github.com/hashicorp/terraform-plugin-mux v0.23.1 h1:B93b4hEj8cPKh24WJH2dJJAS3a5lxZANykrz4Or3fgo=
-github.com/hashicorp/terraform-plugin-mux v0.23.1/go.mod h1:IwuivHNfDVeuDbVvg6fnAYEEEVx881STwJHsl/00UkQ=
 github.com/hashicorp/terraform-plugin-sdk/v2 v2.40.1 h1:2yPUd7esMOpuTaG3y1iEla1iw+tla+3ZEkkBnmOAre4=
 github.com/hashicorp/terraform-plugin-sdk/v2 v2.40.1/go.mod h1:sq8qsxh+PwdvTQFcd17kfCoBgQo46ADNMvCpKE7t/gY=
 github.com/hashicorp/terraform-plugin-testing v1.16.0 h1:GB97nGnJ1hESpDrCjqZig38RodSF0gdRzxlDupLXP38=

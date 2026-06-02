@@ -5,10 +5,10 @@ import (
 	"flag"
 	"log"
 
-	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
-	"github.com/hashicorp/terraform-plugin-go/tfprotov6/tf6server"
+	"github.com/hashicorp/terraform-plugin-framework/provider"
+	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 
-	"github.com/alekc/terraform-provider-kubectl/internal/mux"
+	"github.com/alekc/terraform-provider-kubectl/internal/framework"
 )
 
 const (
@@ -20,18 +20,13 @@ func main() {
 	debug := flag.Bool("debug", false, "set to true to run the provider with support for debuggers like delve")
 	flag.Parse()
 
-	ctx := context.Background()
-	muxer, err := mux.MuxServer(ctx, version)
-	if err != nil {
-		log.Fatalf("failed to build mux server: %v", err)
+	opts := providerserver.ServeOpts{
+		Address: providerAddr,
+		Debug:   *debug,
 	}
 
-	opts := []tf6server.ServeOpt{}
-	if *debug {
-		opts = append(opts, tf6server.WithManagedDebug())
-	}
-
-	if err := tf6server.Serve(providerAddr, func() tfprotov6.ProviderServer { return muxer }, opts...); err != nil {
+	factory := func() provider.Provider { return framework.New(version) }
+	if err := providerserver.Serve(context.Background(), factory, opts); err != nil {
 		log.Fatalf("failed to serve provider: %v", err)
 	}
 }

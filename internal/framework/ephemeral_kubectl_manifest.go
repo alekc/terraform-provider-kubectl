@@ -21,7 +21,7 @@ import (
 // the same fetch helper (kubernetes.FetchManifest); the only difference is
 // where the result lives.
 type manifestEphemeralResource struct {
-	sdkV2Meta func() any
+	kubeProvider *kubernetes.KubeProvider
 }
 
 var (
@@ -107,15 +107,15 @@ func (r *manifestEphemeralResource) Configure(_ context.Context, req ephemeral.C
 	if req.ProviderData == nil {
 		return
 	}
-	cb, ok := req.ProviderData.(func() any)
+	kp, ok := req.ProviderData.(*kubernetes.KubeProvider)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"unexpected ephemeral resource configuration",
-			fmt.Sprintf("expected func() any from provider data, got %T", req.ProviderData),
+			fmt.Sprintf("expected *kubernetes.KubeProvider from provider data, got %T", req.ProviderData),
 		)
 		return
 	}
-	r.sdkV2Meta = cb
+	r.kubeProvider = kp
 }
 
 func (r *manifestEphemeralResource) Open(ctx context.Context, req ephemeral.OpenRequest, resp *ephemeral.OpenResponse) {
@@ -125,18 +125,10 @@ func (r *manifestEphemeralResource) Open(ctx context.Context, req ephemeral.Open
 		return
 	}
 
-	if r.sdkV2Meta == nil {
+	if r.kubeProvider == nil {
 		resp.Diagnostics.AddError(
 			"provider not configured",
-			"the SDK v2 provider must configure before the ephemeral resource can run; this indicates a mux wiring bug",
-		)
-		return
-	}
-	provider, ok := r.sdkV2Meta().(*kubernetes.KubeProvider)
-	if !ok {
-		resp.Diagnostics.AddError(
-			"provider type mismatch",
-			fmt.Sprintf("expected *kubernetes.KubeProvider from SDKv2Meta, got %T", r.sdkV2Meta()),
+			"the framework provider's Configure pass must run before the ephemeral resource; this indicates a wiring bug",
 		)
 		return
 	}
@@ -153,7 +145,7 @@ func (r *manifestEphemeralResource) Open(ctx context.Context, req ephemeral.Open
 
 	result, err := kubernetes.FetchManifest(
 		ctx,
-		provider,
+		r.kubeProvider,
 		data.APIVersion.ValueString(),
 		data.Kind.ValueString(),
 		data.Name.ValueString(),

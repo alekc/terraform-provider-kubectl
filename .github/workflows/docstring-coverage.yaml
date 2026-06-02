@@ -48,9 +48,12 @@ jobs:
         run: |
           go run ./tools/godoc-coverage \
             --threshold=80 \
+            ./internal/framework/provider.go \
             ./internal/framework/resource_kubectl_manifest.go \
             ./internal/framework/resource_kubectl_manifest_move.go \
             ./internal/framework/data_source_kubectl_manifest.go \
+            ./kubernetes/kube_provider.go \
             ./kubernetes/manifest_lifecycle.go \
             ./kubernetes/manifest_fetch.go \
+            ./kubernetes/provider_config.go \
             ./tools/godoc-coverage/...

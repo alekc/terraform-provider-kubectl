@@ -2,32 +2,30 @@ package framework
 
 import (
 	"context"
+	"os"
+	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+
+	"github.com/alekc/terraform-provider-kubectl/kubernetes"
 )
 
-// kubectlFrameworkProvider is the plugin-framework half of the muxed provider.
-// All provider configuration (kubeconfig, auth, etc.) is handled by the SDK v2
-// half — this provider has no behaviour of its own and receives the configured
-// SDK v2 meta via the SDKv2Meta callback. The Configure pass simply forwards
-// that callback down to each resource (currently just the manifest ephemeral
-// resource).
-//
-// The Schema() method below MUST stay byte-for-byte identical to the SDK v2
-// provider's Schema in `kubernetes/provider.go`. The muxer
-// (`tf6muxserver.NewMuxServer`) compares the provider configuration schema
-// returned by every muxed server and refuses to start if they differ — that
-// regression is tracked by issue #275 and pinned by the unit test in
-// `internal/mux/mux_test.go`. If you add, rename, or change the description
-// of any field on either side, update both.
+// kubectlFrameworkProvider is the framework-only provider that replaces the
+// muxed (SDK v2 + framework) hybrid after Phase F (#297). Provider config
+// schema is declared natively here, env-var fallbacks and attribute
+// defaults are applied in Configure (the SDK v2 schema's DefaultFunc /
+// EnvDefaultFunc do not propagate to the wire protocol, so they have to
+// live in code now), and the configured *kubernetes.KubeProvider is
+// stored on resp.ResourceData / DataSourceData / EphemeralResourceData
+// for each resource type to read directly via type assertion.
 type kubectlFrameworkProvider struct {
-	version   string
-	SDKv2Meta func() any
+	version string
 }
 
 var (
@@ -35,28 +33,58 @@ var (
 	_ provider.ProviderWithEphemeralResources = (*kubectlFrameworkProvider)(nil)
 )
 
-// New constructs the framework provider. The SDKv2Meta callback is the
-// `Meta` method on the SDK v2 *schema.Provider — it returns the configured
-// `*kubernetes.KubeProvider` once the SDK v2 provider has run its
-// ConfigureContextFunc.
-func New(version string, sdkv2Meta func() any) provider.Provider {
-	return &kubectlFrameworkProvider{
-		version:   version,
-		SDKv2Meta: sdkv2Meta,
-	}
+// New constructs the framework provider for the given version. The version
+// is interpolated into the User-Agent header that BuildKubeProvider sets
+// on every Kubernetes REST call.
+func New(version string) provider.Provider {
+	return &kubectlFrameworkProvider{version: version}
 }
 
+// providerConfigModel mirrors the schema declared in Schema(). Field names
+// and types must stay aligned: the framework decodes req.Config into this
+// struct, and Configure then turns it into a kubernetes.ProviderConfig.
+type providerConfigModel struct {
+	ApplyRetryCount      types.Int64  `tfsdk:"apply_retry_count"`
+	Host                 types.String `tfsdk:"host"`
+	Username             types.String `tfsdk:"username"`
+	Password             types.String `tfsdk:"password"`
+	Insecure             types.Bool   `tfsdk:"insecure"`
+	ClientCertificate    types.String `tfsdk:"client_certificate"`
+	ClientKey            types.String `tfsdk:"client_key"`
+	ClusterCACertificate types.String `tfsdk:"cluster_ca_certificate"`
+	ConfigPaths          types.List   `tfsdk:"config_paths"`
+	ConfigPath           types.String `tfsdk:"config_path"`
+	ConfigContext        types.String `tfsdk:"config_context"`
+	ConfigContextAuth    types.String `tfsdk:"config_context_auth_info"`
+	ConfigContextCluster types.String `tfsdk:"config_context_cluster"`
+	Token                types.String `tfsdk:"token"`
+	ProxyURL             types.String `tfsdk:"proxy_url"`
+	LoadConfigFile       types.Bool   `tfsdk:"load_config_file"`
+	LazyLoad             types.Bool   `tfsdk:"lazy_load"`
+	TLSServerName        types.String `tfsdk:"tls_server_name"`
+	Exec                 types.List   `tfsdk:"exec"`
+}
+
+type providerExecModel struct {
+	APIVersion types.String `tfsdk:"api_version"`
+	Command    types.String `tfsdk:"command"`
+	Env        types.Map    `tfsdk:"env"`
+	Args       types.List   `tfsdk:"args"`
+}
+
+// Metadata sets the provider type name and version. Implements
+// provider.Provider.
 func (p *kubectlFrameworkProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
 	resp.TypeName = "kubectl"
 	resp.Version = p.version
 }
 
+// Schema declares the provider configuration block. Wire-level shape is
+// preserved exactly from the pre-#297 SDK v2 schema in
+// kubernetes/provider.go so existing user configurations work unchanged.
+// Defaults (env-var fallbacks, attribute defaults) live in Configure;
+// they are not part of the wire schema.
 func (p *kubectlFrameworkProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
-	// Mirror of the SDK v2 schema in `kubernetes/provider.go`. Keep field
-	// names, types, optional/required flags, and descriptions identical on
-	// both sides; the muxer enforces byte-for-byte parity. Defaults
-	// (DefaultFunc / EnvDefaultFunc) live on the SDK v2 side only — they do
-	// not propagate to the wire schema, so they aren't mirrored here.
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"apply_retry_count": schema.Int64Attribute{
@@ -111,7 +139,7 @@ func (p *kubectlFrameworkProvider) Schema(_ context.Context, _ provider.SchemaRe
 			},
 			"token": schema.StringAttribute{
 				Optional:    true,
-				Description: "Token to authentifcate an service account",
+				Description: "Token to authenticate a service account",
 			},
 			"proxy_url": schema.StringAttribute{
 				Optional:    true,
@@ -155,15 +183,145 @@ func (p *kubectlFrameworkProvider) Schema(_ context.Context, _ provider.SchemaRe
 	}
 }
 
-func (p *kubectlFrameworkProvider) Configure(_ context.Context, _ provider.ConfigureRequest, resp *provider.ConfigureResponse) {
-	// SDK v2 owns provider configuration. Hand the SDKv2Meta callback to
-	// resources via ResourceData / EphemeralResourceData so they can pull the
-	// configured *kubernetes.KubeProvider at Open() time.
-	resp.ResourceData = p.SDKv2Meta
-	resp.EphemeralResourceData = p.SDKv2Meta
-	resp.DataSourceData = p.SDKv2Meta
+// Configure resolves the typed provider config, applies env-var fallbacks
+// and attribute defaults, builds the *kubernetes.KubeProvider, and stores
+// it on each downstream-data field so resources and data sources read it
+// directly via Configure → req.ProviderData. Implements provider.Provider.
+func (p *kubectlFrameworkProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
+	var data providerConfigModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	cfg, diags := buildProviderConfig(ctx, data)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	kp, err := kubernetes.BuildKubeProvider(cfg, p.version)
+	if err != nil {
+		resp.Diagnostics.AddError("kubectl provider: configure failed", err.Error())
+		return
+	}
+
+	resp.ResourceData = kp
+	resp.DataSourceData = kp
+	resp.EphemeralResourceData = kp
 }
 
+// buildProviderConfig folds env-var fallbacks and attribute defaults into
+// the model decoded from the provider block. Mirrors the EnvDefaultFunc /
+// DefaultFunc behaviour the SDK v2 schema used to encode declaratively.
+// The result is a fully resolved kubernetes.ProviderConfig ready for
+// BuildKubeProvider; any decode diagnostics surface in the returned
+// diag.Diagnostics so Configure can append them to its response.
+func buildProviderConfig(ctx context.Context, m providerConfigModel) (kubernetes.ProviderConfig, diag.Diagnostics) {
+	var diags diag.Diagnostics
+
+	cfg := kubernetes.ProviderConfig{
+		ApplyRetryCount:      int64EnvDefault(m.ApplyRetryCount, 1),
+		Host:                 stringEnvDefault(m.Host, "KUBE_HOST", ""),
+		Username:             stringEnvDefault(m.Username, "KUBE_USER", ""),
+		Password:             stringEnvDefault(m.Password, "KUBE_PASSWORD", ""),
+		Insecure:             boolEnvDefault(m.Insecure, "KUBE_INSECURE", false),
+		ClientCertificate:    stringEnvDefault(m.ClientCertificate, "KUBE_CLIENT_CERT_DATA", ""),
+		ClientKey:            stringEnvDefault(m.ClientKey, "KUBE_CLIENT_KEY_DATA", ""),
+		ClusterCACertificate: stringEnvDefault(m.ClusterCACertificate, "KUBE_CLUSTER_CA_CERT_DATA", ""),
+		ConfigPath:           stringMultiEnvDefault(m.ConfigPath, []string{"KUBE_CONFIG", "KUBECONFIG", "KUBE_CONFIG_PATH"}, "~/.kube/config"),
+		ConfigContext:        stringEnvDefault(m.ConfigContext, "KUBE_CTX", ""),
+		ConfigContextAuth:    stringEnvDefault(m.ConfigContextAuth, "KUBE_CTX_AUTH_INFO", ""),
+		ConfigContextCluster: stringEnvDefault(m.ConfigContextCluster, "KUBE_CTX_CLUSTER", ""),
+		Token:                stringEnvDefault(m.Token, "KUBE_TOKEN", ""),
+		ProxyURL:             stringEnvDefault(m.ProxyURL, "KUBE_PROXY_URL", ""),
+		LoadConfigFile:       boolEnvDefault(m.LoadConfigFile, "KUBE_LOAD_CONFIG_FILE", true),
+		LazyLoad:             boolEnvDefault(m.LazyLoad, "KUBE_LAZY_LOAD", false),
+		TLSServerName:        stringEnvDefault(m.TLSServerName, "KUBE_TLS_SERVER_NAME", ""),
+	}
+
+	if !m.ConfigPaths.IsNull() && !m.ConfigPaths.IsUnknown() {
+		var paths []string
+		diags.Append(m.ConfigPaths.ElementsAs(ctx, &paths, false)...)
+		cfg.ConfigPaths = paths
+	}
+
+	if !m.Exec.IsNull() && !m.Exec.IsUnknown() {
+		var execs []providerExecModel
+		diags.Append(m.Exec.ElementsAs(ctx, &execs, false)...)
+		for _, e := range execs {
+			ec := kubernetes.ExecConfig{
+				APIVersion: e.APIVersion.ValueString(),
+				Command:    e.Command.ValueString(),
+			}
+			if !e.Args.IsNull() && !e.Args.IsUnknown() {
+				var args []string
+				diags.Append(e.Args.ElementsAs(ctx, &args, false)...)
+				ec.Args = args
+			}
+			if !e.Env.IsNull() && !e.Env.IsUnknown() {
+				env := map[string]string{}
+				diags.Append(e.Env.ElementsAs(ctx, &env, false)...)
+				ec.Env = env
+			}
+			cfg.Exec = append(cfg.Exec, ec)
+		}
+	}
+
+	return cfg, diags
+}
+
+func stringEnvDefault(v types.String, envKey, defaultValue string) string {
+	if !v.IsNull() && !v.IsUnknown() {
+		return v.ValueString()
+	}
+	if envKey != "" {
+		if env := os.Getenv(envKey); env != "" {
+			return env
+		}
+	}
+	return defaultValue
+}
+
+func stringMultiEnvDefault(v types.String, envKeys []string, defaultValue string) string {
+	if !v.IsNull() && !v.IsUnknown() {
+		return v.ValueString()
+	}
+	for _, k := range envKeys {
+		if env := os.Getenv(k); env != "" {
+			return env
+		}
+	}
+	return defaultValue
+}
+
+func boolEnvDefault(v types.Bool, envKey string, defaultValue bool) bool {
+	if !v.IsNull() && !v.IsUnknown() {
+		return v.ValueBool()
+	}
+	if envKey != "" {
+		if env := os.Getenv(envKey); env != "" {
+			if b, err := strconv.ParseBool(env); err == nil {
+				return b
+			}
+		}
+	}
+	return defaultValue
+}
+
+// int64EnvDefault is the int64 analogue used for apply_retry_count. The
+// legacy SDK v2 schema only set a literal default of 1; the env override
+// (KUBECTL_PROVIDER_APPLY_RETRY_COUNT) is applied later in
+// kubernetes.BuildKubeProvider, not here.
+func int64EnvDefault(v types.Int64, defaultValue int64) int64 {
+	if !v.IsNull() && !v.IsUnknown() {
+		return v.ValueInt64()
+	}
+	return defaultValue
+}
+
+// Resources lists the framework-served resources. Implements
+// provider.Provider.
 func (p *kubectlFrameworkProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewServerVersionResource,
@@ -171,6 +329,8 @@ func (p *kubectlFrameworkProvider) Resources(_ context.Context) []func() resourc
 	}
 }
 
+// DataSources lists the framework-served data sources. Implements
+// provider.Provider.
 func (p *kubectlFrameworkProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewServerVersionDataSource,
@@ -182,8 +342,11 @@ func (p *kubectlFrameworkProvider) DataSources(_ context.Context) []func() datas
 	}
 }
 
+// EphemeralResources lists the framework-served ephemeral resources.
+// Implements provider.ProviderWithEphemeralResources.
 func (p *kubectlFrameworkProvider) EphemeralResources(_ context.Context) []func() ephemeral.EphemeralResource {
 	return []func() ephemeral.EphemeralResource{
 		NewManifestEphemeralResource,
 	}
 }
+
