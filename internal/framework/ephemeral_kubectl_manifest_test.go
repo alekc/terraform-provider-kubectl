@@ -49,8 +49,8 @@ func testAccPreCheck(t *testing.T) {
 }
 
 // TestAccKubectlEphemeralManifest_clusterScoped reads the kube-system
-// Namespace via the ephemeral resource. Verifies the mux + framework
-// resource + shared FetchManifest helper all wire up correctly.
+// Namespace via the ephemeral resource. Verifies the framework resource
+// and shared FetchManifest helper wire up correctly.
 //
 // Ephemeral values cannot flow into outputs, so we consume the result via a
 // `check` block that asserts on `phase`. A failing check produces a test
@@ -90,11 +90,11 @@ check "ns_active" {
 	})
 }
 
-// TestAccKubectlEphemeralManifest_namespacedConfigMap seeds a ConfigMap via
-// the SDK v2 kubectl_manifest resource (same muxed provider) and reads it
-// back via the ephemeral resource, asserting on an extracted scalar field.
-// Confirms the namespaced path through GetRestClientFromUnstructured works
-// from the framework half too, not just cluster-scoped.
+// TestAccKubectlEphemeralManifest_namespacedConfigMap seeds a ConfigMap
+// via the kubectl_manifest resource and reads it back via the ephemeral
+// resource, asserting on an extracted scalar field. Confirms the
+// namespaced path through GetRestClientFromUnstructured works through
+// the ephemeral handler, not just the cluster-scoped path.
 //
 // Split across two TestSteps because Terraform evaluates ephemeral resources
 // at pre-apply plan time even when `depends_on` points at a managed resource

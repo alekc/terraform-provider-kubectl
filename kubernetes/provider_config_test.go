@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	restclient "k8s.io/client-go/rest"
 )
 
 // TestBuildKubeProvider_ApplyRetryCountIsPerProvider pins the fix for issue
@@ -164,6 +166,44 @@ func TestResolveConfigPaths_PrecedenceMirrorsSDKv2(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestKubeProvider_RESTMapperAcceptsEmptyConfig pins the lazy_load (#283)
+// contract end-to-end through the RESTClientGetter surface. When
+// buildRestConfig returns (nil, nil) under lazy_load = true, BuildKubeProvider
+// substitutes an empty &restclient.Config{} and proceeds. Downstream callers
+// then go through ToRESTMapper, which in turn calls ToDiscoveryClient.
+// Both must succeed at construction time so plan can run; the actual
+// empty-Host failure only resurfaces when the mapper or discovery client
+// is used (which is what lazy_load wants: defer the failure to apply
+// time).
+//
+// Without this test, a refactor that tightens ToRESTMapper's error
+// handling (e.g., propagating any ToDiscoveryClient error eagerly)
+// could silently regress the lazy_load contract. The test demonstrates
+// that the contract holds against an explicit empty config.
+func TestKubeProvider_RESTMapperAcceptsEmptyConfig(t *testing.T) {
+	kp := &KubeProvider{RestConfig: restclient.Config{}}
+
+	t.Run("ToDiscoveryClient", func(t *testing.T) {
+		client, err := kp.ToDiscoveryClient()
+		if err != nil {
+			t.Fatalf("expected nil error on empty config, got: %v", err)
+		}
+		if client == nil {
+			t.Fatalf("expected a non-nil discovery client on empty config")
+		}
+	})
+
+	t.Run("ToRESTMapper", func(t *testing.T) {
+		mapper, err := kp.ToRESTMapper()
+		if err != nil {
+			t.Fatalf("expected nil error on empty config, got: %v", err)
+		}
+		if mapper == nil {
+			t.Fatalf("expected a non-nil REST mapper on empty config")
+		}
+	})
 }
 
 func equalSlices(a, b []string) bool {

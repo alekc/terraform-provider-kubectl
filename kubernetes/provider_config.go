@@ -159,22 +159,17 @@ func buildRestConfig(cfg ProviderConfig) (*restclient.Config, error) {
 			loader.Precedence = expandedPaths
 		}
 
-		ctxSuffix := "; default context"
 		if cfg.ConfigContext != "" || cfg.ConfigContextAuth != "" || cfg.ConfigContextCluster != "" {
-			ctxSuffix = "; overriden context"
 			if cfg.ConfigContext != "" {
 				overrides.CurrentContext = cfg.ConfigContext
-				ctxSuffix += fmt.Sprintf("; config ctx: %s", overrides.CurrentContext)
 				log.Printf("[DEBUG] Using custom current context: %q", overrides.CurrentContext)
 			}
 			overrides.Context = clientcmdapi.Context{}
 			if cfg.ConfigContextAuth != "" {
 				overrides.Context.AuthInfo = cfg.ConfigContextAuth
-				ctxSuffix += fmt.Sprintf("; auth_info: %s", overrides.Context.AuthInfo)
 			}
 			if cfg.ConfigContextCluster != "" {
 				overrides.Context.Cluster = cfg.ConfigContextCluster
-				ctxSuffix += fmt.Sprintf("; cluster: %s", overrides.Context.Cluster)
 			}
 			log.Printf("[DEBUG] Using overidden context: %#v", overrides.Context)
 		}
@@ -199,7 +194,7 @@ func buildRestConfig(cfg ProviderConfig) (*restclient.Config, error) {
 		defaultTLS := hasCA || hasCert || overrides.ClusterInfo.InsecureSkipTLSVerify
 		host, _, err := restclient.DefaultServerURL(cfg.Host, "", apimachineryschema.GroupVersion{}, defaultTLS)
 		if err != nil {
-			return nil, fmt.Errorf("Failed to parse host: %s", err)
+			return nil, fmt.Errorf("failed to parse host: %s", err)
 		}
 		overrides.ClusterInfo.Server = host.String()
 	}

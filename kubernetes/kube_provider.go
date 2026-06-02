@@ -62,24 +62,31 @@ func (p *KubeProvider) ToRESTConfig() (*restclient.Config, error) {
 // convention (~/.kube/cache/discovery/<hostname>) so concurrent kubectl
 // usage shares the cache.
 func (p *KubeProvider) ToDiscoveryClient() (discovery.CachedDiscoveryInterface, error) {
-	home, _ := homedir.Dir()
+	home, err := homedir.Dir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine home directory for discovery cache: %w", err)
+	}
 	httpCacheDir := filepath.Join(home, ".kube", "http-cache")
 	discoveryCacheDir := computeDiscoverCacheDir(filepath.Join(home, ".kube", "cache", "discovery"), p.RestConfig.Host)
 	return diskcached.NewCachedDiscoveryClientForConfig(&p.RestConfig, discoveryCacheDir, httpCacheDir, 10*time.Minute)
 }
 
 // ToRESTMapper returns a deferred-discovery REST mapper wrapped in the
-// kubectl-style shortcut expander.
+// kubectl-style shortcut expander. Errors from ToDiscoveryClient are
+// surfaced verbatim rather than collapsed into the historic "no
+// restmapper" sentinel; on an empty (lazy_load) RestConfig the
+// construction still succeeds, deferring the empty-Host failure to
+// first use (verified by TestKubeProvider_RESTMapperAcceptsEmptyConfig).
 func (p *KubeProvider) ToRESTMapper() (meta.RESTMapper, error) {
-	discoveryClient, _ := p.ToDiscoveryClient()
-	if discoveryClient != nil {
-		mapper := restmapper.NewDeferredDiscoveryRESTMapper(discoveryClient)
-		expander := restmapper.NewShortcutExpander(mapper, discoveryClient, func(msg string) {
-			log.Printf("[WARN] error in expander: %s", msg)
-		})
-		return expander, nil
+	discoveryClient, err := p.ToDiscoveryClient()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build discovery client for rest mapper: %w", err)
 	}
-	return nil, fmt.Errorf("no restmapper")
+	mapper := restmapper.NewDeferredDiscoveryRESTMapper(discoveryClient)
+	expander := restmapper.NewShortcutExpander(mapper, discoveryClient, func(msg string) {
+		log.Printf("[WARN] error in expander: %s", msg)
+	})
+	return expander, nil
 }
 
 // overlyCautiousIllegalFileCharacters matches characters that *might* not

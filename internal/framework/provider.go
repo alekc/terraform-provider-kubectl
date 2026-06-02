@@ -139,7 +139,7 @@ func (p *kubectlFrameworkProvider) Schema(_ context.Context, _ provider.SchemaRe
 			},
 			"token": schema.StringAttribute{
 				Optional:    true,
-				Description: "Token to authentifcate an service account",
+				Description: "Token to authenticate a service account",
 			},
 			"proxy_url": schema.StringAttribute{
 				Optional:    true,
