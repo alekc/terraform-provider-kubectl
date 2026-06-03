@@ -545,8 +545,23 @@ func (r *manifestResource) Read(ctx context.Context, req resource.ReadRequest, r
 // Update reapplies the manifest in place. The shared kubernetes.ApplyManifest
 // helper is idempotent, so Create and Update share the same code path; the
 // only difference is which framework request type the plan arrives on.
-// Implements resource.Resource.
+//
+// On any error before or during the apply, the prior state captured from
+// req.State is restored verbatim to resp.State. Without this, a failed
+// apply would leave Terraform thinking the new yaml_body has landed
+// (because resp.State.Set was the only state-mutating call and we'd
+// return without it), and the next plan would compare config to the
+// planned-but-unapplied state and report no changes (#60). HashiCorp's
+// framework guidance is explicit on this: providers must reset state to
+// the prior value on error rather than relying on a default. Implements
+// resource.Resource.
 func (r *manifestResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var priorData manifestResourceModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &priorData)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
 	var data manifestResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
@@ -556,12 +571,14 @@ func (r *manifestResource) Update(ctx context.Context, req resource.UpdateReques
 	provider, err := r.kubeProvider()
 	if err != nil {
 		resp.Diagnostics.AddError("kubectl_manifest Update: provider unavailable", err.Error())
+		resp.Diagnostics.Append(resp.State.Set(ctx, &priorData)...)
 		return
 	}
 
 	timeout, d := data.Timeouts.Update(ctx, defaultLifecycleTimeout)
 	resp.Diagnostics.Append(d...)
 	if resp.Diagnostics.HasError() {
+		resp.Diagnostics.Append(resp.State.Set(ctx, &priorData)...)
 		return
 	}
 
@@ -573,12 +590,14 @@ func (r *manifestResource) Update(ctx context.Context, req resource.UpdateReques
 	opts, d := r.buildApplyOptions(ctx, data, timeout)
 	resp.Diagnostics.Append(d...)
 	if resp.Diagnostics.HasError() {
+		resp.Diagnostics.Append(resp.State.Set(ctx, &priorData)...)
 		return
 	}
 
 	result, applyErr := kubernetes.ApplyManifest(ctx, provider, opts)
 	if applyErr != nil {
 		resp.Diagnostics.AddError("kubectl_manifest Update: apply failed", applyErr.Error())
+		resp.Diagnostics.Append(resp.State.Set(ctx, &priorData)...)
 		return
 	}
 
