@@ -260,6 +260,9 @@ func WaitForDelete(ctx context.Context, restClient *RestClientResult, name strin
 					}
 					return fmt.Errorf("%s watch closed before resource was deleted", name)
 				}
+				if event.Type == watch.Error {
+					return watchErrorFromEvent(name, event)
+				}
 				if event.Type == watch.Deleted {
 					deleted = true
 				}
@@ -338,6 +341,9 @@ func WaitForDeploymentRollout(ctx context.Context, provider *KubeProvider, ns st
 					return nil
 				}
 				return fmt.Errorf("%s watch channel closed before Deployment rollout completed", name)
+			}
+			if event.Type == watch.Error {
+				return watchErrorFromEvent(name, event)
 			}
 			if event.Type != watch.Modified {
 				continue
@@ -433,6 +439,9 @@ func WaitForDaemonSetRollout(ctx context.Context, provider *KubeProvider, ns str
 				}
 				return fmt.Errorf("%s watch channel closed before DaemonSet rollout completed", name)
 			}
+			if event.Type == watch.Error {
+				return watchErrorFromEvent(name, event)
+			}
 			if event.Type != watch.Modified {
 				continue
 			}
@@ -509,6 +518,9 @@ func WaitForStatefulSetRollout(ctx context.Context, provider *KubeProvider, ns s
 				}
 				return fmt.Errorf("%s watch channel closed before StatefulSet rollout completed", name)
 			}
+			if event.Type == watch.Error {
+				return watchErrorFromEvent(name, event)
+			}
 			if event.Type != watch.Modified {
 				continue
 			}
@@ -526,9 +538,30 @@ func WaitForStatefulSetRollout(ctx context.Context, provider *KubeProvider, ns s
 }
 
 func WaitForApiService(ctx context.Context, provider *KubeProvider, name string, timeout time.Duration) error {
-	timeoutSeconds := int64(timeout.Seconds())
+	apiServiceClient := provider.AggregatorClientset.ApiregistrationV1().APIServices()
 
-	watcher, err := provider.AggregatorClientset.ApiregistrationV1().APIServices().Watch(ctx, meta_v1.ListOptions{Watch: true, TimeoutSeconds: &timeoutSeconds, FieldSelector: fields.OneTermEqualSelector("metadata.name", name).String()})
+	// Probe state before opening the watch. The aggregator may have
+	// already marked the APIService Available by the time we get here;
+	// a Watch opened with no ResourceVersion only delivers future
+	// events, so without the pre-probe the watcher would sit idle
+	// until the operation timeout. Capture the ResourceVersion to seed
+	// the Watch and avoid losing any reconcile event between the Get
+	// and the Watch open. Mirrors the rollout helpers (#226 / #228).
+	resourceVersion := ""
+	if current, err := apiServiceClient.Get(ctx, name, meta_v1.GetOptions{}); err == nil {
+		if apiServiceAvailable(current) {
+			return nil
+		}
+		resourceVersion = current.ResourceVersion
+	}
+
+	timeoutSeconds := int64(timeout.Seconds())
+	watcher, err := apiServiceClient.Watch(ctx, meta_v1.ListOptions{
+		Watch:           true,
+		TimeoutSeconds:  &timeoutSeconds,
+		FieldSelector:   fields.OneTermEqualSelector("metadata.name", name).String(),
+		ResourceVersion: resourceVersion,
+	})
 	if err != nil {
 		return err
 	}
@@ -546,20 +579,28 @@ func WaitForApiService(ctx context.Context, provider *KubeProvider, name string,
 				// just as the watch closed and the Modified event was
 				// dropped. Without this branch the receive would loop
 				// on the closed channel forever and burn a CPU (#266).
-				current, gerr := provider.AggregatorClientset.ApiregistrationV1().APIServices().Get(ctx, name, meta_v1.GetOptions{})
+				current, gerr := apiServiceClient.Get(ctx, name, meta_v1.GetOptions{})
 				if gerr == nil && apiServiceAvailable(current) {
 					return nil
 				}
 				return fmt.Errorf("%s watch closed before APIService reached Available", name)
 			}
-			if event.Type == watch.Modified {
-				apiService, ok := event.Object.(*apiregistration.APIService)
-				if !ok {
-					return fmt.Errorf("%s could not cast to APIService", name)
-				}
-				if apiServiceAvailable(apiService) {
-					done = true
-				}
+			if event.Type == watch.Error {
+				return watchErrorFromEvent(name, event)
+			}
+			// Accept Added in addition to Modified: a freshly-applied
+			// APIService whose backing service is already healthy may
+			// deliver the terminal state as Added with no follow-up
+			// Modified, which previously waited until timeout (#267).
+			if event.Type != watch.Modified && event.Type != watch.Added {
+				continue
+			}
+			apiService, ok := event.Object.(*apiregistration.APIService)
+			if !ok {
+				return fmt.Errorf("%s could not cast to APIService", name)
+			}
+			if apiServiceAvailable(apiService) {
+				done = true
 			}
 
 		case <-ctx.Done():
@@ -568,6 +609,21 @@ func WaitForApiService(ctx context.Context, provider *KubeProvider, name string,
 	}
 
 	return nil
+}
+
+// watchErrorFromEvent renders an apiserver-emitted watch.Error event
+// into a Go error. Per the watch contract the Object is normally
+// *metav1.Status carrying a human-readable Message (expired
+// ResourceVersion, RBAC change, server shutdown). Treating the event
+// as "no progress" leaves the loop spinning until the operation
+// timeout (#272); surface the message instead so the caller can act
+// or retry. Fall back to a generic error if the payload isn't a
+// Status, so a non-conforming apiserver does not slip past.
+func watchErrorFromEvent(name string, event watch.Event) error {
+	if status, ok := event.Object.(*meta_v1.Status); ok {
+		return fmt.Errorf("%s: watch error: %s", name, status.Message)
+	}
+	return fmt.Errorf("%s: watch error (unknown payload)", name)
 }
 
 // apiServiceAvailable reports whether the APIService has the Available
@@ -591,14 +647,34 @@ func apiServiceAvailable(svc *apiregistration.APIService) bool {
 }
 
 func WaitForConditions(ctx context.Context, restClient *RestClientResult, waitFields []types.WaitForField, waitConditions []types.WaitForStatusCondition, name string, timeout time.Duration) error {
-	timeoutSeconds := int64(timeout.Seconds())
+	// Probe the live state before opening the watch. The controller
+	// may have already satisfied the conditions by the time we get
+	// here; a Watch opened with no ResourceVersion only delivers
+	// future events, so without the pre-probe the watcher would sit
+	// idle until the operation timeout. Seed the Watch with the
+	// observed ResourceVersion so any reconcile event between the Get
+	// and the Watch open is still delivered. Mirrors the rollout
+	// helpers (#226 / #228).
+	resourceVersion := ""
+	if current, err := restClient.ResourceInterface.Get(ctx, name, meta_v1.GetOptions{}); err == nil {
+		matched, matchErr := matchesWaitConditions(current, waitFields, waitConditions, name)
+		if matchErr != nil {
+			return matchErr
+		}
+		if matched {
+			return nil
+		}
+		resourceVersion = current.GetResourceVersion()
+	}
 
+	timeoutSeconds := int64(timeout.Seconds())
 	watcher, err := restClient.ResourceInterface.Watch(
 		ctx,
 		meta_v1.ListOptions{
-			Watch:          true,
-			TimeoutSeconds: &timeoutSeconds,
-			FieldSelector:  fields.OneTermEqualSelector("metadata.name", name).String(),
+			Watch:           true,
+			TimeoutSeconds:  &timeoutSeconds,
+			FieldSelector:   fields.OneTermEqualSelector("metadata.name", name).String(),
+			ResourceVersion: resourceVersion,
 		},
 	)
 	if err != nil {
@@ -630,6 +706,9 @@ func WaitForConditions(ctx context.Context, restClient *RestClientResult, waitFi
 				return fmt.Errorf("%s watch closed before conditions met", name)
 			}
 			log.Printf("[TRACE] Received event type %s for %s", event.Type, name)
+			if event.Type == watch.Error {
+				return watchErrorFromEvent(name, event)
+			}
 			if event.Type == watch.Modified || event.Type == watch.Added {
 				rawResponse, ok := event.Object.(*meta_v1_unstruct.Unstructured)
 				if !ok {
