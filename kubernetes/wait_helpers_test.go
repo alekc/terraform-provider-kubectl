@@ -53,32 +53,27 @@ func TestWaitForDelete_ClosedChannelReturnsSuccessWhenAlreadyGone(t *testing.T) 
 	// (event, ok=false) on the first iteration.
 	w.Stop()
 
+	// WaitForDelete calls Get twice: first before opening the watch
+	// (to bail out early on already-gone resources), then again on
+	// channel close (the post-close probe). The first call must
+	// return the object so the helper enters the watch loop; the
+	// second returns NotFound so the helper concludes the deletion
+	// succeeded.
+	calls := 0
 	mock := &mockResourceInterface{
 		watchFn: func(ctx context.Context, opts meta_v1.ListOptions) (watch.Interface, error) {
 			return w, nil
 		},
 		getFn: func(ctx context.Context, name string, opts meta_v1.GetOptions, subresources ...string) (*meta_v1_unstruct.Unstructured, error) {
-			// First call (inside WaitForDelete before opening the
-			// watch) returns the object so the helper enters the watch
-			// loop; subsequent calls (the post-close probe) return
-			// NotFound so the helper concludes the deletion succeeded.
-			return nil, notFoundError("x")
+			calls++
+			if calls == 1 {
+				obj := &meta_v1_unstruct.Unstructured{}
+				obj.SetName(name)
+				obj.SetResourceVersion("123")
+				return obj, nil
+			}
+			return nil, notFoundError(name)
 		},
-	}
-	// Seed the first-call branch separately: the helper does a Get
-	// before opening the watch to bail out early on already-gone
-	// resources. Returning the object on that first call forces the
-	// watch path to run.
-	calls := 0
-	mock.getFn = func(ctx context.Context, name string, opts meta_v1.GetOptions, subresources ...string) (*meta_v1_unstruct.Unstructured, error) {
-		calls++
-		if calls == 1 {
-			obj := &meta_v1_unstruct.Unstructured{}
-			obj.SetName(name)
-			obj.SetResourceVersion("123")
-			return obj, nil
-		}
-		return nil, notFoundError(name)
 	}
 
 	rc := RestClientResultSuccess(mock)
