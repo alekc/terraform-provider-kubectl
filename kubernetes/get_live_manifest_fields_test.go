@@ -608,3 +608,86 @@ status:
 
 	return manifest
 }
+
+// TestGetLiveManifestFields_SecretStringDataDoesNotMutateCaller pins #269.
+// GetLiveManifestFields used to rewrite Secret stringData into base64-
+// encoded data on the caller's *yaml.Manifest, leaking the transformation
+// to every code path that reused the same pointer (post-apply re-read,
+// drift comparison, error messages). The fix operates on a deep copy of
+// the unstructured map; this test asserts the caller's view stays
+// identical to the parsed yaml_body after the call.
+func TestGetLiveManifestFields_SecretStringDataDoesNotMutateCaller(t *testing.T) {
+	const secretBody = `apiVersion: v1
+kind: Secret
+metadata:
+  name: my-secret
+  namespace: default
+stringData:
+  username: alice
+  password: hunter2
+`
+	userProvided, err := yaml.ParseYAML(secretBody)
+	assert.NoError(t, err, "test fixture must parse")
+	live, err := yaml.ParseYAML(secretBody)
+	assert.NoError(t, err, "test fixture must parse")
+
+	// Snapshot the parsed object before the call. The fields we care
+	// about: stringData must survive the call, data must not be
+	// fabricated. A deep-copy snapshot guards against the in-place
+	// mutation creeping back in via a different path.
+	before, hasStringData, _ := unstructured.NestedMap(userProvided.Raw.Object, "stringData")
+	assert.True(t, hasStringData, "fixture must contain stringData before the call")
+	beforeStringData := make(map[string]interface{}, len(before))
+	for k, v := range before {
+		beforeStringData[k] = v
+	}
+	_, hadDataBefore, _ := unstructured.NestedMap(userProvided.Raw.Object, "data")
+	assert.False(t, hadDataBefore, "fixture must NOT contain data before the call")
+
+	_ = GetLiveManifestFields(nil, userProvided, live)
+
+	after, stillHasStringData, _ := unstructured.NestedMap(userProvided.Raw.Object, "stringData")
+	assert.True(t, stillHasStringData, "stringData must remain on the caller's manifest after the call (#269)")
+	assert.Equal(t, beforeStringData, after, "stringData entries must be untouched on the caller's manifest")
+	_, hasDataAfter, _ := unstructured.NestedMap(userProvided.Raw.Object, "data")
+	assert.False(t, hasDataAfter, "no encoded data field should appear on the caller's manifest")
+}
+
+// TestGetLiveManifestFields_SecretStringDataStillEncodedInFingerprint
+// pins the other side of the #269 fix: the stringData -> data base64
+// transformation must still be reflected in the returned fingerprint
+// string so plans stay no-op when the live cluster shows the
+// already-encoded form. Without the transformation the plan would
+// always diff for Secrets defined with stringData.
+func TestGetLiveManifestFields_SecretStringDataStillEncodedInFingerprint(t *testing.T) {
+	const userBody = `apiVersion: v1
+kind: Secret
+metadata:
+  name: my-secret
+  namespace: default
+stringData:
+  username: alice
+`
+	// "alice" base64-encoded.
+	const liveBody = `apiVersion: v1
+kind: Secret
+metadata:
+  name: my-secret
+  namespace: default
+data:
+  username: YWxpY2U=
+`
+	userProvided, err := yaml.ParseYAML(userBody)
+	assert.NoError(t, err)
+	live, err := yaml.ParseYAML(liveBody)
+	assert.NoError(t, err)
+
+	fields := GetLiveManifestFields(nil, userProvided, live)
+	// data.username must appear in the returned fingerprint (the
+	// stringData entry was encoded into a data.username path that
+	// matches the live manifest). If the deep-copy regressed and the
+	// special case stopped firing, the user's flat map would carry
+	// stringData.username instead and the field would be absent.
+	assert.Contains(t, fields, "data.username=", "data.username must be carried into the fingerprint after stringData encoding")
+	assert.NotContains(t, fields, "stringData.username=", "stringData.username must not appear in the fingerprint; it should have been encoded into data.username")
+}

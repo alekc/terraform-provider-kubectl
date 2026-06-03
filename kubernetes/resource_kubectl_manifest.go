@@ -829,26 +829,32 @@ func GetFingerprint(s string) string {
 
 func GetLiveManifestFields(ignoredFields []string, userProvided *yaml.Manifest, liveManifest *yaml.Manifest) string {
 
-	// there is a special user case for secrets.
-	// If they are defined as manifests with StringData, it will always provide a non-empty plan
-	// so we will do a small lifehack here
+	// Special case for Secrets defined with stringData: the stringData
+	// values must be base64-encoded into data so the fingerprint matches
+	// the live manifest the apiserver stores; without it the plan is
+	// always non-empty. Apply that transformation on a deep copy of the
+	// caller's unstructured map so the original manifest pointer the
+	// caller threads through subsequent operations (re-fingerprinting,
+	// post-apply re-read, error messages) stays as parsed from
+	// yaml_body. Operating on userProvided.Raw directly leaked the
+	// mutation to every caller (#269).
+	userObject := userProvided.Raw.Object
 	if userProvided.GetKind() == "Secret" && userProvided.GetAPIVersion() == "v1" {
-		if stringData, found := userProvided.Raw.Object["stringData"]; found {
+		if stringData, found := userObject["stringData"]; found {
 			// there is an edge case where stringData might be nil and not a map[string]interface{}
 			// in this case we will just ignore it
 			if stringData, ok := stringData.(map[string]interface{}); ok {
-				// move all stringdata values to the data
+				userObject = userProvided.Raw.DeepCopy().Object
 				for k, v := range stringData {
 					encodedString := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%v", v)))
-					meta_v1_unstruct.SetNestedField(userProvided.Raw.Object, encodedString, "data", k)
+					meta_v1_unstruct.SetNestedField(userObject, encodedString, "data", k)
 				}
-				// and unset the stringData entirely
-				meta_v1_unstruct.RemoveNestedField(userProvided.Raw.Object, "stringData")
+				meta_v1_unstruct.RemoveNestedField(userObject, "stringData")
 			}
 		}
 	}
 
-	flattenedUser := flatten.Flatten(userProvided.Raw.Object)
+	flattenedUser := flatten.Flatten(userObject)
 	flattenedLive := flatten.Flatten(liveManifest.Raw.Object)
 
 	// remove any fields from the user provided set or control fields that we want to ignore
