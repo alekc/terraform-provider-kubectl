@@ -1059,11 +1059,14 @@ YAML
 `, name)
 	// The framework error formatter wraps the K8s API error across
 	// multiple lines, including breaks inside what the SDK v2 wrapper
-	// kept as one line. Match on the two stable substrings ("nginx
-	// service-name DNS label" and "DNS-1035 label") that bracket the
-	// failure rather than trying to thread an exact phrase through
-	// the formatter's line breaks.
-	expectedError := regexp.MustCompile(`(?s)nginx\.test-a\.svc\.cluster\.local.*DNS-1035 label`)
+	// kept as one line. Match on the bad service name plus an
+	// alternation of the validation reasons the apiserver has used
+	// over the matrix range: "DNS-1035 label" (k8s 1.32 - 1.35) and
+	// "must not contain dots" (k8s 1.36+; the apiserver tightened
+	// the Ingress backend validation message). Either phrasing
+	// satisfies the test's "server-side validation rejected this
+	// before any cluster object was created" contract.
+	expectedError := regexp.MustCompile(`(?s)nginx\.test-a\.svc\.cluster\.local.*(DNS-1035 label|must not contain dots)`)
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
