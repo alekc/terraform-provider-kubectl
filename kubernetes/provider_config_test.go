@@ -61,6 +61,68 @@ func TestBuildKubeProvider_ApplyRetryCountEnvOverride(t *testing.T) {
 	}
 }
 
+// TestBuildKubeProvider_ApplyRetryCountRejectsNegativeSchemaValue pins the
+// validation hook for issue #274: the framework half catches schema-level
+// negatives at plan time, but a caller that builds ProviderConfig directly
+// (or a runtime caller that bypasses the schema) must also be rejected.
+// Defence in depth.
+func TestBuildKubeProvider_ApplyRetryCountRejectsNegativeSchemaValue(t *testing.T) {
+	t.Setenv("KUBECTL_PROVIDER_APPLY_RETRY_COUNT", "")
+
+	_, err := BuildKubeProvider(ProviderConfig{
+		ApplyRetryCount: -1,
+		LoadConfigFile:  false,
+		Host:            "http://example.invalid",
+	}, "test")
+	if err == nil {
+		t.Fatalf("expected error on negative apply_retry_count, got nil")
+	}
+	if !strings.Contains(err.Error(), "apply_retry_count") || !strings.Contains(err.Error(), ">= 0") {
+		t.Errorf("unexpected diagnostic: %s", err)
+	}
+}
+
+// TestBuildKubeProvider_ApplyRetryCountEnvVarSurfacesParseError pins the
+// fix for one half of issue #274: KUBECTL_PROVIDER_APPLY_RETRY_COUNT=oops
+// historically parsed to 0 (Atoi error swallowed), silently degrading
+// retry-N configurations to single-shot. The env var now surfaces the
+// parse error so the user sees the misconfiguration.
+func TestBuildKubeProvider_ApplyRetryCountEnvVarSurfacesParseError(t *testing.T) {
+	t.Setenv("KUBECTL_PROVIDER_APPLY_RETRY_COUNT", "oops")
+
+	_, err := BuildKubeProvider(ProviderConfig{
+		ApplyRetryCount: 1,
+		LoadConfigFile:  false,
+		Host:            "http://example.invalid",
+	}, "test")
+	if err == nil {
+		t.Fatalf("expected error on invalid KUBECTL_PROVIDER_APPLY_RETRY_COUNT, got nil")
+	}
+	if !strings.Contains(err.Error(), "KUBECTL_PROVIDER_APPLY_RETRY_COUNT") {
+		t.Errorf("unexpected diagnostic: %s", err)
+	}
+}
+
+// TestBuildKubeProvider_ApplyRetryCountEnvVarRejectsNegative pins the
+// other half of issue #274: a negative env-var value historically wrapped
+// to ~MaxUint64 through the signed-to-unsigned cast, producing effectively
+// infinite retries. Now rejected with a clear diagnostic.
+func TestBuildKubeProvider_ApplyRetryCountEnvVarRejectsNegative(t *testing.T) {
+	t.Setenv("KUBECTL_PROVIDER_APPLY_RETRY_COUNT", "-1")
+
+	_, err := BuildKubeProvider(ProviderConfig{
+		ApplyRetryCount: 1,
+		LoadConfigFile:  false,
+		Host:            "http://example.invalid",
+	}, "test")
+	if err == nil {
+		t.Fatalf("expected error on negative KUBECTL_PROVIDER_APPLY_RETRY_COUNT, got nil")
+	}
+	if !strings.Contains(err.Error(), "KUBECTL_PROVIDER_APPLY_RETRY_COUNT") || !strings.Contains(err.Error(), ">= 0") {
+		t.Errorf("unexpected diagnostic: %s", err)
+	}
+}
+
 // TestBuildRestConfig_LazyLoadSwallowsClientcmdError pins the fix for
 // issue #283. With lazy_load disabled (the default) buildRestConfig must
 // surface the clientcmd error so users see the real reason their

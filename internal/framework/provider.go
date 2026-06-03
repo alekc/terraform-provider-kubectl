@@ -2,6 +2,7 @@ package framework
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/alekc/terraform-provider-kubectl/kubernetes"
@@ -88,8 +90,13 @@ func (p *kubectlFrameworkProvider) Schema(_ context.Context, _ provider.SchemaRe
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"apply_retry_count": schema.Int64Attribute{
-				Optional:    true,
-				Description: "Defines the number of attempts any create/update action will take",
+				Optional: true,
+				Description: "Number of retries to attempt against the apiserver after the " +
+					"initial apply fails. `0` disables retries (single-shot apply). `N >= 1` " +
+					"produces up to `N + 1` total attempts with exponential backoff " +
+					"(3s initial, 30s max). Can be sourced from " +
+					"`KUBECTL_PROVIDER_APPLY_RETRY_COUNT`. Defaults to `1`.",
+				Validators: []validator.Int64{int64AtLeastValidator{min: 0}},
 			},
 			"host": schema.StringAttribute{
 				Optional:    true,
@@ -347,6 +354,44 @@ func (p *kubectlFrameworkProvider) DataSources(_ context.Context) []func() datas
 func (p *kubectlFrameworkProvider) EphemeralResources(_ context.Context) []func() ephemeral.EphemeralResource {
 	return []func() ephemeral.EphemeralResource{
 		NewManifestEphemeralResource,
+	}
+}
+
+// int64AtLeastValidator is a small inline validator that rejects values
+// below a configured minimum. Mirrors the existing stringOneOfValidator
+// pattern in resource_kubectl_manifest.go: kept inline to avoid pulling
+// in terraform-plugin-framework-validators for a single call site. If a
+// second int64 validator lands, swap to that module wholesale.
+type int64AtLeastValidator struct {
+	min int64
+}
+
+// Description returns a one-line plaintext summary. Implements validator.Int64.
+func (v int64AtLeastValidator) Description(_ context.Context) string {
+	return fmt.Sprintf("value must be at least %d", v.min)
+}
+
+// MarkdownDescription returns the same summary as Description; no Markdown
+// is needed for a numeric bound. Implements validator.Int64.
+func (v int64AtLeastValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+// ValidateInt64 rejects any non-null, non-unknown value below the minimum.
+// Null and unknown pass through so the validator composes cleanly with
+// Optional attributes whose value may not be set in the config. Implements
+// validator.Int64.
+func (v int64AtLeastValidator) ValidateInt64(_ context.Context, req validator.Int64Request, resp *validator.Int64Response) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	got := req.ConfigValue.ValueInt64()
+	if got < v.min {
+		resp.Diagnostics.AddAttributeError(
+			req.Path,
+			"Invalid Attribute Value",
+			fmt.Sprintf("Attribute %s value must be at least %d, got: %d.", req.Path, v.min, got),
+		)
 	}
 }
 
