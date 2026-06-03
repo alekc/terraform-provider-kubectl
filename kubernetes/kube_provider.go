@@ -32,7 +32,12 @@ import (
 type KubeProvider struct {
 	MainClientset       *kubernetes.Clientset
 	RestConfig          restclient.Config
-	AggregatorClientset *aggregator.Clientset
+	// AggregatorClientset is the interface (not a concrete clientset) so
+	// tests can substitute the upstream fake from
+	// kube-aggregator/.../clientset/fake without faking out the REST
+	// transport. Production code constructs a real *aggregator.Clientset
+	// from provider_config.go; the interface widening is purely additive.
+	AggregatorClientset aggregator.Interface
 	// ApplyRetryCount is how many times an apply is retried with exponential
 	// backoff before surfacing the error. Sourced from the
 	// `apply_retry_count` provider arg (or KUBECTL_PROVIDER_APPLY_RETRY_COUNT).
