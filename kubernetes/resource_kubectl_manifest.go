@@ -571,14 +571,19 @@ func WaitForApiService(ctx context.Context, provider *KubeProvider, name string,
 }
 
 // apiServiceAvailable reports whether the APIService has the Available
-// condition set. Extracted so the watch loop and the post-close Get
-// probe (#266) read the same predicate.
+// condition set to ConditionTrue. Extracted so the watch loop and the
+// post-close Get probe (#266) read the same predicate. Status must be
+// explicitly True: ConditionFalse / ConditionUnknown indicate the
+// aggregator considers the APIService not ready, and treating their
+// presence as success would let WaitForApiService return early on a
+// half-registered or unhealthy APIService.
 func apiServiceAvailable(svc *apiregistration.APIService) bool {
 	if svc == nil {
 		return false
 	}
 	for i := range svc.Status.Conditions {
-		if svc.Status.Conditions[i].Type == apiregistration.Available {
+		if svc.Status.Conditions[i].Type == apiregistration.Available &&
+			svc.Status.Conditions[i].Status == apiregistration.ConditionTrue {
 			return true
 		}
 	}
