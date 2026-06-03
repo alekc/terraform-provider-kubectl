@@ -67,7 +67,7 @@ provider "kubectl" {
 
 The following arguments are supported:
 
-* `apply_retry_count` - (Optional) Defines the number of attempts any create/update action will take. Default `1`.
+* `apply_retry_count` - (Optional) Number of retries to attempt against the apiserver after the initial apply fails. `0` disables retries (single-shot apply); `N >= 1` produces up to `N + 1` total attempts. Must be `>= 0`. Defaults to `1`. Can be sourced from `KUBECTL_PROVIDER_APPLY_RETRY_COUNT`.
 * `load_config_file` - (Optional) Flag to enable/disable loading of the local kubeconf file. Default `true`. Can be sourced from `KUBE_LOAD_CONFIG_FILE`.
 * `lazy_load` - (Optional) When `true`, kubeconfig resolution errors at provider-configure time are swallowed and the actual client is built lazily on first use. Lets `terraform plan` succeed when provider arguments (`host`, `token`, certs) are sourced from outputs of resources that have not been applied yet. Off by default; can be sourced from `KUBE_LAZY_LOAD`. See [Troubleshooting](#troubleshooting) for trade-offs.
 * `host` - (Optional) The hostname (in form of URI) of the Kubernetes API. Can be sourced from `KUBE_HOST`.
@@ -118,13 +118,19 @@ provider "kubectl" {
 
 The provider has an additional parameter `apply_retry_count` that allows kubernetes commands to be retried on failure.
 This is useful if you have flaky CRDs or network connections and need to wait for the cluster state to be back in quorum.
-This applies to both create and update operations. 
+This applies to both create and update operations.
 
 ```hcl
 provider "kubectl" {
   apply_retry_count = 15
 }
 ```
+
+The integer is the **number of retries**, not the total number of attempts. `apply_retry_count = N` runs the apply once and then retries on failure up to `N` more times, so the worst case is `N + 1` total attempts. Setting `N = 0` disables the retry wrapper entirely and runs apply exactly once; this avoids double-spending the rate-limit budget when retry is not wanted (see [#228](https://github.com/alekc/terraform-provider-kubectl/issues/228)).
+
+Backoff is exponential between attempts with a 3-second initial interval and a 30-second cap. The value must be `>= 0`; the schema rejects negatives at plan time.
+
+The schema value is overridden by the `KUBECTL_PROVIDER_APPLY_RETRY_COUNT` environment variable when set, which lets CI runners crank retries up without touching the provider block. Invalid values (non-integer, negative) fail the provider configure step with an explicit diagnostic instead of silently degrading to single-shot.
 
 ## Troubleshooting
 

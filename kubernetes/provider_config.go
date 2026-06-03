@@ -85,9 +85,18 @@ func BuildKubeProvider(cfg ProviderConfig, terraformVersion string) (*KubeProvid
 		restCfg = &restclient.Config{}
 	}
 
+	if cfg.ApplyRetryCount < 0 {
+		return nil, fmt.Errorf("apply_retry_count must be >= 0, got %d", cfg.ApplyRetryCount)
+	}
 	applyRetryCount := uint64(cfg.ApplyRetryCount)
 	if v := os.Getenv("KUBECTL_PROVIDER_APPLY_RETRY_COUNT"); v != "" {
-		parsed, _ := strconv.Atoi(v)
+		parsed, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("KUBECTL_PROVIDER_APPLY_RETRY_COUNT: %w", err)
+		}
+		if parsed < 0 {
+			return nil, fmt.Errorf("KUBECTL_PROVIDER_APPLY_RETRY_COUNT must be >= 0, got %d", parsed)
+		}
 		applyRetryCount = uint64(parsed)
 	}
 

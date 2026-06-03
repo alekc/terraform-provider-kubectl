@@ -5,6 +5,7 @@ go 1.26.0
 toolchain go1.26.3
 
 require (
+	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/hashicorp/hcl/v2 v2.24.0
 	github.com/hashicorp/terraform v0.12.29
 	github.com/hashicorp/terraform-plugin-framework v1.19.0

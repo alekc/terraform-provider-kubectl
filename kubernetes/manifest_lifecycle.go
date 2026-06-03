@@ -10,6 +10,7 @@ import (
 
 	"github.com/alekc/terraform-provider-kubectl/internal/types"
 	"github.com/alekc/terraform-provider-kubectl/yaml"
+	backoff "github.com/cenkalti/backoff/v4"
 	"k8s.io/apimachinery/pkg/api/errors"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	meta_v1_unstruct "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -105,41 +106,73 @@ func ApplyManifest(ctx context.Context, provider *KubeProvider, opts ApplyManife
 		return nil, fmt.Errorf("%v failed to close temp file for apply: %+v", manifest, err)
 	}
 
-	applyOptions := NewApplyOptions(yamlBody)
-	applyOptions.Builder = k8sresource.NewBuilder(k8sresource.RESTClientGetter(provider))
-	applyOptions.DeleteOptions = &k8sdelete.DeleteOptions{
-		FilenameOptions: k8sresource.FilenameOptions{
-			Filenames: []string{tmpfile.Name()},
-		},
-	}
-	applyOptions.ToPrinter = func(string) (printers.ResourcePrinter, error) {
-		return printers.NewDiscardingPrinter(), nil
-	}
-	if !opts.ValidateSchema {
-		applyOptions.Validator = validation.NullSchema{}
-	}
-	if opts.ServerSideApply {
-		applyOptions.ServerSideApply = true
-		applyOptions.FieldManager = opts.FieldManager
-	}
-	if opts.ForceConflicts {
-		applyOptions.ForceConflicts = true
-	}
-	if manifest.HasNamespace() {
-		applyOptions.Namespace = manifest.GetNamespace()
-	}
-
 	log.Printf("[INFO] %s perform apply of manifest", manifest)
 
-	if err := applyOptions.Run(); err != nil {
-		return nil, fmt.Errorf("%v failed to run apply: %+v", manifest, err)
+	// applyAndFetch is the unit-of-retry: build a fresh ApplyOptions
+	// (apply.ApplyOptions tracks visitor state internally and cannot be
+	// safely re-run), run apply once, then re-read the object so the
+	// caller can persist its fingerprint. Retried under exponential
+	// backoff when provider.ApplyRetryCount > 0; called once directly
+	// otherwise (issue #228: never apply twice with retryCount = 0,
+	// which historically double-spent the request budget and surfaced
+	// as "client rate limiter Wait returned an error: context deadline
+	// exceeded").
+	var rawResponse *meta_v1_unstruct.Unstructured
+	applyAndFetch := func() error {
+		applyOptions := NewApplyOptions(yamlBody)
+		applyOptions.Builder = k8sresource.NewBuilder(k8sresource.RESTClientGetter(provider))
+		applyOptions.DeleteOptions = &k8sdelete.DeleteOptions{
+			FilenameOptions: k8sresource.FilenameOptions{
+				Filenames: []string{tmpfile.Name()},
+			},
+		}
+		applyOptions.ToPrinter = func(string) (printers.ResourcePrinter, error) {
+			return printers.NewDiscardingPrinter(), nil
+		}
+		if !opts.ValidateSchema {
+			applyOptions.Validator = validation.NullSchema{}
+		}
+		if opts.ServerSideApply {
+			applyOptions.ServerSideApply = true
+			applyOptions.FieldManager = opts.FieldManager
+		}
+		if opts.ForceConflicts {
+			applyOptions.ForceConflicts = true
+		}
+		if manifest.HasNamespace() {
+			applyOptions.Namespace = manifest.GetNamespace()
+		}
+
+		if err := applyOptions.Run(); err != nil {
+			return fmt.Errorf("%v failed to run apply: %+v", manifest, err)
+		}
+		log.Printf("[INFO] %v manifest applied, fetch resource from kubernetes", manifest)
+		var err error
+		rawResponse, err = restClient.ResourceInterface.Get(ctx, manifest.GetName(), meta_v1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("%v failed to fetch resource from kubernetes: %+v", manifest, err)
+		}
+		return nil
 	}
 
-	log.Printf("[INFO] %v manifest applied, fetch resource from kubernetes", manifest)
-
-	rawResponse, err := restClient.ResourceInterface.Get(ctx, manifest.GetName(), meta_v1.GetOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("%v failed to fetch resource from kubernetes: %+v", manifest, err)
+	if provider.ApplyRetryCount == 0 {
+		if err := applyAndFetch(); err != nil {
+			return nil, err
+		}
+	} else {
+		exp := backoff.NewExponentialBackOff()
+		exp.InitialInterval = 3 * time.Second
+		exp.MaxInterval = 30 * time.Second
+		retryErr := backoff.Retry(func() error {
+			if err := applyAndFetch(); err != nil {
+				log.Printf("[ERROR] applying manifest failed: %+v", err)
+				return err
+			}
+			return nil
+		}, backoff.WithMaxRetries(exp, provider.ApplyRetryCount))
+		if retryErr != nil {
+			return nil, retryErr
+		}
 	}
 	response := yaml.NewFromUnstructured(rawResponse)
 
