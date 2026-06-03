@@ -847,7 +847,10 @@ func GetLiveManifestFields(ignoredFields []string, userProvided *yaml.Manifest, 
 				userObject = userProvided.Raw.DeepCopy().Object
 				for k, v := range stringData {
 					encodedString := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%v", v)))
-					meta_v1_unstruct.SetNestedField(userObject, encodedString, "data", k)
+					if err := meta_v1_unstruct.SetNestedField(userObject, encodedString, "data", k); err != nil {
+						log.Printf("[WARN] failed to encode Secret stringData.%s into data: %v", k, err)
+						continue
+					}
 				}
 				meta_v1_unstruct.RemoveNestedField(userObject, "stringData")
 			}
