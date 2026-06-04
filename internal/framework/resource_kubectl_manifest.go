@@ -155,7 +155,7 @@ func (r *manifestResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 				Sensitive:   true,
 				Description: "Fingerprint of the canonical YAML at the time of the last apply. Drift detection compares this to live_manifest_incluster.",
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
+					yamlBodyAwareUseStateForUnknown{},
 				},
 			},
 			"live_manifest_incluster": schema.StringAttribute{
@@ -163,7 +163,7 @@ func (r *manifestResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 				Sensitive:   true,
 				Description: "Fingerprint of the canonical YAML as observed during the most recent Read.",
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
+					yamlBodyAwareUseStateForUnknown{},
 				},
 			},
 			"api_version": schema.StringAttribute{
@@ -211,7 +211,7 @@ func (r *manifestResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 				Computed:    true,
 				Description: "The YAML body as applied to the cluster, with any field listed in `sensitive_fields` replaced by `(sensitive value)`. Surfaced for plan-output review without leaking secret values.",
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
+					yamlBodyAwareUseStateForUnknown{},
 				},
 			},
 			"sensitive_fields": schema.ListAttribute{
@@ -1172,4 +1172,76 @@ func buildManifestImportYAMLStub(apiVersion, kind, name, namespace string) strin
 		"apiVersion: %s\nkind: %s\nmetadata:\n  name: %s\n",
 		apiVersion, kind, name,
 	)
+}
+
+// yamlBodyAwareUseStateForUnknown is a string planmodifier for the
+// fingerprint / parsed-body attributes whose values are deterministic
+// functions of yaml_body. It behaves identically to
+// stringplanmodifier.UseStateForUnknown EXCEPT when plan.yaml_body is
+// itself Unknown (an interpolation of an upstream Computed attribute
+// or timestamp()), in which case it leaves the plan value Unknown so
+// Apply can write the recomputed fingerprint without tripping
+// Terraform's plan-vs-apply consistency check.
+//
+// Regression target: issue #49. The SDK v2 half handled the same
+// pattern via CustomizeDiff SetNewComputed; the framework's plan
+// walker invokes attribute-level PlanModifiers before ModifyPlan can
+// intervene, so the carve-out has to live here instead.
+type yamlBodyAwareUseStateForUnknown struct{}
+
+// Description returns the planmodifier's plaintext summary. Implements
+// planmodifier.String.
+func (yamlBodyAwareUseStateForUnknown) Description(_ context.Context) string {
+	return "Once set, the value of this attribute in state will not change, unless yaml_body is Unknown at plan time."
+}
+
+// MarkdownDescription returns the same summary as Description; no
+// Markdown features are needed for the one-line text. Implements
+// planmodifier.String.
+func (m yamlBodyAwareUseStateForUnknown) MarkdownDescription(ctx context.Context) string {
+	return m.Description(ctx)
+}
+
+// PlanModifyString implements the plan-walker hook. Exit paths:
+//
+//   - State is null (Create): no-op, the framework keeps PlanValue at
+//     Unknown so Apply can fill in the computed value.
+//   - PlanValue is already Known (e.g. RequiresReplace set it): no-op.
+//   - Plan's yaml_body is Unknown (interpolates an upstream Computed
+//     value): no-op so the downstream fingerprint stays Unknown
+//     alongside its source. Apply will produce the new fingerprint
+//     and Terraform accepts Unknown -> Known transitions.
+//   - Plan's yaml_body is Known but differs from state.yaml_body
+//     (e.g. embeds timestamp() or a value that changes between plans):
+//     no-op so the fingerprint stays Unknown and Apply recomputes it.
+//     Without this branch the plan-walker copies the old fingerprint
+//     into the plan, then Apply overwrites it, tripping Terraform's
+//     "Provider produced inconsistent result after apply" guard.
+//   - Otherwise (yaml_body unchanged): copy StateValue into PlanValue,
+//     the standard UseStateForUnknown behaviour, so the plan is empty
+//     in the no-op case.
+//
+// Implements planmodifier.String.
+func (yamlBodyAwareUseStateForUnknown) PlanModifyString(ctx context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
+	if req.StateValue.IsNull() {
+		return
+	}
+	if !req.PlanValue.IsUnknown() {
+		return
+	}
+	var planYAMLBody, stateYAMLBody types.String
+	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("yaml_body"), &planYAMLBody)...)
+	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("yaml_body"), &stateYAMLBody)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	// Either Unknown plan or a plan-vs-state diff means the
+	// fingerprint will change at Apply time; leave PlanValue Unknown.
+	if planYAMLBody.IsUnknown() {
+		return
+	}
+	if planYAMLBody.ValueString() != stateYAMLBody.ValueString() {
+		return
+	}
+	resp.PlanValue = req.StateValue
 }

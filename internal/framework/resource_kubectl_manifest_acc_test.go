@@ -569,19 +569,17 @@ func TestAccKubectl_WaitForFieldUpdate(t *testing.T) {
 
 func TestAccInconsistentPlanning(t *testing.T) {
 	t.Parallel()
-	// TODO(#295 follow-up): port this regression test to the framework
-	// half. The SDK v2 dispatch handled the timestamp()-driven
+	// Regression test for issue #49 and the partial fix in PR #46.
+	// The SDK v2 dispatch handled the timestamp()-driven
 	// "yaml_body always interpolated" pattern via the CustomizeDiff
-	// SetNewComputed escape hatch; the framework's plan-walker sets
-	// yaml_incluster / live_manifest_incluster to the state value via
-	// UseStateForUnknown before ModifyPlan can intervene, and any
-	// later Unknown override trips Terraform's "known to Unknown"
-	// final-plan consistency check. The fix is a custom string
-	// PlanModifier that returns Unknown when plan.yaml_body is Unknown
-	// (instead of UseStateForUnknown) but copies state otherwise.
-	// Tracked separately so the v3 cutover is not blocked on a
-	// regression test that originally documented a different bug.
-	t.Skip("framework UseStateForUnknown vs Unknown-on-interpolated-yaml_body conflict; see TODO above")
+	// SetNewComputed escape hatch; the framework's plan-walker invokes
+	// attribute-level PlanModifiers before ModifyPlan can intervene,
+	// so the carve-out lives in yamlBodyAwareUseStateForUnknown.
+	// That modifier leaves yaml_incluster / live_manifest_incluster /
+	// yaml_body_parsed Unknown in the plan whenever yaml_body is
+	// Unknown OR yaml_body differs from state, so Apply can recompute
+	// the fingerprint without tripping Terraform's
+	// "inconsistent result after apply" guard.
 
 	// See https://github.com/alekc/terraform-provider-kubectl/pull/46
 	name := acctest.RandomWithPrefix("inconsistent-secret")
