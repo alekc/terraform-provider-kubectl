@@ -67,6 +67,11 @@ func TestParseManifestImportID(t *testing.T) {
 			id:      "v1//Namespace//",
 			wantErr: "must all be non-empty",
 		},
+		{
+			name:    "empty namespace in 4-part form",
+			id:      "v1//ConfigMap//cm-name//",
+			wantErr: "namespace must be non-empty",
+		},
 	}
 
 	for _, tc := range cases {

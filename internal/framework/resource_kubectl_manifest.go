@@ -1068,7 +1068,23 @@ func (r *manifestResource) ImportState(ctx context.Context, req resource.ImportS
 		data.Namespace = types.StringNull()
 	}
 	data.YAMLBody = types.StringValue(yamlStripped)
-	data.YAMLBodyParsed = types.StringValue(yamlStripped)
+	// Pass the stripped YAML through the same obfuscation helper Apply
+	// uses so Secret v1 `data` / `stringData` get masked to
+	// "(sensitive value)" in the non-sensitive yaml_body_parsed
+	// attribute. Without this the importer would leak Secret payloads
+	// into a plan-visible field. The empty `sensitive_fields` argument
+	// is intentional: the user has no config yet to declare custom
+	// sensitive paths, and BuildObfuscatedYAML applies the
+	// Secret-v1 default automatically.
+	obfuscated, obfErr := kubernetes.BuildObfuscatedYAML(yamlStripped, "", nil)
+	if obfErr != nil {
+		resp.Diagnostics.AddError(
+			"kubectl_manifest Import: obfuscate yaml_body_parsed failed",
+			fmt.Sprintf("failed to mask sensitive fields in %s/%s/%s: %v", apiVersion, kind, name, obfErr),
+		)
+		return
+	}
+	data.YAMLBodyParsed = types.StringValue(obfuscated)
 
 	// Set Optional+Computed booleans / strings to their schema-default
 	// values so the next plan against an unmodified config sees no
@@ -1121,6 +1137,16 @@ func parseManifestImportID(id string) (apiVersion, kind, name, namespace string,
 	apiVersion, kind, name = parts[0], parts[1], parts[2]
 	if len(parts) == 4 {
 		namespace = parts[3]
+		// Reject a trailing-slash 4-part ID like
+		// `v1//ConfigMap//cm//`. Without this guard the empty
+		// namespace silently falls through to the cluster-scoped
+		// (3-part) code path, importing the wrong object.
+		if namespace == "" {
+			return "", "", "", "", fmt.Errorf(
+				"namespace must be non-empty when using 4-part ID format, got %q",
+				id,
+			)
+		}
 	}
 	if apiVersion == "" || kind == "" || name == "" {
 		return "", "", "", "", fmt.Errorf(
