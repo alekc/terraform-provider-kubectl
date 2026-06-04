@@ -112,9 +112,17 @@ EOF
 				ImportState:       true,
 				ImportStateId:     fmt.Sprintf("v1//ConfigMap//%s//%s", cm, ns),
 				ImportStateVerify: true,
+				// Match the cluster-scoped test's verify-ignore: the
+				// fingerprint helper computes a different value for
+				// imports (userProvided is the full live object) than
+				// for applies (userProvided is the user's yaml_body),
+				// so yaml_incluster / live_manifest_incluster diverge
+				// at the verify step alongside yaml_body / yaml_body_parsed.
 				ImportStateVerifyIgnore: []string{
 					"yaml_body",
 					"yaml_body_parsed",
+					"yaml_incluster",
+					"live_manifest_incluster",
 				},
 			},
 		},
