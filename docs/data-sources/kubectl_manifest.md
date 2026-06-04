@@ -4,9 +4,38 @@ Reads a single Kubernetes object from the cluster by `api_version` + `kind` + `n
 
 The fetched object is exposed as both raw YAML and raw JSON. A `fields` map can declare named extractions that are returned in `results`.
 
+> **Tip:** the `fields` map is **optional**. Use it for cheap scalar extractions on simple gojsonq dot-paths; reach for `yamldecode(data.kubectl_manifest.x.yaml)` (or `jsondecode(data.kubectl_manifest.x.json)`, identical in shape) when you need arrays, nested maps, or keys containing dots, which gojsonq's dot-path syntax cannot address (see [#271](https://github.com/alekc/terraform-provider-kubectl/issues/271)).
+
 For reads of sensitive data that must **never** be written to Terraform state, use the [`kubectl_manifest` ephemeral resource](../ephemeral-resources/kubectl_manifest.md) instead.
 
 ## Example Usage
+
+### Read structured data without `fields`
+
+```hcl
+# Read a Service. Note: no `fields` declared.
+data "kubectl_manifest" "kube_dns" {
+  api_version = "v1"
+  kind        = "Service"
+  name        = "kube-dns"
+  namespace   = "kube-system"
+}
+
+# Walk the structured object via yamldecode (or jsondecode on the
+# `json` attribute, which is identical in shape). Arrays, nested
+# objects, and keys containing dots all just work.
+locals {
+  kube_dns       = yamldecode(data.kubectl_manifest.kube_dns.yaml)
+  dns_cluster_ip = local.kube_dns.spec.clusterIP
+  dns_first_port = local.kube_dns.spec.ports[0].port
+  dns_owner      = local.kube_dns.metadata.labels["app.kubernetes.io/name"]
+
+  # Iterate the array. Terraform's `for` expression composes
+  # naturally with the decoded object; gojsonq `fields` paths
+  # cannot express this.
+  dns_port_names = [for p in local.kube_dns.spec.ports : p.name]
+}
+```
 
 ### Read a ConfigMap value
 
@@ -86,16 +115,21 @@ data "kubectl_manifest" "tls" {
   }
 }
 
-# Opt-in: mark the output sensitive so it's redacted in plan/apply CLI output
-# and downstream references inherit the marking.
+# Two things to do at the consumption site:
+#   1. base64decode(): Kubernetes Secrets store `data.*` values
+#      base64-encoded. Reads always come back encoded; consumers
+#      almost always expect the cleartext PEM / token / password.
+#   2. sensitive = true: opt the output into Terraform's redaction
+#      in plan/apply CLI output and propagate the marking to
+#      downstream references.
 output "tls_key" {
-  value     = data.kubectl_manifest.tls.results["key"]
+  value     = base64decode(data.kubectl_manifest.tls.results["key"])
   sensitive = true
 }
 
 # Or inline at the reference site:
 resource "some_other" "x" {
-  cert = sensitive(data.kubectl_manifest.tls.results["crt"])
+  cert = sensitive(base64decode(data.kubectl_manifest.tls.results["crt"]))
 }
 ```
 
