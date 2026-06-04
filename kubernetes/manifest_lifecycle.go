@@ -128,7 +128,14 @@ func ApplyManifest(ctx context.Context, provider *KubeProvider, opts ApplyManife
 	var restClient *RestClientResult
 	var rawResponse *meta_v1_unstruct.Unstructured
 	applyAndFetch := func() error {
-		restClient = GetRestClientFromUnstructured(manifest, provider)
+		// Use the ctx-aware variant so a cancelled parent ctx
+		// (Ctrl-C, resource timeout, plan abort) bounds the whole
+		// retry attempt, not just the inter-retry sleep. Plain
+		// GetRestClientFromUnstructured has its own 60s timer that
+		// ignores ctx; an in-flight discovery on a slow cluster
+		// could otherwise hang each attempt for up to 60s after
+		// cancellation.
+		restClient = GetRestClientFromUnstructuredWithContext(ctx, manifest, provider)
 		if restClient.Error != nil {
 			return fmt.Errorf("%v failed to create kubernetes rest client for update of resource: %+v", manifest, restClient.Error)
 		}

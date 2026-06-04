@@ -103,8 +103,21 @@ func RestClientResultFromInvalidTypeErr(err error) *RestClientResult {
 	}
 }
 
-// GetRestClientFromUnstructured creates a dynamic k8s client based on the provided manifest
+// GetRestClientFromUnstructured creates a dynamic k8s client based on the
+// provided manifest. Equivalent to GetRestClientFromUnstructuredWithContext
+// with a background context; kept for callers that don't have a request ctx
+// to plumb through.
 func GetRestClientFromUnstructured(manifest *yaml.Manifest, provider *KubeProvider) *RestClientResult {
+	return GetRestClientFromUnstructuredWithContext(context.Background(), manifest, provider)
+}
+
+// GetRestClientFromUnstructuredWithContext is the ctx-aware variant of
+// GetRestClientFromUnstructured. It exits early with ctx.Err() when ctx is
+// cancelled, so retry loops in the apply path can bound the whole attempt
+// (discovery + apply) instead of only the inter-retry sleep. The discovery
+// goroutine still runs to completion in the background but cannot block the
+// caller; discoveryWithTimeout's buffered channel lets it deliver and exit.
+func GetRestClientFromUnstructuredWithContext(ctx context.Context, manifest *yaml.Manifest, provider *KubeProvider) *RestClientResult {
 
 	doGetRestClientFromUnstructured := func(manifest *yaml.Manifest, provider *KubeProvider) *RestClientResult {
 		// Use the k8s Discovery service to find all valid APIs for this cluster
@@ -174,6 +187,9 @@ func GetRestClientFromUnstructured(manifest *yaml.Manifest, provider *KubeProvid
 	case <-timeout.C:
 		log.Printf("[ERROR] %v timed out fetching resources from discovery client", manifest)
 		return RestClientResultFromErr(fmt.Errorf("%v timed out fetching resources from discovery client", manifest))
+	case <-ctx.Done():
+		log.Printf("[INFO] %v discovery cancelled: %v", manifest, ctx.Err())
+		return RestClientResultFromErr(ctx.Err())
 	}
 }
 
