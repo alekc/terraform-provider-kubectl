@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -1054,9 +1055,7 @@ func (r *manifestResource) ImportState(ctx context.Context, req resource.ImportS
 
 	// Set Optional+Computed booleans / strings to their schema-default
 	// values so the next plan against an unmodified config sees no
-	// drift. Fields without a schema default (override_namespace,
-	// sensitive_fields, ignore_fields, delete_cascade, timeouts,
-	// wait_for) stay null.
+	// drift.
 	data.ForceNew = types.BoolValue(false)
 	data.UpgradeAPIVersion = types.BoolValue(false)
 	data.ServerSideApply = types.BoolValue(false)
@@ -1066,6 +1065,25 @@ func (r *manifestResource) ImportState(ctx context.Context, req resource.ImportS
 	data.Wait = types.BoolValue(false)
 	data.WaitForRollout = types.BoolValue(true)
 	data.ValidateSchema = types.BoolValue(true)
+
+	// Fields without a schema default still need typed-null values
+	// rather than the Go zero value: types.List / types.Object /
+	// timeouts.Value zero values carry no element / attribute type and
+	// the framework rejects them at State.Set with a Value Conversion
+	// Error. Mirror the typed-null construction used by MoveState in
+	// resource_kubectl_manifest_move.go.
+	data.OverrideNamespace = types.StringNull()
+	data.SensitiveFields = types.ListNull(types.StringType)
+	data.IgnoreFields = types.ListNull(types.StringType)
+	data.DeleteCascade = types.StringNull()
+	data.WaitFor = types.ListNull(waitForObjectType())
+	data.Timeouts = timeouts.Value{
+		Object: types.ObjectNull(map[string]attr.Type{
+			"create": types.StringType,
+			"update": types.StringType,
+			"delete": types.StringType,
+		}),
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
