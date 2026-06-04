@@ -3,9 +3,11 @@ package framework
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -16,6 +18,9 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+
+	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	meta_v1_unstruct "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	internaltypes "github.com/alekc/terraform-provider-kubectl/internal/types"
 	"github.com/alekc/terraform-provider-kubectl/kubernetes"
@@ -43,6 +48,7 @@ var (
 	_ resource.ResourceWithConfigure    = (*manifestResource)(nil)
 	_ resource.ResourceWithModifyPlan   = (*manifestResource)(nil)
 	_ resource.ResourceWithUpgradeState = (*manifestResource)(nil)
+	_ resource.ResourceWithImportState  = (*manifestResource)(nil)
 )
 
 // NewManifestResource is the constructor registered in
@@ -935,4 +941,235 @@ func stringOrDefault(s types.String, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+// ImportState parses req.ID as `apiVersion//kind//name[//namespace]`,
+// fetches the live object via the dynamic client, and reconstructs the
+// resource model. Mirrors the SDK v2 Importer.StateContext that was lost
+// when the resource was ported to the plugin framework in #318. The
+// "//" delimiter is intentional: apiVersion can contain a single slash
+// (e.g. `apps/v1`), so a single-slash split would be ambiguous.
+//
+// Implements resource.ResourceWithImportState.
+func (r *manifestResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	apiVersion, kind, name, namespace, parseErr := parseManifestImportID(req.ID)
+	if parseErr != nil {
+		resp.Diagnostics.AddError(
+			"kubectl_manifest Import: malformed ID",
+			parseErr.Error(),
+		)
+		return
+	}
+
+	provider, providerErr := r.kubeProvider()
+	if providerErr != nil {
+		resp.Diagnostics.AddError(
+			"kubectl_manifest Import: provider unavailable",
+			providerErr.Error(),
+		)
+		return
+	}
+
+	stub := buildManifestImportYAMLStub(apiVersion, kind, name, namespace)
+	manifest, parseStubErr := yaml.ParseYAML(stub)
+	if parseStubErr != nil {
+		resp.Diagnostics.AddError(
+			"kubectl_manifest Import: parse stub failed",
+			fmt.Sprintf("failed to parse synthesized YAML for %s/%s/%s: %v", apiVersion, kind, name, parseStubErr),
+		)
+		return
+	}
+
+	// Use the ctx-aware discovery variant (added in PR #324) so a
+	// cancelled `terraform import` (Ctrl-C, parent operation timeout)
+	// short-circuits the 60s discovery timer instead of hanging on it.
+	restClient := kubernetes.GetRestClientFromUnstructuredWithContext(ctx, manifest, provider)
+	if restClient.Error != nil {
+		resp.Diagnostics.AddError(
+			"kubectl_manifest Import: discovery failed",
+			fmt.Sprintf("failed to create kubernetes rest client for import of %s/%s/%s: %v", apiVersion, kind, name, restClient.Error),
+		)
+		return
+	}
+
+	rawLive, getErr := restClient.ResourceInterface.Get(ctx, manifest.GetName(), meta_v1.GetOptions{})
+	if getErr != nil {
+		resp.Diagnostics.AddError(
+			"kubectl_manifest Import: get failed",
+			fmt.Sprintf("failed to fetch %s/%s/%s from kubernetes: %v", apiVersion, kind, name, getErr),
+		)
+		return
+	}
+
+	live := yaml.NewFromUnstructured(rawLive)
+	if live.GetUID() == "" {
+		resp.Diagnostics.AddError(
+			"kubectl_manifest Import: live object has no UID",
+			fmt.Sprintf("fetched %s/%s/%s but the returned object had an empty UID; refusing to import an unidentifiable object", apiVersion, kind, name),
+		)
+		return
+	}
+
+	// Capture identity attributes before stripping metadata. The strip
+	// below removes metadata.uid / selfLink so live.GetUID() would
+	// return "" if we read it after the strip; mirrors the order in
+	// the SDK v2 importer.
+	importedUID := live.GetUID()
+	importedSelfLink := live.GetSelfLink()
+	importedAPIVersion := live.GetAPIVersion()
+	importedKind := live.GetKind()
+	importedName := live.GetName()
+	importedNamespace := live.GetNamespace()
+
+	// Strip the same metadata that the SDK v2 importer stripped, so
+	// `yaml_body` represents user-controllable fields only. Without
+	// this, the next plan against an unchanged config would see drift
+	// on `creationTimestamp`, `resourceVersion`, etc.
+	meta_v1_unstruct.RemoveNestedField(live.Raw.Object, "metadata", "creationTimestamp")
+	meta_v1_unstruct.RemoveNestedField(live.Raw.Object, "metadata", "resourceVersion")
+	meta_v1_unstruct.RemoveNestedField(live.Raw.Object, "metadata", "selfLink")
+	meta_v1_unstruct.RemoveNestedField(live.Raw.Object, "metadata", "uid")
+	meta_v1_unstruct.RemoveNestedField(live.Raw.Object, "metadata", "annotations", "kubectl.kubernetes.io/last-applied-configuration")
+	if len(live.Raw.GetAnnotations()) == 0 {
+		meta_v1_unstruct.RemoveNestedField(live.Raw.Object, "metadata", "annotations")
+	}
+
+	yamlStripped, renderErr := live.AsYAML()
+	if renderErr != nil {
+		resp.Diagnostics.AddError(
+			"kubectl_manifest Import: render YAML failed",
+			fmt.Sprintf("failed to convert live %s/%s/%s to yaml: %v", apiVersion, kind, name, renderErr),
+		)
+		return
+	}
+
+	// Reuse the same fingerprint helper Create uses, with no ignore
+	// list (the user has no yaml_body yet to compare against). Pass the
+	// stripped live for both arguments, mirroring the SDK v2 importer.
+	// Note: the fingerprint will cover every key in the live object
+	// (because flattenedUser == flattenedLive at import time), not just
+	// the small subset a user's yaml_body would generate at apply time.
+	// That divergence is unavoidable without reconstructing the user's
+	// preferred field set, and matches the v2 behaviour.
+	fingerprint := kubernetes.GetLiveManifestFields(nil, live, live)
+
+	var data manifestResourceModel
+	data.ID = types.StringValue(importedSelfLink)
+	data.UID = types.StringValue(importedUID)
+	data.LiveUID = types.StringValue(importedUID)
+	data.YAMLInCluster = types.StringValue(fingerprint)
+	data.LiveManifestInCluster = types.StringValue(fingerprint)
+	data.APIVersion = types.StringValue(importedAPIVersion)
+	data.Kind = types.StringValue(importedKind)
+	data.Name = types.StringValue(importedName)
+	if importedNamespace != "" {
+		data.Namespace = types.StringValue(importedNamespace)
+	} else {
+		data.Namespace = types.StringNull()
+	}
+	data.YAMLBody = types.StringValue(yamlStripped)
+	// Pass the stripped YAML through the same obfuscation helper Apply
+	// uses so Secret v1 `data` / `stringData` get masked to
+	// "(sensitive value)" in the non-sensitive yaml_body_parsed
+	// attribute. Without this the importer would leak Secret payloads
+	// into a plan-visible field. The empty `sensitive_fields` argument
+	// is intentional: the user has no config yet to declare custom
+	// sensitive paths, and BuildObfuscatedYAML applies the
+	// Secret-v1 default automatically.
+	obfuscated, obfErr := kubernetes.BuildObfuscatedYAML(yamlStripped, "", nil)
+	if obfErr != nil {
+		resp.Diagnostics.AddError(
+			"kubectl_manifest Import: obfuscate yaml_body_parsed failed",
+			fmt.Sprintf("failed to mask sensitive fields in %s/%s/%s: %v", apiVersion, kind, name, obfErr),
+		)
+		return
+	}
+	data.YAMLBodyParsed = types.StringValue(obfuscated)
+
+	// Set Optional+Computed booleans / strings to their schema-default
+	// values so the next plan against an unmodified config sees no
+	// drift.
+	data.ForceNew = types.BoolValue(false)
+	data.UpgradeAPIVersion = types.BoolValue(false)
+	data.ServerSideApply = types.BoolValue(false)
+	data.FieldManager = types.StringValue("kubectl")
+	data.ForceConflicts = types.BoolValue(false)
+	data.ApplyOnly = types.BoolValue(false)
+	data.Wait = types.BoolValue(false)
+	data.WaitForRollout = types.BoolValue(true)
+	data.ValidateSchema = types.BoolValue(true)
+
+	// Fields without a schema default still need typed-null values
+	// rather than the Go zero value: types.List / types.Object /
+	// timeouts.Value zero values carry no element / attribute type and
+	// the framework rejects them at State.Set with a Value Conversion
+	// Error. Mirror the typed-null construction used by MoveState in
+	// resource_kubectl_manifest_move.go.
+	data.OverrideNamespace = types.StringNull()
+	data.SensitiveFields = types.ListNull(types.StringType)
+	data.IgnoreFields = types.ListNull(types.StringType)
+	data.DeleteCascade = types.StringNull()
+	data.WaitFor = types.ListNull(waitForObjectType())
+	data.Timeouts = timeouts.Value{
+		Object: types.ObjectNull(map[string]attr.Type{
+			"create": types.StringType,
+			"update": types.StringType,
+			"delete": types.StringType,
+		}),
+	}
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+}
+
+// parseManifestImportID splits a kubectl_manifest import ID of the form
+// `apiVersion//kind//name[//namespace]` into its components. Returns an
+// error if the ID has the wrong number of parts or any component is
+// empty. The double-slash delimiter handles apiVersions that contain a
+// single slash (e.g. `apps/v1`, `cert-manager.io/v1`).
+func parseManifestImportID(id string) (apiVersion, kind, name, namespace string, err error) {
+	parts := strings.Split(id, "//")
+	if len(parts) != 3 && len(parts) != 4 {
+		return "", "", "", "", fmt.Errorf(
+			"expected ID in format apiVersion//kind//name or apiVersion//kind//name//namespace, got %q",
+			id,
+		)
+	}
+	apiVersion, kind, name = parts[0], parts[1], parts[2]
+	if len(parts) == 4 {
+		namespace = parts[3]
+		// Reject a trailing-slash 4-part ID like
+		// `v1//ConfigMap//cm//`. Without this guard the empty
+		// namespace silently falls through to the cluster-scoped
+		// (3-part) code path, importing the wrong object.
+		if namespace == "" {
+			return "", "", "", "", fmt.Errorf(
+				"namespace must be non-empty when using 4-part ID format, got %q",
+				id,
+			)
+		}
+	}
+	if apiVersion == "" || kind == "" || name == "" {
+		return "", "", "", "", fmt.Errorf(
+			"apiVersion, kind, and name must all be non-empty, got %q",
+			id,
+		)
+	}
+	return apiVersion, kind, name, namespace, nil
+}
+
+// buildManifestImportYAMLStub returns the minimal YAML body that
+// yaml.ParseYAML needs to discover the GVK and namespace so the dynamic
+// client can fetch the live object. The full manifest is rebuilt from
+// that live object after the Get.
+func buildManifestImportYAMLStub(apiVersion, kind, name, namespace string) string {
+	if namespace != "" {
+		return fmt.Sprintf(
+			"apiVersion: %s\nkind: %s\nmetadata:\n  namespace: %s\n  name: %s\n",
+			apiVersion, kind, namespace, name,
+		)
+	}
+	return fmt.Sprintf(
+		"apiVersion: %s\nkind: %s\nmetadata:\n  name: %s\n",
+		apiVersion, kind, name,
+	)
 }
