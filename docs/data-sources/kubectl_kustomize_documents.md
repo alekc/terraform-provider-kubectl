@@ -30,7 +30,7 @@ data "kubectl_kustomize_documents" "manifests" {
 ## Argument Reference
 
 * `target` - Required. Path to the kustomization directory, evaluated relative to the Terraform working directory. Same semantics as `kustomize build <target>` on the command line.
-* `load_restrictor` - Optional. Kustomize loader restriction. `rootOnly` (default) prevents bases from loading files outside the target directory; `none` removes the restriction. Anything else is rejected at config-validate time.
+* `load_restrictor` - Optional. Kustomize loader restriction. `rootOnly` (default) prevents bases from loading files outside the target directory; `none` removes the restriction. An empty string falls back to the default. Any other non-empty value is rejected at config-validate time.
 * `add_managed_by_label` - Optional. When true, kustomize stamps an `app.kubernetes.io/managed-by` label on every rendered resource. Default false.
 
 ## Attribute Reference
