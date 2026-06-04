@@ -113,10 +113,15 @@ func ApplyManifest(ctx context.Context, provider *KubeProvider, opts ApplyManife
 	// safely re-run), run apply once, then re-read the object so the
 	// caller can persist its fingerprint. Retried under exponential
 	// backoff when provider.ApplyRetryCount > 0; called once directly
-	// otherwise (issue #228: never apply twice with retryCount = 0,
-	// which historically double-spent the request budget and surfaced
-	// as "client rate limiter Wait returned an error: context deadline
-	// exceeded").
+	// otherwise. The retryCount == 0 short-circuit is for intent and
+	// readability (issue #228); the backoff path would also produce
+	// exactly one attempt for N = 0 because Retry calls the operation
+	// before consulting NextBackOff.
+	//
+	// rawResponse is the last successful Get result. It is nil until at
+	// least one attempt writes it; if all attempts fail the loop returns
+	// a non-nil error before any caller can read it, so partial-write
+	// leak is impossible.
 	var rawResponse *meta_v1_unstruct.Unstructured
 	applyAndFetch := func() error {
 		applyOptions := NewApplyOptions(yamlBody)
@@ -163,13 +168,23 @@ func ApplyManifest(ctx context.Context, provider *KubeProvider, opts ApplyManife
 		exp := backoff.NewExponentialBackOff()
 		exp.InitialInterval = 3 * time.Second
 		exp.MaxInterval = 30 * time.Second
+		// Wrap the policy with WithContext so a cancelled ctx (Ctrl-C,
+		// resource timeout, parent plan abort) interrupts the inter-retry
+		// sleep instead of waiting out the full backoff window. Without
+		// this wrap, backoff.Retry's internal getContext falls back to
+		// context.Background() and a user who hits Ctrl-C during a 30s
+		// backoff would hang for the remainder of that sleep.
+		policy := backoff.WithContext(
+			backoff.WithMaxRetries(exp, provider.ApplyRetryCount),
+			ctx,
+		)
 		retryErr := backoff.Retry(func() error {
 			if err := applyAndFetch(); err != nil {
 				log.Printf("[ERROR] applying manifest failed: %+v", err)
 				return err
 			}
 			return nil
-		}, backoff.WithMaxRetries(exp, provider.ApplyRetryCount))
+		}, policy)
 		if retryErr != nil {
 			return nil, retryErr
 		}
