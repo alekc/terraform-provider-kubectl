@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	meta_v1_unstruct "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	apimachinery_types "k8s.io/apimachinery/pkg/types"
 	"k8s.io/cli-runtime/pkg/printers"
 	k8sresource "k8s.io/cli-runtime/pkg/resource"
 	"k8s.io/client-go/dynamic"
@@ -29,6 +31,28 @@ import (
 // shaping. Used by both halves of the muxed provider during the v2 -> v3
 // framework migration (issue #295).
 
+// DriftEngine names the algorithm used to detect drift between the
+// desired manifest and the live cluster object. ClientDriftEngine is the
+// default; ServerDriftEngine is opt-in.
+type DriftEngine string
+
+const (
+	// ClientDriftEngine compares the user-provided manifest against the
+	// live object client-side, flattening both into dotted paths and
+	// comparing per-key. Fast (no extra API calls), but susceptible to
+	// false drift on arrays, server-side defaulting, and admission
+	// webhook mutations.
+	ClientDriftEngine DriftEngine = "client"
+
+	// ServerDriftEngine runs an SSA dry-run patch against the apiserver
+	// and uses the response (the apiserver's view of the post-apply
+	// object) as the desired side of the comparison. Same semantics as
+	// `kubectl diff`. Costs one extra API call per Read. Falls back to
+	// the client engine on patch failure (e.g. CRDs that don't accept
+	// ApplyPatchType, webhook rejection, RBAC missing PATCH verb).
+	ServerDriftEngine DriftEngine = "server"
+)
+
 // ApplyManifestOptions captures everything ApplyManifest reads from the
 // caller. All fields are plain types so the framework half can construct
 // the options without depending on the SDK v2 schema package.
@@ -42,22 +66,39 @@ type ApplyManifestOptions struct {
 	WaitForRollout    bool
 	WaitFor           *types.WaitFor // nil if no wait_for block
 	Timeout           time.Duration  // applies to wait_for_rollout and wait_for
-	IgnoreFields      []string       // for fingerprint calc
+	IgnoreFields      []string       // for drift calculation
 	// SensitiveFields lists dotted paths whose values are masked in
 	// any [DEBUG]-level log emission of the manifest. Defaults to
 	// "data" and "stringData" on Secret v1 when empty; same semantics
 	// as BuildObfuscatedYAML. Apply does not otherwise interpret it.
 	SensitiveFields []string
+
+	// ShowDriftValues controls how drifted leaf values appear in the
+	// `drift` attribute. "none" (default) shows paths only;
+	// "hash" shows short-hash markers; "full" shows literal before /
+	// after values. Secret kinds and MaskPaths still mask regardless
+	// of mode. See kubernetes/drift.go for the rendering rules.
+	ShowDriftValues ShowMode
+	// MaskPaths lists glob-paths whose leaves render as a sensitive
+	// marker in the `drift` attribute, on top of the Secret data /
+	// stringData auto-masking.
+	MaskPaths []string
+	// DriftEngine selects the detection algorithm. Empty == client.
+	DriftEngine DriftEngine
 }
 
 // ApplyManifestResult captures everything the caller needs to write back
-// to state after a successful apply. All five values must be persisted.
+// to state after a successful apply. All values must be persisted.
 type ApplyManifestResult struct {
-	SelfLink                         string
-	UID                              string // from the apply response
-	LiveUID                          string // from the post-wait read
-	YAMLInClusterFingerprint         string // from the apply response
-	LiveManifestInClusterFingerprint string // from the post-wait read
+	SelfLink string
+	UID      string // from the apply response
+	LiveUID  string // from the post-wait read
+	// Drift is a human-readable YAML subtree containing only the paths
+	// where the desired manifest differs from the live object, masked
+	// per ShowDriftValues / MaskPaths / Secret-kind rules. Empty string
+	// means no drift detected. Persisted into the `drift` state
+	// attribute. See kubernetes/drift.go.
+	Drift string
 }
 
 // ApplyManifest runs `kubectl apply` against the given manifest, optionally
@@ -219,11 +260,19 @@ func ApplyManifest(ctx context.Context, provider *KubeProvider, opts ApplyManife
 	response := yaml.NewFromUnstructured(rawResponse)
 
 	result := &ApplyManifestResult{
-		SelfLink:                         response.GetSelfLink(),
-		UID:                              string(response.GetUID()),
-		LiveUID:                          string(response.GetUID()),
-		YAMLInClusterFingerprint:         GetLiveManifestFields(opts.IgnoreFields, manifest, response),
-		LiveManifestInClusterFingerprint: GetLiveManifestFields(opts.IgnoreFields, manifest, response),
+		SelfLink: response.GetSelfLink(),
+		UID:      string(response.GetUID()),
+		LiveUID:  string(response.GetUID()),
+		// Immediately post-apply the live object is, by definition,
+		// what the user just sent (plus any server-side defaulting
+		// pulled in by the apply path). Drift on the post-wait
+		// re-read below may still surface non-empty content if a
+		// controller mutates the object during the wait window;
+		// applyResultToModel persists the post-wait value as
+		// authoritative. Apply path always uses the client engine
+		// here because we already have the apply response in hand;
+		// running an extra SSA dry-run would be redundant.
+		Drift: computeDriftClient(manifest, response, opts.IgnoreFields, opts.MaskPaths, opts.ShowDriftValues),
 	}
 
 	if opts.WaitForRollout {
@@ -261,15 +310,17 @@ func ApplyManifest(ctx context.Context, provider *KubeProvider, opts ApplyManife
 		}
 	}
 
-	// Re-read after waits so live_uid and live_manifest_incluster reflect
-	// any post-wait drift the controllers introduced (status fields, etc.).
-	readResult, err := readManifestUsingClient(ctx, restClient.ResourceInterface, manifest, opts.IgnoreFields) //nolint:contextcheck // ctx is the apply ctx, intentionally reused for the post-wait read
+	// Re-read after waits so live_uid and drift reflect any post-wait
+	// mutations the controllers introduced (status fields, defaulting,
+	// admission webhooks, etc.).
+	readResult, err := readManifestUsingClient(ctx, restClient.ResourceInterface, manifest, opts.IgnoreFields, opts.MaskPaths, opts.ShowDriftValues, opts.DriftEngine, opts.FieldManager, opts.ForceConflicts) //nolint:contextcheck // ctx is the apply ctx, intentionally reused for the post-wait read
 	if err != nil {
 		return nil, err
 	}
 	if readResult.Found {
 		result.LiveUID = readResult.LiveUID
-		result.LiveManifestInClusterFingerprint = readResult.LiveManifestInClusterFingerprint
+		// Post-wait drift is the authoritative view.
+		result.Drift = readResult.Drift
 	}
 
 	return result, nil
@@ -281,16 +332,31 @@ type ReadManifestOptions struct {
 	YAMLBody          string
 	OverrideNamespace string
 	IgnoreFields      []string
+	// ShowDriftValues + MaskPaths control the rendering of the Drift
+	// field in the result. Defaults (zero values) are safe: ShowNone
+	// mode and no extra masks.
+	ShowDriftValues ShowMode
+	MaskPaths       []string
+	// DriftEngine selects the detection algorithm. Empty == client.
+	DriftEngine DriftEngine
+	// FieldManager + ForceConflicts feed into the SSA dry-run patch
+	// when DriftEngine is "server". Same defaults as the apply path:
+	// FieldManager "kubectl" if empty; ForceConflicts false.
+	FieldManager   string
+	ForceConflicts bool
 }
 
 // ReadManifestResult captures the live state observed during a Read.
 // Found = false means the resource no longer exists in the cluster; the
 // caller should clear it from state.
 type ReadManifestResult struct {
-	Found                            bool
-	InvalidType                      bool // RestClientInvalidTypeError
-	LiveUID                          string
-	LiveManifestInClusterFingerprint string
+	Found       bool
+	InvalidType bool // RestClientInvalidTypeError
+	LiveUID     string
+	// Drift is a human-readable YAML subtree of paths where desired
+	// differs from live. Empty string means in sync. Same rules as
+	// ApplyManifestResult.Drift.
+	Drift string
 }
 
 // ReadManifest fetches the current state of the manifest from the cluster
@@ -313,13 +379,13 @@ func ReadManifest(ctx context.Context, provider *KubeProvider, opts ReadManifest
 		return nil, fmt.Errorf("failed to create kubernetes rest client for read of resource: %+v", restClient.Error)
 	}
 
-	return readManifestUsingClient(ctx, restClient.ResourceInterface, manifest, opts.IgnoreFields)
+	return readManifestUsingClient(ctx, restClient.ResourceInterface, manifest, opts.IgnoreFields, opts.MaskPaths, opts.ShowDriftValues, opts.DriftEngine, opts.FieldManager, opts.ForceConflicts)
 }
 
 // readManifestUsingClient is the inner Read used both by ReadManifest and
 // by ApplyManifest's post-wait re-read. Takes an already-resolved client
 // so the apply path can reuse the one it built.
-func readManifestUsingClient(ctx context.Context, client dynamic.ResourceInterface, manifest *yaml.Manifest, ignoreFields []string) (*ReadManifestResult, error) {
+func readManifestUsingClient(ctx context.Context, client dynamic.ResourceInterface, manifest *yaml.Manifest, ignoreFields, maskPaths []string, showMode ShowMode, engine DriftEngine, fieldManager string, forceConflicts bool) (*ReadManifestResult, error) {
 	rawResponse, err := client.Get(ctx, manifest.GetName(), meta_v1.GetOptions{})
 	if err != nil {
 		if errors.IsGone(err) || errors.IsNotFound(err) {
@@ -333,10 +399,102 @@ func readManifestUsingClient(ctx context.Context, client dynamic.ResourceInterfa
 
 	live := yaml.NewFromUnstructured(rawResponse)
 	return &ReadManifestResult{
-		Found:                            true,
-		LiveUID:                          string(live.GetUID()),
-		LiveManifestInClusterFingerprint: GetLiveManifestFields(ignoreFields, manifest, live),
+		Found:   true,
+		LiveUID: string(live.GetUID()),
+		Drift:   computeDrift(ctx, client, manifest, live, ignoreFields, maskPaths, showMode, engine, fieldManager, forceConflicts),
 	}, nil
+}
+
+// computeDrift routes the drift calculation to either the client- or
+// server-side engine. The server engine runs an SSA dry-run patch
+// against the apiserver and uses the response as the desired side of
+// the comparison; on any failure (RBAC, webhook rejection, CRD that
+// doesn't accept ApplyPatchType) it logs a [WARN] and falls back to the
+// client engine so Read still completes successfully.
+func computeDrift(ctx context.Context, client dynamic.ResourceInterface, desired, live *yaml.Manifest, ignoreFields, maskPaths []string, mode ShowMode, engine DriftEngine, fieldManager string, forceConflicts bool) string {
+	if engine == ServerDriftEngine {
+		serverDesired, err := serverSideApplyDryRun(ctx, client, desired, fieldManager, forceConflicts)
+		if err == nil {
+			return RenderDrift(serverDesired.Object, live.Raw.Object, DriftOptions{
+				IgnoreFields: ignoreFields,
+				MaskPaths:    maskPaths,
+				ShowMode:     mode,
+				Kind:         desired.GetKind(),
+				APIVersion:   desired.GetAPIVersion(),
+			})
+		}
+		log.Printf("[WARN] %v server-side drift engine failed, falling back to client engine: %v", desired, err)
+		// fall through to client engine
+	}
+	return computeDriftClient(desired, live, ignoreFields, maskPaths, mode)
+}
+
+// computeDriftClient is the client-side drift engine: flatten desired and
+// live, exclude ignore_fields and the built-in control fields, render
+// per-key diffs as YAML. Handles the Secret v1 stringData -> data
+// normalisation on a deep copy of the desired manifest, so the caller's
+// pointer is never mutated (issue #269 class).
+func computeDriftClient(desired, live *yaml.Manifest, ignoreFields, maskPaths []string, mode ShowMode) string {
+	if desired == nil || desired.Raw == nil || live == nil || live.Raw == nil {
+		return ""
+	}
+	desiredObj := desired.Raw.Object
+	if desired.GetKind() == "Secret" && desired.GetAPIVersion() == "v1" {
+		if stringData, found := desiredObj["stringData"]; found {
+			if sdMap, ok := stringData.(map[string]interface{}); ok {
+				desiredObj = desired.Raw.DeepCopy().Object
+				for k, v := range sdMap {
+					encoded := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%v", v)))
+					if err := meta_v1_unstruct.SetNestedField(desiredObj, encoded, "data", k); err != nil {
+						log.Printf("[WARN] computeDriftClient: failed to encode Secret stringData.%s: %v", k, err)
+						continue
+					}
+				}
+				meta_v1_unstruct.RemoveNestedField(desiredObj, "stringData")
+			}
+		}
+	}
+	return RenderDrift(desiredObj, live.Raw.Object, DriftOptions{
+		IgnoreFields: ignoreFields,
+		MaskPaths:    maskPaths,
+		ShowMode:     mode,
+		Kind:         desired.GetKind(),
+		APIVersion:   desired.GetAPIVersion(),
+	})
+}
+
+// serverSideApplyDryRun issues an SSA dry-run patch against the
+// apiserver and returns the response (the apiserver's view of what the
+// post-apply object would look like). The fieldManager and forceConflicts
+// values must match the values used by the real apply path so the
+// dry-run computes the same patch the apply would produce; without that
+// alignment the dry-run is from a different field manager's perspective
+// and the drift signal is inaccurate.
+//
+// Defaults: empty fieldManager becomes "kubectl" to match the apply path.
+func serverSideApplyDryRun(ctx context.Context, client dynamic.ResourceInterface, desired *yaml.Manifest, fieldManager string, forceConflicts bool) (*meta_v1_unstruct.Unstructured, error) {
+	if desired == nil || desired.Raw == nil {
+		return nil, fmt.Errorf("nil manifest")
+	}
+	if fieldManager == "" {
+		fieldManager = "kubectl"
+	}
+	body, err := desired.Raw.MarshalJSON()
+	if err != nil {
+		return nil, fmt.Errorf("marshal manifest for dry-run: %w", err)
+	}
+	patchOpts := meta_v1.PatchOptions{
+		FieldManager: fieldManager,
+		DryRun:       []string{meta_v1.DryRunAll},
+	}
+	if forceConflicts {
+		// Force ownership transfer in dry-run mirrors what the apply
+		// path would do; without this the dry-run can fail with
+		// conflicts that a real apply would have resolved.
+		f := true
+		patchOpts.Force = &f
+	}
+	return client.Patch(ctx, desired.GetName(), apimachinery_types.ApplyPatchType, body, patchOpts)
 }
 
 // BuildObfuscatedYAML returns the manifest with any field listed in

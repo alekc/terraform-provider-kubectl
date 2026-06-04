@@ -73,6 +73,7 @@ func baseModel() manifestResourceModel {
 		YAMLBody:        types.StringValue("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n"),
 		SensitiveFields: types.ListNull(types.StringType),
 		IgnoreFields:    types.ListNull(types.StringType),
+		MaskPaths:       types.ListNull(types.StringType),
 		WaitFor:         types.ListNull(waitForObjectType()),
 		Timeouts:        nullTimeouts(),
 	}

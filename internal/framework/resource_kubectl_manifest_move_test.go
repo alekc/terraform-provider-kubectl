@@ -125,22 +125,34 @@ func TestMoveFromGavinbunney_HappyPath(t *testing.T) {
 	if !got.WaitFor.IsNull() {
 		t.Errorf("wait_for should be null, got %+v", got.WaitFor)
 	}
+
+	// v2 drift attributes: a moved resource starts in-sync, so drift
+	// must be "" and show_drift_values must be the safe "none"
+	// default. mask_paths is null.
+	if got.Drift.ValueString() != "" {
+		t.Errorf("drift should be empty on move, got %q", got.Drift.ValueString())
+	}
+	if got.ShowDriftValues.ValueString() != "none" {
+		t.Errorf("show_drift_values default: got %q, want %q", got.ShowDriftValues.ValueString(), "none")
+	}
+	if !got.MaskPaths.IsNull() {
+		t.Errorf("mask_paths should be null, got %+v", got.MaskPaths)
+	}
 }
 
-// TestMoveFromGavinbunney_RecomputesYAMLFingerprint asserts the mover
-// replaces the gavinbunney-stored yaml_incluster (and live_manifest_incluster)
-// with an alekc-canonical baseline computed from src.YAMLBody via
-// kubernetes.GetLiveManifestFields. The cross-provider smoke job depends on
-// this: if we passed gavinbunney's fingerprint through unchanged, alekc's
-// drift check in ModifyPlan would fire post-Read against alekc's freshly
-// computed live fingerprint, producing a non-empty plan on the first
-// terraform plan after the move.
-func TestMoveFromGavinbunney_RecomputesYAMLFingerprint(t *testing.T) {
+// TestMoveFromGavinbunney_DiscardsLegacyFingerprints asserts the mover
+// drops gavinbunney's yaml_incluster / live_manifest_incluster (now
+// removed from this provider's schema in v3) and starts the moved
+// resource in-sync. The next Read after move recomputes `drift`
+// against the live cluster object using the user's yaml_body. Any
+// first-plan refresh diff lands in `drift` itself; documented caveat
+// in the migration recipe.
+func TestMoveFromGavinbunney_DiscardsLegacyFingerprints(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
 	src := sampleGavinbunneySource()
-	// Sentinel value the recomputation must overwrite.
+	// Sentinel values the mover must NOT carry across.
 	src.YAMLInCluster = types.StringValue("gavinbunney-style-fp")
 	src.LiveManifestInCluster = types.StringValue("gavinbunney-style-fp")
 
@@ -163,18 +175,17 @@ func TestMoveFromGavinbunney_RecomputesYAMLFingerprint(t *testing.T) {
 		t.Fatalf("reading target state: %+v", diags)
 	}
 
-	if got.YAMLInCluster.ValueString() == "gavinbunney-style-fp" {
-		t.Errorf("yaml_incluster should be recomputed, still equals sentinel")
+	if got.Drift.ValueString() != "" {
+		t.Errorf("drift should be empty post-move (in-sync sentinel), got %q",
+			got.Drift.ValueString())
 	}
-	if got.LiveManifestInCluster.ValueString() == "gavinbunney-style-fp" {
-		t.Errorf("live_manifest_incluster should be recomputed, still equals sentinel")
+	if got.ShowDriftValues.ValueString() != "none" {
+		t.Errorf("show_drift_values default: got %q, want %q",
+			got.ShowDriftValues.ValueString(), "none")
 	}
-	if got.YAMLInCluster.ValueString() != got.LiveManifestInCluster.ValueString() {
-		t.Errorf("post-move yaml_incluster and live_manifest_incluster must match: %q vs %q",
-			got.YAMLInCluster.ValueString(), got.LiveManifestInCluster.ValueString())
-	}
-	if got.YAMLInCluster.ValueString() == "" {
-		t.Errorf("expected a non-empty alekc-canonical fingerprint, got empty")
+	if got.DriftEngine.ValueString() != "client" {
+		t.Errorf("drift_engine default: got %q, want %q",
+			got.DriftEngine.ValueString(), "client")
 	}
 }
 

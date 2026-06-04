@@ -58,10 +58,17 @@ EOF
 				// converges; the apply-vs-import gap exists only at
 				// the moment of the verify step.
 				ImportStateVerifyIgnore: []string{
+					// yaml_body / yaml_body_parsed: importer rebuilds
+					// from the stripped live object, which differs in
+					// key order and quoting from the user's apply-time
+					// input. drift: computed during Read using the
+					// stub manifest the importer rebuilt from the
+					// live object, so it diverges at the verify step.
+					// The next plan after import converges using the
+					// user's yaml_body.
 					"yaml_body",
 					"yaml_body_parsed",
-					"yaml_incluster",
-					"live_manifest_incluster",
+					"drift",
 				},
 			},
 		},
@@ -119,10 +126,17 @@ EOF
 				// so yaml_incluster / live_manifest_incluster diverge
 				// at the verify step alongside yaml_body / yaml_body_parsed.
 				ImportStateVerifyIgnore: []string{
+					// yaml_body / yaml_body_parsed: importer rebuilds
+					// from the stripped live object, which differs in
+					// key order and quoting from the user's apply-time
+					// input. drift: computed during Read using the
+					// stub manifest the importer rebuilt from the
+					// live object, so it diverges at the verify step.
+					// The next plan after import converges using the
+					// user's yaml_body.
 					"yaml_body",
 					"yaml_body_parsed",
-					"yaml_incluster",
-					"live_manifest_incluster",
+					"drift",
 				},
 			},
 		},
