@@ -67,7 +67,7 @@ provider "kubectl" {
 
 The following arguments are supported:
 
-* `apply_retry_count` - (Optional) Number of retries to attempt against the apiserver after the initial apply fails. `0` disables retries (single-shot apply); `N >= 1` produces up to `N + 1` total attempts. Must be `>= 0`. Defaults to `1`. Can be sourced from `KUBECTL_PROVIDER_APPLY_RETRY_COUNT`.
+* `apply_retry_count` - (Optional) Number of retries to attempt against the apiserver after the initial apply fails. `0` disables retries (single-shot apply); `N >= 1` produces up to `N + 1` total attempts. Must be `>= 0`. Defaults to `1`. This value can be sourced from the `KUBECTL_PROVIDER_APPLY_RETRY_COUNT` environment variable.
 * `load_config_file` - (Optional) Flag to enable/disable loading of the local kubeconf file. Default `true`. Can be sourced from `KUBE_LOAD_CONFIG_FILE`.
 * `lazy_load` - (Optional) When `true`, kubeconfig resolution errors at provider-configure time are swallowed and the actual client is built lazily on first use. Lets `terraform plan` succeed when provider arguments (`host`, `token`, certs) are sourced from outputs of resources that have not been applied yet. Off by default; can be sourced from `KUBE_LAZY_LOAD`. See [Troubleshooting](#troubleshooting) for trade-offs.
 * `host` - (Optional) The hostname (in form of URI) of the Kubernetes API. Can be sourced from `KUBE_HOST`.
