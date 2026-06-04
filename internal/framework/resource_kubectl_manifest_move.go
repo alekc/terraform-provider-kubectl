@@ -12,7 +12,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/alekc/terraform-provider-kubectl/kubernetes"
-	"github.com/alekc/terraform-provider-kubectl/yaml"
 )
 
 // Cross-provider state move support: lets practitioners migrate existing
@@ -192,77 +191,56 @@ func moveFromGavinbunneyManifest(ctx context.Context, req resource.MoveStateRequ
 		return
 	}
 
-	// Recompute the yaml_incluster fingerprint using alekc's
-	// GetLiveManifestFields algorithm against the source yaml_body.
-	// gavinbunney's stored fingerprint was computed by gavinbunney's
-	// algorithm against the apply response; alekc's Read post-move
-	// recomputes live_manifest_incluster against the live cluster using
-	// alekc's algorithm. If we passed gavinbunney's fingerprint through
-	// unchanged, alekc's drift detection in ModifyPlan (compares
-	// yaml_incluster to live_manifest_incluster) would fire on the first
-	// plan after the move, producing a non-empty plan that the
-	// cross-provider smoke job rejects. Computing the baseline here as
-	// GetLiveManifestFields(ignored, parsed, parsed) approximates what
-	// Read produces for a no-drift resource: identical for any kind that
-	// the server does not mutate beyond control fields (Namespace,
-	// ConfigMap, Secret, simple CRDs), which is the typical migration
-	// shape. Resources that get heavy server-side defaulting (admission
-	// webhooks rewriting spec fields) may still see a one-time refresh
-	// diff on the first plan after move; that's a documented caveat in
-	// the migration recipe.
-	yamlFingerprint := src.YAMLInCluster
-	if !src.YAMLBody.IsNull() && !src.YAMLBody.IsUnknown() {
-		parsed, parseErr := yaml.ParseYAML(src.YAMLBody.ValueString())
-		if parseErr == nil {
-			if !src.OverrideNamespace.IsNull() && src.OverrideNamespace.ValueString() != "" {
-				parsed.SetNamespace(src.OverrideNamespace.ValueString())
-			}
-			var ignored []string
-			if !src.IgnoreFields.IsNull() && !src.IgnoreFields.IsUnknown() {
-				for _, elem := range src.IgnoreFields.Elements() {
-					if s, ok := elem.(types.String); ok && !s.IsNull() && !s.IsUnknown() {
-						ignored = append(ignored, s.ValueString())
-					}
-				}
-			}
-			yamlFingerprint = types.StringValue(
-				kubernetes.GetLiveManifestFields(ignored, parsed, parsed),
-			)
-		}
-	}
+	// gavinbunney's stored yaml_incluster / live_manifest_incluster
+	// values were opaque sha256 fingerprints under gavinbunney's
+	// algorithm. This provider's v3 schema dropped both attributes;
+	// drift is recomputed against the live cluster on the next Read.
+	// So the move discards gavinbunney's fingerprints entirely and the
+	// target starts with drift = "". The next plan after the move runs
+	// Read, which computes drift fresh; any first-plan refresh diff
+	// surfaces in the `drift` attribute itself (documented caveat in
+	// the migration recipe).
 
-	// Passthrough of the 20 shared attributes plus id. The 4 alekc-only
-	// attributes take their schema defaults: upgrade_api_version=false
-	// (matches gavinbunney's always-recreate-on-api_version behaviour being
-	// the conservative default), field_manager="kubectl", and wait_for /
-	// delete_cascade null (unset, no-op).
+	// Passthrough of the 19 shared attributes plus id (yaml_incluster
+	// and live_manifest_incluster are NOT carried across; the source's
+	// values are obsolete in v3). The alekc-only attributes take their
+	// schema defaults: upgrade_api_version=false (matches gavinbunney's
+	// always-recreate-on-api_version behaviour being the conservative
+	// default), field_manager="kubectl", and wait_for / delete_cascade
+	// null (unset, no-op).
 	target := manifestResourceModel{
-		ID:                    src.ID,
-		UID:                   src.UID,
-		LiveUID:               src.LiveUID,
-		YAMLInCluster:         yamlFingerprint,
-		LiveManifestInCluster: yamlFingerprint,
-		APIVersion:            src.APIVersion,
-		Kind:                  src.Kind,
-		Name:                  src.Name,
-		Namespace:             src.Namespace,
-		OverrideNamespace:     src.OverrideNamespace,
-		YAMLBody:              src.YAMLBody,
-		YAMLBodyParsed:        src.YAMLBodyParsed,
-		SensitiveFields:       src.SensitiveFields,
-		ForceNew:              src.ForceNew,
-		ServerSideApply:       src.ServerSideApply,
-		ForceConflicts:        src.ForceConflicts,
-		ApplyOnly:             src.ApplyOnly,
-		IgnoreFields:          src.IgnoreFields,
-		Wait:                  src.Wait,
-		WaitForRollout:        src.WaitForRollout,
-		ValidateSchema:        src.ValidateSchema,
+		ID:                src.ID,
+		UID:               src.UID,
+		LiveUID:           src.LiveUID,
+		APIVersion:        src.APIVersion,
+		Kind:              src.Kind,
+		Name:              src.Name,
+		Namespace:         src.Namespace,
+		OverrideNamespace: src.OverrideNamespace,
+		YAMLBody:          src.YAMLBody,
+		YAMLBodyParsed:    src.YAMLBodyParsed,
+		SensitiveFields:   src.SensitiveFields,
+		ForceNew:          src.ForceNew,
+		ServerSideApply:   src.ServerSideApply,
+		ForceConflicts:    src.ForceConflicts,
+		ApplyOnly:         src.ApplyOnly,
+		IgnoreFields:      src.IgnoreFields,
+		Wait:              src.Wait,
+		WaitForRollout:    src.WaitForRollout,
+		ValidateSchema:    src.ValidateSchema,
 
 		UpgradeAPIVersion: types.BoolValue(false),
 		FieldManager:      types.StringValue(defaultFieldManager),
 		DeleteCascade:     types.StringNull(),
 		WaitFor:           types.ListNull(waitForObjectType()),
+		// v3 drift attributes: moved resources start in-sync. drift
+		// recomputes on the next Read. show_drift_values default
+		// "none" (safe); mask_paths null; drift_engine default
+		// "client".
+		Drift:           types.StringValue(""),
+		ShowDriftValues: types.StringValue(string(kubernetes.ShowNone)),
+		MaskPaths:       types.ListNull(types.StringType),
+		DriftEngine:     types.StringValue(string(kubernetes.ClientDriftEngine)),
 		Timeouts: timeouts.Value{
 			Object: types.ObjectNull(map[string]attr.Type{
 				"create": types.StringType,

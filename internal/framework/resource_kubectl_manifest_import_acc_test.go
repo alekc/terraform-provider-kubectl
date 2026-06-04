@@ -40,28 +40,21 @@ EOF
 				ImportState:       true,
 				ImportStateId:     "v1//Namespace//" + name,
 				ImportStateVerify: true,
-				// Fields that legitimately diverge between apply-state
-				// and import-state, mirroring SDK v2 behaviour:
-				//
-				// yaml_body / yaml_body_parsed: importer rebuilds
-				// from the stripped live object, which differs in key
-				// order and quoting from the user's apply-time input.
-				//
-				// yaml_incluster / live_manifest_incluster: fingerprint
-				// is computed over flattenedUser intersected with
-				// flattenedLive. At apply time userProvided is the
-				// user's small yaml_body so the fingerprint covers
-				// only those keys. At import time userProvided is the
-				// full stripped live object, so the fingerprint covers
-				// every key the cluster surfaced. The next plan after
-				// import re-fingerprints with the user's yaml_body and
-				// converges; the apply-vs-import gap exists only at
-				// the moment of the verify step.
+				// Fields that legitimately diverge between
+				// apply-state and import-state. Detail in the
+				// ImportStateVerifyIgnore block below.
 				ImportStateVerifyIgnore: []string{
+					// yaml_body / yaml_body_parsed: importer rebuilds
+					// from the stripped live object, which differs in
+					// key order and quoting from the user's apply-time
+					// input. drift: computed during Read using the
+					// stub manifest the importer rebuilt from the
+					// live object, so it diverges at the verify step.
+					// The next plan after import converges using the
+					// user's yaml_body.
 					"yaml_body",
 					"yaml_body_parsed",
-					"yaml_incluster",
-					"live_manifest_incluster",
+					"drift",
 				},
 			},
 		},
@@ -112,17 +105,20 @@ EOF
 				ImportState:       true,
 				ImportStateId:     fmt.Sprintf("v1//ConfigMap//%s//%s", cm, ns),
 				ImportStateVerify: true,
-				// Match the cluster-scoped test's verify-ignore: the
-				// fingerprint helper computes a different value for
-				// imports (userProvided is the full live object) than
-				// for applies (userProvided is the user's yaml_body),
-				// so yaml_incluster / live_manifest_incluster diverge
-				// at the verify step alongside yaml_body / yaml_body_parsed.
+				// Same verify-ignore set as the cluster-scoped test;
+				// see that one for the rationale.
 				ImportStateVerifyIgnore: []string{
+					// yaml_body / yaml_body_parsed: importer rebuilds
+					// from the stripped live object, which differs in
+					// key order and quoting from the user's apply-time
+					// input. drift: computed during Read using the
+					// stub manifest the importer rebuilt from the
+					// live object, so it diverges at the verify step.
+					// The next plan after import converges using the
+					// user's yaml_body.
 					"yaml_body",
 					"yaml_body_parsed",
-					"yaml_incluster",
-					"live_manifest_incluster",
+					"drift",
 				},
 			},
 		},

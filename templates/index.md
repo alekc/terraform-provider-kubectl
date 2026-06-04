@@ -60,8 +60,7 @@ YAML
 * `namespace` - Extracted object namespace from `yaml_body`.
 * `uid` - Kubernetes unique identifier from last run.
 * `live_uid` - Current uuid from kubernetes.
-* `yaml_incluster` - Current yaml within kubernetes.
-* `live_manifest_incluster` - Current manifest within kubernetes.
+* `drift` - Human-readable YAML subtree of paths where the desired manifest differs from the live object. Empty string when in sync. Replaces v2's opaque `yaml_incluster` / `live_manifest_incluster` fingerprints. See [the resource docs](./docs/resources/kubectl_manifest.md#drift-visualisation) for the rendering modes and `drift_engine` selection.
 
 ## Sensitive Fields
 

@@ -61,32 +61,34 @@ func NewManifestResource() resource.Resource {
 // the SDK v2 file for diff review. The tfsdk tags are the source of truth
 // for attribute names.
 type manifestResourceModel struct {
-	ID                    types.String   `tfsdk:"id"`
-	UID                   types.String   `tfsdk:"uid"`
-	LiveUID               types.String   `tfsdk:"live_uid"`
-	YAMLInCluster         types.String   `tfsdk:"yaml_incluster"`
-	LiveManifestInCluster types.String   `tfsdk:"live_manifest_incluster"`
-	APIVersion            types.String   `tfsdk:"api_version"`
-	Kind                  types.String   `tfsdk:"kind"`
-	Name                  types.String   `tfsdk:"name"`
-	Namespace             types.String   `tfsdk:"namespace"`
-	OverrideNamespace     types.String   `tfsdk:"override_namespace"`
-	YAMLBody              types.String   `tfsdk:"yaml_body"`
-	YAMLBodyParsed        types.String   `tfsdk:"yaml_body_parsed"`
-	SensitiveFields       types.List     `tfsdk:"sensitive_fields"`
-	ForceNew              types.Bool     `tfsdk:"force_new"`
-	UpgradeAPIVersion     types.Bool     `tfsdk:"upgrade_api_version"`
-	ServerSideApply       types.Bool     `tfsdk:"server_side_apply"`
-	FieldManager          types.String   `tfsdk:"field_manager"`
-	ForceConflicts        types.Bool     `tfsdk:"force_conflicts"`
-	ApplyOnly             types.Bool     `tfsdk:"apply_only"`
-	IgnoreFields          types.List     `tfsdk:"ignore_fields"`
-	Wait                  types.Bool     `tfsdk:"wait"`
-	WaitForRollout        types.Bool     `tfsdk:"wait_for_rollout"`
-	ValidateSchema        types.Bool     `tfsdk:"validate_schema"`
-	DeleteCascade         types.String   `tfsdk:"delete_cascade"`
-	WaitFor               types.List     `tfsdk:"wait_for"`
-	Timeouts              timeouts.Value `tfsdk:"timeouts"`
+	ID                types.String   `tfsdk:"id"`
+	UID               types.String   `tfsdk:"uid"`
+	LiveUID           types.String   `tfsdk:"live_uid"`
+	Drift             types.String   `tfsdk:"drift"`
+	ShowDriftValues   types.String   `tfsdk:"show_drift_values"`
+	MaskPaths         types.List     `tfsdk:"mask_paths"`
+	DriftEngine       types.String   `tfsdk:"drift_engine"`
+	APIVersion        types.String   `tfsdk:"api_version"`
+	Kind              types.String   `tfsdk:"kind"`
+	Name              types.String   `tfsdk:"name"`
+	Namespace         types.String   `tfsdk:"namespace"`
+	OverrideNamespace types.String   `tfsdk:"override_namespace"`
+	YAMLBody          types.String   `tfsdk:"yaml_body"`
+	YAMLBodyParsed    types.String   `tfsdk:"yaml_body_parsed"`
+	SensitiveFields   types.List     `tfsdk:"sensitive_fields"`
+	ForceNew          types.Bool     `tfsdk:"force_new"`
+	UpgradeAPIVersion types.Bool     `tfsdk:"upgrade_api_version"`
+	ServerSideApply   types.Bool     `tfsdk:"server_side_apply"`
+	FieldManager      types.String   `tfsdk:"field_manager"`
+	ForceConflicts    types.Bool     `tfsdk:"force_conflicts"`
+	ApplyOnly         types.Bool     `tfsdk:"apply_only"`
+	IgnoreFields      types.List     `tfsdk:"ignore_fields"`
+	Wait              types.Bool     `tfsdk:"wait"`
+	WaitForRollout    types.Bool     `tfsdk:"wait_for_rollout"`
+	ValidateSchema    types.Bool     `tfsdk:"validate_schema"`
+	DeleteCascade     types.String   `tfsdk:"delete_cascade"`
+	WaitFor           types.List     `tfsdk:"wait_for"`
+	Timeouts          timeouts.Value `tfsdk:"timeouts"`
 }
 
 // waitForBlockModel is the inline shape of a single wait_for block.
@@ -123,7 +125,7 @@ func (r *manifestResource) Metadata(_ context.Context, req resource.MetadataRequ
 // after the cutover. Implements resource.Resource.
 func (r *manifestResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Version: 1,
+		Version: 2,
 		Description: "Apply a Kubernetes manifest from raw YAML. Tracks the live resource by UID; reapplies " +
 			"on drift; surfaces full apply semantics (server-side apply, field manager, force conflicts, " +
 			"wait-for-rollout, wait_for conditions). Cross-provider state move from `gavinbunney/kubectl` " +
@@ -150,20 +152,57 @@ func (r *manifestResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
-			"yaml_incluster": schema.StringAttribute{
-				Computed:    true,
-				Sensitive:   true,
-				Description: "Fingerprint of the canonical YAML at the time of the last apply. Drift detection compares this to live_manifest_incluster.",
+			"drift": schema.StringAttribute{
+				Computed: true,
+				Description: "Human-readable YAML subtree showing the paths where the desired manifest " +
+					"differs from the live object. Empty string when in sync. Leaf rendering is " +
+					"controlled by `show_drift_values`; Secret kinds and `mask_paths` always mask " +
+					"regardless of mode. Replaces the opaque sha256 in `yaml_incluster` / " +
+					"`live_manifest_incluster`. See issue #54.",
 				PlanModifiers: []planmodifier.String{
 					yamlBodyAwareUseStateForUnknown{},
 				},
 			},
-			"live_manifest_incluster": schema.StringAttribute{
-				Computed:    true,
-				Sensitive:   true,
-				Description: "Fingerprint of the canonical YAML as observed during the most recent Read.",
-				PlanModifiers: []planmodifier.String{
-					yamlBodyAwareUseStateForUnknown{},
+			"show_drift_values": schema.StringAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  stringdefault.StaticString(string(kubernetes.ShowNone)),
+				Description: "How `drift` renders the leaf values at drifted paths. `none` (default, safe) " +
+					"shows `<drift>` markers only. `hash` shows `<was:HASH now:HASH>` short-hash " +
+					"markers. `full` shows literal before/after values (kubectl-diff parity). " +
+					"Secret `data` / `stringData` paths and `mask_paths` globs always mask regardless of mode.",
+				Validators: []validator.String{
+					stringOneOfValidator{allowed: []string{
+						string(kubernetes.ShowNone),
+						string(kubernetes.ShowHash),
+						string(kubernetes.ShowFull),
+					}},
+				},
+			},
+			"mask_paths": schema.ListAttribute{
+				Optional:    true,
+				ElementType: types.StringType,
+				Description: "Glob paths whose leaves are masked in `drift` regardless of `show_drift_values`. " +
+					"Supports `*` (one path segment) and `**` (zero or more segments). For example, " +
+					"`spec.template.spec.containers.*.env.*.value` or `**.password`.",
+			},
+			"drift_engine": schema.StringAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  stringdefault.StaticString(string(kubernetes.ClientDriftEngine)),
+				Description: "Algorithm used to detect drift. `client` (default) compares the user's manifest " +
+					"to the live object client-side using a flattened-path equality check; fast (no extra " +
+					"API calls) but susceptible to false drift on arrays, server-side defaulting, and " +
+					"admission-webhook mutations. `server` runs an SSA dry-run patch against the apiserver " +
+					"and uses the response (the apiserver's view of the post-apply object) as the desired " +
+					"side of the comparison; same semantics as `kubectl diff`. Costs one extra API call per " +
+					"Read and requires PATCH on the resource's kind in RBAC. Falls back to `client` on " +
+					"patch failure with a `[WARN]` log.",
+				Validators: []validator.String{
+					stringOneOfValidator{allowed: []string{
+						string(kubernetes.ClientDriftEngine),
+						string(kubernetes.ServerDriftEngine),
+					}},
 				},
 			},
 			"api_version": schema.StringAttribute{
@@ -427,6 +466,8 @@ func (r *manifestResource) buildApplyOptions(ctx context.Context, data manifestR
 	allDiags.Append(d...)
 	sensitiveFields, d := extractStringList(ctx, data.SensitiveFields)
 	allDiags.Append(d...)
+	maskPaths, d := extractStringList(ctx, data.MaskPaths)
+	allDiags.Append(d...)
 	// Drop empty / whitespace-only entries so a misconfigured
 	// sensitive_fields = [""] does not suppress the Secret v1 default
 	// masking inside BuildObfuscatedYAML.
@@ -443,7 +484,42 @@ func (r *manifestResource) buildApplyOptions(ctx context.Context, data manifestR
 		Timeout:           timeout,
 		IgnoreFields:      ignoreFields,
 		SensitiveFields:   sensitiveFields,
+		ShowDriftValues:   driftModeFromString(data.ShowDriftValues),
+		MaskPaths:         maskPaths,
+		DriftEngine:       driftEngineFromString(data.DriftEngine),
 	}, allDiags
+}
+
+// driftEngineFromString maps the `drift_engine` schema attribute to the
+// kubernetes.DriftEngine used by the lifecycle. Unknown / null / empty
+// falls through to ClientDriftEngine (the default).
+func driftEngineFromString(v types.String) kubernetes.DriftEngine {
+	if v.IsNull() || v.IsUnknown() {
+		return kubernetes.ClientDriftEngine
+	}
+	switch v.ValueString() {
+	case string(kubernetes.ServerDriftEngine):
+		return kubernetes.ServerDriftEngine
+	default:
+		return kubernetes.ClientDriftEngine
+	}
+}
+
+// driftModeFromString maps the `show_drift_values` schema attribute to the
+// kubernetes.ShowMode used by the renderer. Unknown / null / empty falls
+// through to ShowNone (the safe default).
+func driftModeFromString(v types.String) kubernetes.ShowMode {
+	if v.IsNull() || v.IsUnknown() {
+		return kubernetes.ShowNone
+	}
+	switch v.ValueString() {
+	case string(kubernetes.ShowHash):
+		return kubernetes.ShowHash
+	case string(kubernetes.ShowFull):
+		return kubernetes.ShowFull
+	default:
+		return kubernetes.ShowNone
+	}
 }
 
 // applyResultToModel writes the ApplyManifest output values onto the
@@ -452,14 +528,12 @@ func applyResultToModel(result *kubernetes.ApplyManifestResult, data *manifestRe
 	data.ID = types.StringValue(result.SelfLink)
 	data.UID = types.StringValue(result.UID)
 	data.LiveUID = types.StringValue(result.LiveUID)
-	data.YAMLInCluster = types.StringValue(result.YAMLInClusterFingerprint)
-	data.LiveManifestInCluster = types.StringValue(result.LiveManifestInClusterFingerprint)
+	data.Drift = types.StringValue(result.Drift)
 }
 
 // Create applies the manifest to the cluster and persists the resulting
-// fingerprints (uid, live_uid, yaml_incluster, live_manifest_incluster)
-// to state. Delegates to kubernetes.ApplyManifest, so behaviour matches
-// the SDK v2 half line-for-line. Implements resource.Resource.
+// identity (uid, live_uid) and drift state. Delegates to
+// kubernetes.ApplyManifest. Implements resource.Resource.
 func (r *manifestResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var data manifestResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
@@ -503,10 +577,10 @@ func (r *manifestResource) Create(ctx context.Context, req resource.CreateReques
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
-// Read refreshes live_uid and live_manifest_incluster from the cluster.
-// If the resource has disappeared (ReadManifest reports !Found, or the
-// REST mapper rejects the kind), the resource is removed from state so
-// the next plan recreates it. Implements resource.Resource.
+// Read refreshes live_uid and drift from the cluster. If the resource
+// has disappeared (ReadManifest reports !Found, or the REST mapper
+// rejects the kind), the resource is removed from state so the next
+// plan recreates it. Implements resource.Resource.
 func (r *manifestResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var data manifestResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
@@ -525,10 +599,20 @@ func (r *manifestResource) Read(ctx context.Context, req resource.ReadRequest, r
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	maskPaths, d := extractStringList(ctx, data.MaskPaths)
+	resp.Diagnostics.Append(d...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 	opts := kubernetes.ReadManifestOptions{
 		YAMLBody:          data.YAMLBody.ValueString(),
 		OverrideNamespace: data.OverrideNamespace.ValueString(),
 		IgnoreFields:      ignoreFields,
+		ShowDriftValues:   driftModeFromString(data.ShowDriftValues),
+		MaskPaths:         maskPaths,
+		DriftEngine:       driftEngineFromString(data.DriftEngine),
+		FieldManager:      stringOrDefault(data.FieldManager, "kubectl"),
+		ForceConflicts:    data.ForceConflicts.ValueBool(),
 	}
 
 	result, readErr := kubernetes.ReadManifest(ctx, provider, opts)
@@ -544,7 +628,7 @@ func (r *manifestResource) Read(ctx context.Context, req resource.ReadRequest, r
 	}
 
 	data.LiveUID = types.StringValue(result.LiveUID)
-	data.LiveManifestInCluster = types.StringValue(result.LiveManifestInClusterFingerprint)
+	data.Drift = types.StringValue(result.Drift)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -675,9 +759,10 @@ func (r *manifestResource) Delete(ctx context.Context, req resource.DeleteReques
 //  5. UID divergence between state.uid and state.live_uid means the
 //     cluster-side object was recreated; mark uid as Unknown so it is
 //     refreshed during Apply.
-//  6. Drift detection: yaml_incluster vs live_manifest_incluster
-//     mismatch means an external change occurred; mark yaml_incluster
-//     Unknown.
+//  6. Drift detection: a non-empty `drift` in state means an external
+//     change occurred between the last apply and the last refresh;
+//     mark `drift` Unknown so Apply's recomputed value (which converges
+//     to "") doesn't trip the post-apply consistency check.
 //  7. Build yaml_body_parsed by obfuscating sensitive_fields (or the
 //     default Secret v1 fields) and write it into the plan.
 func (r *manifestResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
@@ -782,32 +867,29 @@ func (r *manifestResource) ModifyPlan(ctx context.Context, req resource.ModifyPl
 			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("uid"), types.StringUnknown())...)
 		}
 
-		if state.YAMLInCluster.ValueString() != state.LiveManifestInCluster.ValueString() {
-			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("yaml_incluster"), types.StringUnknown())...)
-			// Drift-driven applies recompute both fingerprints; pinning
-			// live_manifest_incluster to the stale state value triggers
-			// the post-apply consistency check when Apply returns the
-			// new value.
-			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("live_manifest_incluster"), types.StringUnknown())...)
+		// If state recorded non-empty drift on the most recent Read,
+		// pin the planned `drift` to Unknown so Apply's recomputed
+		// value (which converges to "") doesn't trip the framework's
+		// post-apply consistency check. Same role the legacy v2
+		// fingerprint-mismatch gate played for yaml_incluster /
+		// live_manifest_incluster.
+		if state.Drift.ValueString() != "" {
+			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("drift"), types.StringUnknown())...)
 		}
 
 		// When inputs that feed Apply differ between state and plan,
-		// the computed fingerprints Apply returns cannot be predicted
-		// at plan time: yaml_incluster / live_manifest_incluster are
-		// GetLiveManifestFields hashes over the new manifest against
-		// the post-apply cluster state. The SDK v2 diff engine marked
-		// these "(known after apply)" automatically when relevant
-		// inputs changed; the framework requires it to be explicit.
-		// Without this, the framework's post-apply consistency check
-		// raises "Provider produced inconsistent result after apply"
-		// whenever Apply's recomputed values differ from what state
-		// preserved via UseStateForUnknown.
+		// drift cannot be predicted at plan time: it is computed in
+		// Read against the post-apply live object. Mark it Unknown so
+		// the framework's post-apply consistency check accepts
+		// whatever Apply produces.
 		inputsChanged := plan.YAMLBody.ValueString() != state.YAMLBody.ValueString() ||
 			plan.OverrideNamespace.ValueString() != state.OverrideNamespace.ValueString() ||
-			!plan.IgnoreFields.Equal(state.IgnoreFields)
+			!plan.IgnoreFields.Equal(state.IgnoreFields) ||
+			!plan.MaskPaths.Equal(state.MaskPaths) ||
+			plan.ShowDriftValues.ValueString() != state.ShowDriftValues.ValueString() ||
+			plan.DriftEngine.ValueString() != state.DriftEngine.ValueString()
 		if inputsChanged {
-			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("yaml_incluster"), types.StringUnknown())...)
-			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("live_manifest_incluster"), types.StringUnknown())...)
+			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("drift"), types.StringUnknown())...)
 		}
 
 		// id is the self-link (apiVersion + kind + namespace + name) of
@@ -851,32 +933,191 @@ func (r *manifestResource) ModifyPlan(ctx context.Context, req resource.ModifyPl
 	resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("yaml_body_parsed"), obfuscated)...)
 }
 
-// UpgradeState ports the SDK v2 v0 -> v1 state upgrader. v0 stored the
-// raw canonicalised YAML strings in yaml_incluster and
-// live_manifest_incluster; v1 stores their sha256 fingerprints. The
-// upgrader simply hashes both fields if they look unhashed. The v0
-// schema was structurally identical to v1 so we reuse the v1 model for
-// decoding; only the value transform changes.
-func (r *manifestResource) UpgradeState(_ context.Context) map[int64]resource.StateUpgrader {
+// UpgradeState chains state migrations forward to the current schema
+// version. Two migrations are registered, both terminating at v2:
+//
+//   - v0 -> v2: the SDK v2 line (v2.4.x and earlier, the only released
+//     line as of v3.0). v0 stored the raw canonicalised YAML strings in
+//     yaml_incluster and live_manifest_incluster. v2 drops both
+//     attributes entirely and replaces them with `drift` (computed
+//     fresh on the next Read), `show_drift_values` ("none" default),
+//     `mask_paths` (null), and `drift_engine` ("client" default). HCL
+//     referencing the legacy attributes breaks at plan time with a
+//     clear missing-attribute message; migration is
+//     `drift != ""`.
+//
+//   - v1 -> v2: safety net for anyone who installed an interim v3
+//     pre-release that shipped the sha256-fingerprint shape. Same
+//     promotion as v0 -> v2, just decoding from the same shape.
+func (r *manifestResource) UpgradeState(ctx context.Context) map[int64]resource.StateUpgrader {
+	priorSchema := priorManifestSchemaV1(ctx)
+	upgrade := func(ctx context.Context, req resource.UpgradeStateRequest, resp *resource.UpgradeStateResponse) {
+		var v1 manifestResourceModelV1
+		resp.Diagnostics.Append(req.State.Get(ctx, &v1)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		data := promoteV1ToV2(v1)
+		resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+	}
 	return map[int64]resource.StateUpgrader{
 		0: {
-			StateUpgrader: func(ctx context.Context, req resource.UpgradeStateRequest, resp *resource.UpgradeStateResponse) {
-				var data manifestResourceModel
-				resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
-				if resp.Diagnostics.HasError() {
-					return
-				}
-				if !data.YAMLInCluster.IsNull() && !data.YAMLInCluster.IsUnknown() {
-					data.YAMLInCluster = types.StringValue(
-						kubernetes.GetFingerprint(data.YAMLInCluster.ValueString()))
-				}
-				if !data.LiveManifestInCluster.IsNull() && !data.LiveManifestInCluster.IsUnknown() {
-					data.LiveManifestInCluster = types.StringValue(
-						kubernetes.GetFingerprint(data.LiveManifestInCluster.ValueString()))
-				}
-				resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-			},
+			PriorSchema:   &priorSchema,
+			StateUpgrader: upgrade,
 		},
+		1: {
+			PriorSchema:   &priorSchema,
+			StateUpgrader: upgrade,
+		},
+	}
+}
+
+// priorManifestSchemaV1 returns the v0/v1 schema definition: the
+// pre-drift attribute set, including yaml_incluster and
+// live_manifest_incluster. The framework needs this declared as
+// PriorSchema on each state upgrader so req.State.Get can decode the
+// raw state into a typed model. Without it, req.State has no Schema
+// and any Get against it panics (issue: nil pointer in
+// UpgradeResourceState observed on the upgrade_path_smoke jobs).
+//
+// Only attribute *shapes* need to match the v1 schema for decoding;
+// validators, plan modifiers, descriptions, and defaults can be
+// omitted because they never run during state upgrade.
+func priorManifestSchemaV1(ctx context.Context) schema.Schema {
+	str := schema.StringAttribute{Optional: true, Computed: true}
+	strSensitive := schema.StringAttribute{Optional: true, Computed: true, Sensitive: true}
+	strReq := schema.StringAttribute{Required: true, Sensitive: true}
+	boolAttr := schema.BoolAttribute{Optional: true, Computed: true}
+	strList := schema.ListAttribute{Optional: true, ElementType: types.StringType}
+	return schema.Schema{
+		Version: 1,
+		Attributes: map[string]schema.Attribute{
+			"id":                      schema.StringAttribute{Computed: true},
+			"uid":                     schema.StringAttribute{Computed: true},
+			"live_uid":                schema.StringAttribute{Computed: true},
+			"yaml_incluster":          strSensitive,
+			"live_manifest_incluster": strSensitive,
+			"api_version":             schema.StringAttribute{Computed: true},
+			"kind":                    schema.StringAttribute{Computed: true},
+			"name":                    schema.StringAttribute{Computed: true},
+			"namespace":               schema.StringAttribute{Computed: true},
+			"override_namespace":      schema.StringAttribute{Optional: true},
+			"yaml_body":               strReq,
+			"yaml_body_parsed":        schema.StringAttribute{Computed: true},
+			"sensitive_fields":        strList,
+			"force_new":               boolAttr,
+			"upgrade_api_version":     boolAttr,
+			"server_side_apply":       boolAttr,
+			"field_manager":           str,
+			"force_conflicts":         boolAttr,
+			"apply_only":              boolAttr,
+			"ignore_fields":           strList,
+			"wait":                    boolAttr,
+			"wait_for_rollout":        boolAttr,
+			"validate_schema":         boolAttr,
+			"delete_cascade":          schema.StringAttribute{Optional: true},
+		},
+		Blocks: map[string]schema.Block{
+			"wait_for": schema.ListNestedBlock{
+				NestedObject: schema.NestedBlockObject{
+					Blocks: map[string]schema.Block{
+						"condition": schema.ListNestedBlock{
+							NestedObject: schema.NestedBlockObject{
+								Attributes: map[string]schema.Attribute{
+									"type":   schema.StringAttribute{Required: true},
+									"status": schema.StringAttribute{Required: true},
+								},
+							},
+						},
+						"field": schema.ListNestedBlock{
+							NestedObject: schema.NestedBlockObject{
+								Attributes: map[string]schema.Attribute{
+									"key":        schema.StringAttribute{Required: true},
+									"value":      schema.StringAttribute{Required: true},
+									"value_type": schema.StringAttribute{Optional: true, Computed: true},
+								},
+							},
+						},
+					},
+				},
+			},
+			"timeouts": timeouts.Block(ctx, timeouts.Opts{
+				Create: true,
+				Update: true,
+				Delete: true,
+			}),
+		},
+	}
+}
+
+// manifestResourceModelV1 is the v0 / v1 schema shape (SDK v2 line +
+// any interim v3 pre-release). The two fingerprint attributes are
+// decoded so the upgrader can read state cleanly; the values are then
+// discarded when promoting to v2 because `drift` is computed fresh on
+// the next Read against live cluster state.
+type manifestResourceModelV1 struct {
+	ID                    types.String   `tfsdk:"id"`
+	UID                   types.String   `tfsdk:"uid"`
+	LiveUID               types.String   `tfsdk:"live_uid"`
+	YAMLInCluster         types.String   `tfsdk:"yaml_incluster"`
+	LiveManifestInCluster types.String   `tfsdk:"live_manifest_incluster"`
+	APIVersion            types.String   `tfsdk:"api_version"`
+	Kind                  types.String   `tfsdk:"kind"`
+	Name                  types.String   `tfsdk:"name"`
+	Namespace             types.String   `tfsdk:"namespace"`
+	OverrideNamespace     types.String   `tfsdk:"override_namespace"`
+	YAMLBody              types.String   `tfsdk:"yaml_body"`
+	YAMLBodyParsed        types.String   `tfsdk:"yaml_body_parsed"`
+	SensitiveFields       types.List     `tfsdk:"sensitive_fields"`
+	ForceNew              types.Bool     `tfsdk:"force_new"`
+	UpgradeAPIVersion     types.Bool     `tfsdk:"upgrade_api_version"`
+	ServerSideApply       types.Bool     `tfsdk:"server_side_apply"`
+	FieldManager          types.String   `tfsdk:"field_manager"`
+	ForceConflicts        types.Bool     `tfsdk:"force_conflicts"`
+	ApplyOnly             types.Bool     `tfsdk:"apply_only"`
+	IgnoreFields          types.List     `tfsdk:"ignore_fields"`
+	Wait                  types.Bool     `tfsdk:"wait"`
+	WaitForRollout        types.Bool     `tfsdk:"wait_for_rollout"`
+	ValidateSchema        types.Bool     `tfsdk:"validate_schema"`
+	DeleteCascade         types.String   `tfsdk:"delete_cascade"`
+	WaitFor               types.List     `tfsdk:"wait_for"`
+	Timeouts              timeouts.Value `tfsdk:"timeouts"`
+}
+
+// promoteV1ToV2 copies a v0 / v1 model into a v2 model, dropping the
+// two legacy fingerprint attributes and populating the four new ones
+// with safe defaults. drift = "" means "no drift recorded yet"; the
+// next Read recomputes it from cluster state.
+func promoteV1ToV2(v1 manifestResourceModelV1) manifestResourceModel {
+	return manifestResourceModel{
+		ID:                v1.ID,
+		UID:               v1.UID,
+		LiveUID:           v1.LiveUID,
+		Drift:             types.StringValue(""),
+		ShowDriftValues:   types.StringValue(string(kubernetes.ShowNone)),
+		MaskPaths:         types.ListNull(types.StringType),
+		DriftEngine:       types.StringValue(string(kubernetes.ClientDriftEngine)),
+		APIVersion:        v1.APIVersion,
+		Kind:              v1.Kind,
+		Name:              v1.Name,
+		Namespace:         v1.Namespace,
+		OverrideNamespace: v1.OverrideNamespace,
+		YAMLBody:          v1.YAMLBody,
+		YAMLBodyParsed:    v1.YAMLBodyParsed,
+		SensitiveFields:   v1.SensitiveFields,
+		ForceNew:          v1.ForceNew,
+		UpgradeAPIVersion: v1.UpgradeAPIVersion,
+		ServerSideApply:   v1.ServerSideApply,
+		FieldManager:      v1.FieldManager,
+		ForceConflicts:    v1.ForceConflicts,
+		ApplyOnly:         v1.ApplyOnly,
+		IgnoreFields:      v1.IgnoreFields,
+		Wait:              v1.Wait,
+		WaitForRollout:    v1.WaitForRollout,
+		ValidateSchema:    v1.ValidateSchema,
+		DeleteCascade:     v1.DeleteCascade,
+		WaitFor:           v1.WaitFor,
+		Timeouts:          v1.Timeouts,
 	}
 }
 
@@ -1043,22 +1284,19 @@ func (r *manifestResource) ImportState(ctx context.Context, req resource.ImportS
 		return
 	}
 
-	// Reuse the same fingerprint helper Create uses, with no ignore
-	// list (the user has no yaml_body yet to compare against). Pass the
-	// stripped live for both arguments, mirroring the SDK v2 importer.
-	// Note: the fingerprint will cover every key in the live object
-	// (because flattenedUser == flattenedLive at import time), not just
-	// the small subset a user's yaml_body would generate at apply time.
-	// That divergence is unavoidable without reconstructing the user's
-	// preferred field set, and matches the v2 behaviour.
-	fingerprint := kubernetes.GetLiveManifestFields(nil, live, live)
-
+	// Import starts in-sync: the stripped live IS the desired side, so
+	// drift is "" by definition. The next plan after import runs Read,
+	// which recomputes drift against the user's yaml_body (which is
+	// the stripped live at this point, byte-for-byte modulo
+	// rendering). Any first-plan diff lands in `drift` itself.
 	var data manifestResourceModel
 	data.ID = types.StringValue(importedSelfLink)
 	data.UID = types.StringValue(importedUID)
 	data.LiveUID = types.StringValue(importedUID)
-	data.YAMLInCluster = types.StringValue(fingerprint)
-	data.LiveManifestInCluster = types.StringValue(fingerprint)
+	data.Drift = types.StringValue("")
+	data.ShowDriftValues = types.StringValue(string(kubernetes.ShowNone))
+	data.MaskPaths = types.ListNull(types.StringType)
+	data.DriftEngine = types.StringValue(string(kubernetes.ClientDriftEngine))
 	data.APIVersion = types.StringValue(importedAPIVersion)
 	data.Kind = types.StringValue(importedKind)
 	data.Name = types.StringValue(importedName)

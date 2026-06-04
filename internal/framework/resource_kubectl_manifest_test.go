@@ -30,15 +30,18 @@ func TestManifestResource_SchemaShape(t *testing.T) {
 	}
 
 	s := schemaResp.Schema
-	if s.Version != 1 {
-		t.Fatalf("Schema Version: got %d, want 1", s.Version)
+	if s.Version != 2 {
+		t.Fatalf("Schema Version: got %d, want 2", s.Version)
 	}
 
-	// 24 attributes total (id + the 23 mirrored from SDK v2). wait_for is
-	// modelled as a Block, not an Attribute (matches SDK v2's TypeList +
-	// nested Resource shape), so it appears in s.Blocks instead.
+	// 26 attributes total. v3 dropped yaml_incluster and
+	// live_manifest_incluster (replaced by drift; see issue #54) and
+	// added four new ones: drift, show_drift_values, mask_paths,
+	// drift_engine. wait_for is modelled as a Block, not an
+	// Attribute, so it appears in s.Blocks instead.
 	wantAttrs := []string{
-		"id", "uid", "live_uid", "yaml_incluster", "live_manifest_incluster",
+		"id", "uid", "live_uid",
+		"drift", "show_drift_values", "mask_paths", "drift_engine",
 		"api_version", "kind", "name", "namespace", "override_namespace",
 		"yaml_body", "yaml_body_parsed", "sensitive_fields", "force_new",
 		"upgrade_api_version", "server_side_apply", "field_manager",

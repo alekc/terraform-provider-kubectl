@@ -31,12 +31,13 @@ func TestUpdate_PreservesStateOnApplyError(t *testing.T) {
 	priorYAML := "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\ndata:\n  k: old\n"
 	plannedYAML := "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\ndata:\n  k: new\n"
 
+	const priorDrift = "metadata:\n  annotations:\n    prior: <drift>\n"
+
 	priorState := baseModel()
 	priorState.YAMLBody = types.StringValue(priorYAML)
 	priorState.UID = types.StringValue("uid-existing")
 	priorState.LiveUID = types.StringValue("uid-existing")
-	priorState.YAMLInCluster = types.StringValue("prior-fingerprint")
-	priorState.LiveManifestInCluster = types.StringValue("prior-fingerprint")
+	priorState.Drift = types.StringValue(priorDrift)
 	priorState.APIVersion = types.StringValue("v1")
 	priorState.Kind = types.StringValue("ConfigMap")
 	priorState.Name = types.StringValue("x")
@@ -83,9 +84,9 @@ func TestUpdate_PreservesStateOnApplyError(t *testing.T) {
 	if got.YAMLBody.ValueString() == plannedYAML {
 		t.Errorf("yaml_body must NOT be the planned value after a failed Update; #60 regression")
 	}
-	if got.YAMLInCluster.ValueString() != "prior-fingerprint" {
-		t.Errorf("yaml_incluster should be the prior fingerprint after a failed Update; got %q",
-			got.YAMLInCluster.ValueString())
+	if got.Drift.ValueString() != priorDrift {
+		t.Errorf("drift after failed Update: expected %q, got %q",
+			priorDrift, got.Drift.ValueString())
 	}
 	if got.UID.ValueString() != "uid-existing" {
 		t.Errorf("uid should be the prior value after a failed Update; got %q",
