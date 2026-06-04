@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"reflect"
 	"sort"
 	"strings"
@@ -146,11 +147,24 @@ func collectMapDrift(desired, live map[string]interface{}, path []string, ignore
 			lv, hasInLive = live[k]
 		}
 		if !hasInLive {
-			// Desired has it, live doesn't. That's drift; render
-			// using the value's full subtree but with a missing
-			// marker at every leaf.
-			result[k] = renderMissingFromLive(dv, childPath, masks, mode)
-			any = true
+			// Desired has it, live doesn't. This case is common and
+			// rarely meaningful: the apiserver strips fields the
+			// user provided but the kind doesn't accept
+			// (metadata.namespace on cluster-scoped resources is
+			// the classic offender, injected by override_namespace),
+			// or the user just hasn't applied yet. The legacy v2
+			// fingerprint treated this asymmetrically too: a
+			// missing-in-live key did not contribute to the
+			// fingerprint, so plans were no-ops in this case.
+			// Reporting it as drift here triggers infinite update
+			// loops (each refresh sees drift, plan wants an update,
+			// apply doesn't change live, next refresh sees drift
+			// again). Server-side drift_engine sidesteps this
+			// because the dry-run apply response also lacks the
+			// stripped field, so the comparison agrees with live.
+			// Keep the TRACE log so the case is still observable
+			// for users grepping debug output.
+			log.Printf("[TRACE] desired-only path (live lacks key): %s", strings.Join(childPath, "."))
 			continue
 		}
 		child, drifted := collectAnyDrift(dv, lv, childPath, ignore, masks, mode)
@@ -218,12 +232,14 @@ func collectSliceDrift(desired, live []interface{}, path []string, ignore ignore
 				any = true
 			}
 		case hasD && !hasL:
-			// desired has more items than live
-			out = append(out, map[string]interface{}{
-				"_index_":   i,
-				"_missing_": "absent on cluster",
-			})
-			any = true
+			// desired has more items than live. Treated as
+			// non-drift for the same reason as the map-key case
+			// in collectMapDrift: the apiserver may have trimmed
+			// the list (strategic merge, list-type semantics),
+			// and surfacing it here triggers infinite update
+			// loops on resources where apply produces a shorter
+			// list than the user wrote. TRACE-log instead.
+			log.Printf("[TRACE] desired-only index (live shorter): %s", strings.Join(idxPath, "."))
 		case !hasD && hasL:
 			// live has more items than desired; typically server-injected
 			// defaulting (e.g. status). Skip.
@@ -410,7 +426,23 @@ func buildMaskGlobs(extra []string, kind, apiVersion string) []maskGlob {
 		if e == "" {
 			continue
 		}
-		out = append(out, maskGlob{segments: splitPath(e)})
+		base := splitPath(e)
+		// Literal user entries match the path itself AND every
+		// descendant: a user writing `mask_paths = ["data"]`
+		// expects `data.password` to be masked too, not just a
+		// scalar at `data`. Entries that already end in a `**`
+		// glob are left alone. Entries that contain glob
+		// metacharacters (`*` or `**`) are also taken literally;
+		// users who want a leaf-only pattern can still write
+		// `mask_paths = ["data.*"]` to get exactly-one-segment
+		// children.
+		out = append(out, maskGlob{segments: base})
+		if !endsWithDoubleStar(base) {
+			descendants := make([]string, 0, len(base)+1)
+			descendants = append(descendants, base...)
+			descendants = append(descendants, "**")
+			out = append(out, maskGlob{segments: descendants})
+		}
 	}
 	if kind == "Secret" && apiVersion == "v1" {
 		out = append(out,
@@ -421,6 +453,16 @@ func buildMaskGlobs(extra []string, kind, apiVersion string) []maskGlob {
 		)
 	}
 	return out
+}
+
+// endsWithDoubleStar reports whether the last segment of the pattern
+// is the multi-segment glob `**`. Used to skip the auto-expanded
+// subtree mask in buildMaskGlobs when the user already wrote one.
+func endsWithDoubleStar(segments []string) bool {
+	if len(segments) == 0 {
+		return false
+	}
+	return segments[len(segments)-1] == "**"
 }
 
 // splitPath turns a dotted glob into segments. The only metacharacters

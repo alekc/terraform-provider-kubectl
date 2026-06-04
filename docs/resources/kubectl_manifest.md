@@ -144,7 +144,7 @@ Required:
 
 In v2.x, drift between the desired manifest and the live object was tracked through the `yaml_incluster` and `live_manifest_incluster` attributes, both opaque sha256 fingerprints. When they diverged, Terraform plan output looked like:
 
-```
+```diff
 ~ yaml_incluster = (sensitive value) -> (sensitive value)
 ```
 

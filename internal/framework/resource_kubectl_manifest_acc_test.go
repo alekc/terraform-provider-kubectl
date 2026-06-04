@@ -1273,8 +1273,14 @@ func TestAcckubectlYaml(t *testing.T) {
 						Config: testkubectlYamlLoadTfExample(path, name),
 						Check: resource.ComposeAggregateTestCheckFunc(
 							testAccCheckkubectlExists,
-							resource.TestCheckResourceAttrSet("kubectl_manifest.test", "yaml_incluster"),
-							resource.TestCheckResourceAttrSet("kubectl_manifest.test", "live_manifest_incluster"),
+							// Post-apply, drift must be empty (in-sync sentinel).
+							// Replaces the v2 TestCheckResourceAttrSet on
+							// yaml_incluster / live_manifest_incluster, which
+							// both confirmed "the lifecycle ran"; the v3
+							// equivalent is "the lifecycle ran AND the result
+							// has no drift". testAccCheckkubectlExists already
+							// covers the existence half.
+							resource.TestCheckResourceAttr("kubectl_manifest.test", "drift", ""),
 						),
 					},
 				},

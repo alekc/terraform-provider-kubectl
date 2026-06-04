@@ -949,29 +949,103 @@ func (r *manifestResource) ModifyPlan(ctx context.Context, req resource.ModifyPl
 //   - v1 -> v2: safety net for anyone who installed an interim v3
 //     pre-release that shipped the sha256-fingerprint shape. Same
 //     promotion as v0 -> v2, just decoding from the same shape.
-func (r *manifestResource) UpgradeState(_ context.Context) map[int64]resource.StateUpgrader {
+func (r *manifestResource) UpgradeState(ctx context.Context) map[int64]resource.StateUpgrader {
+	priorSchema := priorManifestSchemaV1(ctx)
+	upgrade := func(ctx context.Context, req resource.UpgradeStateRequest, resp *resource.UpgradeStateResponse) {
+		var v1 manifestResourceModelV1
+		resp.Diagnostics.Append(req.State.Get(ctx, &v1)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		data := promoteV1ToV2(v1)
+		resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+	}
 	return map[int64]resource.StateUpgrader{
 		0: {
-			StateUpgrader: func(ctx context.Context, req resource.UpgradeStateRequest, resp *resource.UpgradeStateResponse) {
-				var v1 manifestResourceModelV1
-				resp.Diagnostics.Append(req.State.Get(ctx, &v1)...)
-				if resp.Diagnostics.HasError() {
-					return
-				}
-				data := promoteV1ToV2(v1)
-				resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-			},
+			PriorSchema:   &priorSchema,
+			StateUpgrader: upgrade,
 		},
 		1: {
-			StateUpgrader: func(ctx context.Context, req resource.UpgradeStateRequest, resp *resource.UpgradeStateResponse) {
-				var v1 manifestResourceModelV1
-				resp.Diagnostics.Append(req.State.Get(ctx, &v1)...)
-				if resp.Diagnostics.HasError() {
-					return
-				}
-				data := promoteV1ToV2(v1)
-				resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+			PriorSchema:   &priorSchema,
+			StateUpgrader: upgrade,
+		},
+	}
+}
+
+// priorManifestSchemaV1 returns the v0/v1 schema definition: the
+// pre-drift attribute set, including yaml_incluster and
+// live_manifest_incluster. The framework needs this declared as
+// PriorSchema on each state upgrader so req.State.Get can decode the
+// raw state into a typed model. Without it, req.State has no Schema
+// and any Get against it panics (issue: nil pointer in
+// UpgradeResourceState observed on the upgrade_path_smoke jobs).
+//
+// Only attribute *shapes* need to match the v1 schema for decoding;
+// validators, plan modifiers, descriptions, and defaults can be
+// omitted because they never run during state upgrade.
+func priorManifestSchemaV1(ctx context.Context) schema.Schema {
+	str := schema.StringAttribute{Optional: true, Computed: true}
+	strSensitive := schema.StringAttribute{Optional: true, Computed: true, Sensitive: true}
+	strReq := schema.StringAttribute{Required: true, Sensitive: true}
+	boolAttr := schema.BoolAttribute{Optional: true, Computed: true}
+	strList := schema.ListAttribute{Optional: true, ElementType: types.StringType}
+	return schema.Schema{
+		Version: 1,
+		Attributes: map[string]schema.Attribute{
+			"id":                      schema.StringAttribute{Computed: true},
+			"uid":                     schema.StringAttribute{Computed: true},
+			"live_uid":                schema.StringAttribute{Computed: true},
+			"yaml_incluster":          strSensitive,
+			"live_manifest_incluster": strSensitive,
+			"api_version":             schema.StringAttribute{Computed: true},
+			"kind":                    schema.StringAttribute{Computed: true},
+			"name":                    schema.StringAttribute{Computed: true},
+			"namespace":               schema.StringAttribute{Computed: true},
+			"override_namespace":      schema.StringAttribute{Optional: true},
+			"yaml_body":               strReq,
+			"yaml_body_parsed":        schema.StringAttribute{Computed: true},
+			"sensitive_fields":        strList,
+			"force_new":               boolAttr,
+			"upgrade_api_version":     boolAttr,
+			"server_side_apply":       boolAttr,
+			"field_manager":           str,
+			"force_conflicts":         boolAttr,
+			"apply_only":              boolAttr,
+			"ignore_fields":           strList,
+			"wait":                    boolAttr,
+			"wait_for_rollout":        boolAttr,
+			"validate_schema":         boolAttr,
+			"delete_cascade":          schema.StringAttribute{Optional: true},
+		},
+		Blocks: map[string]schema.Block{
+			"wait_for": schema.ListNestedBlock{
+				NestedObject: schema.NestedBlockObject{
+					Blocks: map[string]schema.Block{
+						"condition": schema.ListNestedBlock{
+							NestedObject: schema.NestedBlockObject{
+								Attributes: map[string]schema.Attribute{
+									"type":   schema.StringAttribute{Required: true},
+									"status": schema.StringAttribute{Required: true},
+								},
+							},
+						},
+						"field": schema.ListNestedBlock{
+							NestedObject: schema.NestedBlockObject{
+								Attributes: map[string]schema.Attribute{
+									"key":        schema.StringAttribute{Required: true},
+									"value":      schema.StringAttribute{Required: true},
+									"value_type": schema.StringAttribute{Optional: true, Computed: true},
+								},
+							},
+						},
+					},
+				},
 			},
+			"timeouts": timeouts.Block(ctx, timeouts.Opts{
+				Create: true,
+				Update: true,
+				Delete: true,
+			}),
 		},
 	}
 }

@@ -12,7 +12,7 @@ import (
 	"github.com/alekc/terraform-provider-kubectl/internal/types"
 	"github.com/alekc/terraform-provider-kubectl/yaml"
 	backoff "github.com/cenkalti/backoff/v4"
-	"k8s.io/apimachinery/pkg/api/errors"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	meta_v1_unstruct "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	apimachinery_types "k8s.io/apimachinery/pkg/types"
@@ -388,7 +388,7 @@ func ReadManifest(ctx context.Context, provider *KubeProvider, opts ReadManifest
 func readManifestUsingClient(ctx context.Context, client dynamic.ResourceInterface, manifest *yaml.Manifest, ignoreFields, maskPaths []string, showMode ShowMode, engine DriftEngine, fieldManager string, forceConflicts bool) (*ReadManifestResult, error) {
 	rawResponse, err := client.Get(ctx, manifest.GetName(), meta_v1.GetOptions{})
 	if err != nil {
-		if errors.IsGone(err) || errors.IsNotFound(err) {
+		if k8serrors.IsGone(err) || k8serrors.IsNotFound(err) {
 			return &ReadManifestResult{Found: false}, nil
 		}
 		return nil, fmt.Errorf("%v failed to get resource from kubernetes: %+v", manifest, err)
@@ -423,10 +423,44 @@ func computeDrift(ctx context.Context, client dynamic.ResourceInterface, desired
 				APIVersion:   desired.GetAPIVersion(),
 			})
 		}
-		log.Printf("[WARN] %v server-side drift engine failed, falling back to client engine: %v", desired, err)
+		// Log the failure mode without echoing the raw error: a
+		// rejected dry-run apply (admission webhook, validating
+		// schema) can include the manifest body or other field
+		// values in its message, which would defeat the drift
+		// renderer's secret masking. The user can rerun with
+		// TF_LOG=trace to get the full error from k8s client logs.
+		log.Printf("[WARN] %v/%v server-side drift engine failed (%s), falling back to client engine", desired.GetAPIVersion(), desired.GetKind(), classifySSAError(err))
 		// fall through to client engine
 	}
 	return computeDriftClient(desired, live, ignoreFields, maskPaths, mode)
+}
+
+// classifySSAError maps an SSA dry-run failure to a short, non-sensitive
+// label suitable for [WARN] logs. The raw error from the apiserver may
+// embed the offending manifest content (validation messages quote
+// rejected values verbatim, webhook denials sometimes echo payload
+// fragments), so the renderer's mask_paths / Secret protections would
+// be defeated by logging it. Categories are coarse on purpose: enough
+// for an operator to know whether to grant PATCH RBAC, audit webhooks,
+// or check the CRD's SSA schema support; the full error is still
+// available via the standard k8s client TRACE-log path.
+func classifySSAError(err error) string {
+	if err == nil {
+		return "no-error"
+	}
+	if k8serrors.IsForbidden(err) || k8serrors.IsUnauthorized(err) {
+		return "rbac-denied"
+	}
+	if k8serrors.IsBadRequest(err) || k8serrors.IsInvalid(err) {
+		return "invalid-or-unsupported"
+	}
+	if k8serrors.IsNotFound(err) || k8serrors.IsMethodNotSupported(err) {
+		return "patch-unsupported"
+	}
+	if k8serrors.IsTimeout(err) || k8serrors.IsServerTimeout(err) || k8serrors.IsServiceUnavailable(err) {
+		return "transient"
+	}
+	return "apiserver-error"
 }
 
 // computeDriftClient is the client-side drift engine: flatten desired and
@@ -645,7 +679,7 @@ func DeleteManifest(ctx context.Context, provider *KubeProvider, opts DeleteMani
 	}
 
 	err = restClient.ResourceInterface.Delete(ctx, manifest.GetName(), meta_v1.DeleteOptions{PropagationPolicy: &propagationPolicy})
-	resourceGone := errors.IsGone(err) || errors.IsNotFound(err)
+	resourceGone := k8serrors.IsGone(err) || k8serrors.IsNotFound(err)
 	if err != nil && !resourceGone {
 		return fmt.Errorf("%v failed to delete kubernetes resource: %+v", manifest, err)
 	}

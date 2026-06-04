@@ -88,7 +88,13 @@ func TestRenderDrift_LeafChange_Full(t *testing.T) {
 	}
 }
 
-func TestRenderDrift_MissingInLive_ReportsMissingMarker(t *testing.T) {
+func TestRenderDrift_MissingInLive_NotReported(t *testing.T) {
+	// User wrote a field that live doesn't have. Common cases: the
+	// apiserver strips fields the kind doesn't accept (e.g.
+	// metadata.namespace on cluster-scoped resources, injected by
+	// override_namespace). Reporting these as drift triggers
+	// infinite update loops because apply doesn't change live.
+	// Match v2's silent-skip behavior; surface via TRACE log only.
 	desired := map[string]interface{}{
 		"metadata": map[string]interface{}{
 			"labels": map[string]interface{}{
@@ -100,8 +106,36 @@ func TestRenderDrift_MissingInLive_ReportsMissingMarker(t *testing.T) {
 		"metadata": map[string]interface{}{},
 	}
 	got := RenderDrift(desired, live, DriftOptions{ShowMode: ShowNone})
-	if !strings.Contains(got, "labels:") || !strings.Contains(got, "app:") {
-		t.Fatalf("expected missing path in drift output, got %q", got)
+	if got != "" {
+		t.Fatalf("missing-in-live should not surface as drift, got %q", got)
+	}
+}
+
+// TestRenderDrift_OverrideNamespaceOnClusterScoped is a regression for
+// the v3 false-drift caused by override_namespace injecting
+// metadata.namespace into a ClusterRole / CRD / other cluster-scoped
+// kind. The apiserver strips it, so live lacks the field; reporting
+// drift triggered post-apply non-empty-plan failures in the
+// TestAccKubectlSetNamespace_nonnamespaced_resource acc test.
+func TestRenderDrift_OverrideNamespaceOnClusterScoped(t *testing.T) {
+	desired := map[string]interface{}{
+		"apiVersion": "rbac.authorization.k8s.io/v1",
+		"kind":       "ClusterRole",
+		"metadata": map[string]interface{}{
+			"name":      "x",
+			"namespace": "dev", // injected by override_namespace
+		},
+	}
+	live := map[string]interface{}{
+		"apiVersion": "rbac.authorization.k8s.io/v1",
+		"kind":       "ClusterRole",
+		"metadata": map[string]interface{}{
+			"name": "x",
+		},
+	}
+	got := RenderDrift(desired, live, DriftOptions{ShowMode: ShowNone})
+	if got != "" {
+		t.Fatalf("override_namespace on cluster-scoped resource should not drift, got %q", got)
 	}
 }
 
@@ -242,6 +276,57 @@ func TestRenderDrift_NonSecretKind_DoesNotMaskData(t *testing.T) {
 	}
 }
 
+func TestRenderDrift_MaskPaths_LiteralEntryMasksDescendants(t *testing.T) {
+	// A literal mask_paths entry must hide every leaf under that
+	// subtree, not just an exact-segment match. Users writing
+	// mask_paths = ["data"] reasonably expect data.password to be
+	// masked too.
+	desired := map[string]interface{}{
+		"data": map[string]interface{}{
+			"password": "old-secret",
+			"username": "admin",
+		},
+	}
+	live := map[string]interface{}{
+		"data": map[string]interface{}{
+			"password": "new-secret",
+			"username": "root",
+		},
+	}
+	got := RenderDrift(desired, live, DriftOptions{
+		MaskPaths: []string{"data"},
+		ShowMode:  ShowFull,
+	})
+	if strings.Contains(got, "old-secret") || strings.Contains(got, "new-secret") {
+		t.Fatalf("password value leaked under data.* mask: %q", got)
+	}
+	if strings.Contains(got, "admin") || strings.Contains(got, "root") {
+		t.Fatalf("username value leaked under data.* mask: %q", got)
+	}
+}
+
+func TestRenderDrift_MaskPaths_ExplicitDoubleStarNotDoubled(t *testing.T) {
+	// User already wrote `**`; don't auto-append another. Result
+	// should still mask descendants but not duplicate the pattern.
+	desired := map[string]interface{}{
+		"data": map[string]interface{}{
+			"k": "old",
+		},
+	}
+	live := map[string]interface{}{
+		"data": map[string]interface{}{
+			"k": "new",
+		},
+	}
+	got := RenderDrift(desired, live, DriftOptions{
+		MaskPaths: []string{"data.**"},
+		ShowMode:  ShowFull,
+	})
+	if strings.Contains(got, "old") || strings.Contains(got, "new") {
+		t.Fatalf("value leaked despite data.** mask: %q", got)
+	}
+}
+
 func TestRenderDrift_MaskPaths_Exact(t *testing.T) {
 	desired := map[string]interface{}{
 		"spec": map[string]interface{}{
@@ -349,7 +434,12 @@ func TestRenderDrift_ArrayLeafChange(t *testing.T) {
 	}
 }
 
-func TestRenderDrift_ArrayLengthMismatch(t *testing.T) {
+func TestRenderDrift_ArrayLengthMismatch_DesiredLonger(t *testing.T) {
+	// User wrote 3 items, live has 2. Treated as non-drift for the
+	// same reason as the missing-map-key case: the apiserver may
+	// have trimmed the list via strategic merge or list-type
+	// semantics, and reporting drift would trigger infinite
+	// updates. Surface via TRACE log only.
 	desired := map[string]interface{}{
 		"spec": map[string]interface{}{
 			"items": []interface{}{
@@ -368,8 +458,8 @@ func TestRenderDrift_ArrayLengthMismatch(t *testing.T) {
 		},
 	}
 	got := RenderDrift(desired, live, DriftOptions{})
-	if !strings.Contains(got, "_missing_") {
-		t.Fatalf("expected _missing_ marker for absent index, got %q", got)
+	if got != "" {
+		t.Fatalf("desired-longer-than-live should not drift, got %q", got)
 	}
 }
 
