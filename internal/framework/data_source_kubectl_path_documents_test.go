@@ -33,6 +33,35 @@ data "kubectl_path_documents" "test" {
 	})
 }
 
+// TestAccKubectlDataSourcePathDocuments_emptyMapsByDefault pins the v2
+// behaviour of `vars` and `sensitive_vars` defaulting to an empty map
+// when the user omits them. Regression test for #328: Phase F's
+// framework rewrite shipped `types.MapNull` here so downstream
+// `keys(data.x.vars)` started failing with "argument must not be null".
+// The state count attribute `.%` is `"0"` for an empty map and absent
+// for a null map, so checking for `"0"` doubles as a null-rejection
+// assertion.
+func TestAccKubectlDataSourcePathDocuments_emptyMapsByDefault(t *testing.T) {
+	t.Parallel()
+	cfg := fmt.Sprintf(`
+data "kubectl_path_documents" "test" {
+  pattern = "%s/single.yaml"
+}
+`, pathDocumentsExamplesDir)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{{
+			Config: cfg,
+			Check: resource.ComposeAggregateTestCheckFunc(
+				resource.TestCheckResourceAttr("data.kubectl_path_documents.test", "vars.%", "0"),
+				resource.TestCheckResourceAttr("data.kubectl_path_documents.test", "sensitive_vars.%", "0"),
+			),
+		}},
+	})
+}
+
 func TestAccKubectlDataSourcePathDocuments_multiple(t *testing.T) {
 	t.Parallel()
 	cfg := fmt.Sprintf(`

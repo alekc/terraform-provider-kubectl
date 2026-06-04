@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -61,7 +62,13 @@ func (d *pathDocumentsDataSource) Schema(_ context.Context, _ datasource.SchemaR
 				Description: "Glob pattern, evaluated relative to the Terraform working directory.",
 			},
 			"vars": schema.MapAttribute{
-				Optional:    true,
+				Optional: true,
+				// Computed so Read can populate the empty-map default
+				// when the user didn't set the attribute; without
+				// Computed the framework rejects state-vs-config
+				// divergence as "Provider produced inconsistent result
+				// after apply".
+				Computed:    true,
 				ElementType: types.StringType,
 				Description: "Variables to substitute into each loaded document's HCL template. The map's " +
 					"element type is string, so the framework rejects lists or maps at config-validate time " +
@@ -69,13 +76,14 @@ func (d *pathDocumentsDataSource) Schema(_ context.Context, _ datasource.SchemaR
 			},
 			"sensitive_vars": schema.MapAttribute{
 				Optional:    true,
+				Computed:    true,
 				Sensitive:   true,
 				ElementType: types.StringType,
 				Description: "Same as `vars` but the values are marked sensitive so they don't leak into plan / " +
 					"apply output. Defaults to an empty map.",
 			},
 			"disable_template": schema.BoolAttribute{
-				Optional:    true,
+				Optional: true,
 				Description: "When true, files are loaded as-is without template rendering. Useful for raw YAML " +
 					"that contains `${...}` literals that would otherwise be interpreted by Terraform. Defaults " +
 					"to false.",
@@ -202,19 +210,28 @@ func (d *pathDocumentsDataSource) Read(ctx context.Context, req datasource.ReadR
 	data.ID = types.StringValue(fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(allDocuments, "")))))
 	data.Documents = docsVal
 	data.Manifests = manifestsVal
-	// The framework requires Optional+!Computed attributes to be written
-	// back as null if the user didn't set them; preserve that behaviour
-	// explicitly so the state shape stays predictable across reads.
+	// `vars` and `sensitive_vars` are Optional+Computed so Read fills
+	// the empty-map default when the user did not set them. SDK v2
+	// declared both with `Default: make(map[string]interface{})` so
+	// downstream `keys(data.x.vars)` returned `[]`; the post-Phase-F
+	// `types.MapNull` regression (#328) broke that contract because
+	// `keys(null)` errors with "argument must not be null". Restoring
+	// the empty-map default realigns v3 with v2 and matches the
+	// schema description ("Defaults to an empty map.").
+	emptyStringMap := types.MapValueMust(types.StringType, map[string]attr.Value{})
 	if data.Vars.IsNull() || data.Vars.IsUnknown() {
-		data.Vars = types.MapNull(types.StringType)
+		data.Vars = emptyStringMap
 	}
 	if data.SensitiveVars.IsNull() || data.SensitiveVars.IsUnknown() {
-		data.SensitiveVars = types.MapNull(types.StringType)
+		data.SensitiveVars = emptyStringMap
 	}
+	// `disable_template` stays Optional-only and null-by-default. The
+	// audit (#328) limited the regression scope to maps because
+	// `length`/`keys` on null is the failure mode; a null bool has no
+	// equivalent footgun via terraform's standard library functions.
 	if data.DisableTemplate.IsNull() || data.DisableTemplate.IsUnknown() {
 		data.DisableTemplate = types.BoolNull()
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
-
