@@ -66,7 +66,12 @@ func TestRenderDrift_LeafChange_Hash(t *testing.T) {
 	if !strings.Contains(got, "<was:") || !strings.Contains(got, "now:") {
 		t.Fatalf("expected hash markers, got %q", got)
 	}
-	if strings.Contains(got, "2") && strings.Contains(got, "3") && !strings.Contains(got, "was:") {
+	// Confirm the literal values 2 and 3 did NOT leak under the
+	// hash markers. The presence of "<was:" is given by the
+	// earlier assertion; the new check is: any line that includes
+	// "<was:" must NOT also include the literal value bookended in
+	// the recognisable was/now shape.
+	if strings.Contains(got, "<was: 2") || strings.Contains(got, "now: 3>") {
 		t.Fatalf("hash mode should NOT leak literal values, got %q", got)
 	}
 }
@@ -646,6 +651,65 @@ func TestRenderDrift_ShortHash_Nil(t *testing.T) {
 	}
 	if a, b := shortHash(1), shortHash(2); a == b {
 		t.Errorf("shortHash should differ across values: %q == %q", a, b)
+	}
+}
+
+// TestRenderDrift_ShortHash_StableForMaps regresses the
+// fmt.Sprintf("%v", aMap) instability: Go's map iteration is
+// randomised, so a naive %v-based hash flaps per call. Hash twice
+// from independently-constructed maps with the same logical content;
+// the hashes must agree, and they must also agree on a third call
+// from the same map literal (catches accidental clock / nondeterministic
+// input).
+func TestRenderDrift_ShortHash_StableForMaps(t *testing.T) {
+	t.Parallel()
+	for i := 0; i < 16; i++ {
+		a := map[string]interface{}{
+			"k1": "v1",
+			"k2": "v2",
+			"k3": "v3",
+			"k4": "v4",
+			"k5": "v5",
+		}
+		b := map[string]interface{}{
+			"k5": "v5",
+			"k4": "v4",
+			"k3": "v3",
+			"k2": "v2",
+			"k1": "v1",
+		}
+		ha := shortHash(a)
+		hb := shortHash(b)
+		hc := shortHash(a)
+		if ha != hb {
+			t.Errorf("iteration %d: shortHash flapped across two same-content maps: %q vs %q", i, ha, hb)
+		}
+		if ha != hc {
+			t.Errorf("iteration %d: shortHash flapped on repeated call with same map: %q vs %q", i, ha, hc)
+		}
+	}
+}
+
+// TestRenderDrift_ShortHash_StableForSlices regresses the same
+// concern for slice-typed values. Slices retain ordering, but
+// fmt.Sprintf %v on a slice of map elements would re-trigger map
+// ordering instability for each element.
+func TestRenderDrift_ShortHash_StableForSlices(t *testing.T) {
+	t.Parallel()
+	for i := 0; i < 16; i++ {
+		a := []interface{}{
+			map[string]interface{}{"a": "1", "b": "2"},
+			map[string]interface{}{"c": "3"},
+		}
+		b := []interface{}{
+			map[string]interface{}{"b": "2", "a": "1"},
+			map[string]interface{}{"c": "3"},
+		}
+		ha := shortHash(a)
+		hb := shortHash(b)
+		if ha != hb {
+			t.Errorf("iteration %d: shortHash flapped across slices with reordered nested map keys: %q vs %q", i, ha, hb)
+		}
 	}
 }
 

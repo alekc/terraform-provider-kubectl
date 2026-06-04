@@ -311,14 +311,32 @@ func formatValue(v interface{}) string {
 	}
 }
 
-// shortHash returns the first 8 hex chars of the sha256 of fmt.Sprintf %v
-// of the value. Stable across runs (no randomness, no timestamps), but
-// distinguishes "different value" from "same value" without revealing it.
+// shortHash returns the first 8 hex chars of the sha256 of a stable
+// serialisation of v. The "stable" matters: Go's map iteration is
+// randomised, so fmt.Sprintf("%v", aMap) produces a different string
+// per call, which would make ShowHash render new hash markers on
+// every Read for type-mismatch leaves whose desired or live side is
+// a map. yamlWriter.Marshal sorts keys deterministically, so the
+// resulting hash is stable across runs.
+//
+// nil is a sentinel for "no value" and shortcuts to a fixed string;
+// scalars route through fmt because their %v formatting is already
+// deterministic.
 func shortHash(v interface{}) string {
 	if v == nil {
 		return "missing"
 	}
-	h := sha256.Sum256([]byte(fmt.Sprintf("%v", v)))
+	var payload []byte
+	switch v.(type) {
+	case map[string]interface{}, []interface{}:
+		if b, err := yamlWriter.Marshal(v); err == nil {
+			payload = b
+		}
+	}
+	if payload == nil {
+		payload = []byte(fmt.Sprintf("%v", v))
+	}
+	h := sha256.Sum256(payload)
 	return hex.EncodeToString(h[:])[:8]
 }
 
