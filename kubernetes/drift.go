@@ -271,46 +271,6 @@ func wrapIndexedItem(idx int, child interface{}) interface{} {
 	}
 }
 
-// renderMissingFromLive walks a desired subtree that has no counterpart
-// in live and emits a structure of <missing> leaves so the user sees the
-// shape of what's not there. Used when a top-level key in desired is
-// absent on the live object.
-func renderMissingFromLive(desired interface{}, path []string, masks []maskGlob, mode ShowMode) interface{} {
-	switch d := desired.(type) {
-	case map[string]interface{}:
-		out := map[string]interface{}{}
-		keys := make([]string, 0, len(d))
-		for k := range d {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			childPath := append(path, k) //nolint:gocritic // intentional
-			out[k] = renderMissingFromLive(d[k], childPath, masks, mode)
-		}
-		return out
-	case []interface{}:
-		out := make([]interface{}, 0, len(d))
-		for i, v := range d {
-			idxPath := append(path, fmt.Sprintf("[%d]", i)) //nolint:gocritic // intentional
-			out = append(out, wrapIndexedItem(i, renderMissingFromLive(v, idxPath, masks, mode)))
-		}
-		return out
-	default:
-		if pathMasked(path, masks) {
-			return sensitiveDriftMarker
-		}
-		switch mode {
-		case ShowFull:
-			return fmt.Sprintf("<was: %s, now: %s>", formatValue(desired), missingMarker)
-		case ShowHash:
-			return fmt.Sprintf("<was:%s now:%s>", shortHash(desired), "missing")
-		default:
-			return driftMarker
-		}
-	}
-}
-
 // renderLeaf produces the leaf representation for a drifted scalar / type
 // mismatch. masks and mode together control how visible the values are.
 func renderLeaf(desired, live interface{}, path []string, masks []maskGlob, mode ShowMode) interface{} {

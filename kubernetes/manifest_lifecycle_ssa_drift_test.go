@@ -7,8 +7,10 @@ import (
 	"testing"
 
 	"github.com/alekc/terraform-provider-kubectl/yaml"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	meta_v1_unstruct "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	apimachinery_types "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 )
@@ -171,5 +173,134 @@ func TestComputeDrift_ServerEngine_ForceConflictsPropagates(t *testing.T) {
 	}
 	if stub.gotOptions.FieldManager != "alekc-tool" {
 		t.Errorf("FieldManager passthrough: got %q want %q", stub.gotOptions.FieldManager, "alekc-tool")
+	}
+}
+
+// TestComputeDrift_ServerEngine_ForceConflictsFalseLeavesForceNil
+// confirms the inverse: when the caller does not request force,
+// PatchOptions.Force stays nil. The k8s client surfaces nil-vs-false
+// to the apiserver semantically (Force is *bool); leaking a false
+// pointer would change the apiserver's behaviour from "default" to
+// "explicitly request no force".
+func TestComputeDrift_ServerEngine_ForceConflictsFalseLeavesForceNil(t *testing.T) {
+	t.Parallel()
+	desired := newManifest(map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata":   map[string]interface{}{"name": "x"},
+	})
+	live := newManifest(map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata":   map[string]interface{}{"name": "x"},
+	})
+	stub := &stubResource{
+		resp: &meta_v1_unstruct.Unstructured{Object: desired.Raw.Object},
+	}
+	_ = computeDrift(context.Background(), stub, desired, live, nil, nil, ShowNone, ServerDriftEngine, "kubectl", false)
+	if stub.gotOptions.Force != nil {
+		t.Errorf("ForceConflicts=false should leave PatchOptions.Force nil; got %v", *stub.gotOptions.Force)
+	}
+}
+
+// TestComputeDrift_ServerEngine_EmptyFieldManagerDefaultsToKubectl
+// confirms the documented default. The apply path uses "kubectl"
+// when field_manager is unset; the dry-run must agree so the patch
+// is computed from the same field-ownership perspective.
+func TestComputeDrift_ServerEngine_EmptyFieldManagerDefaultsToKubectl(t *testing.T) {
+	t.Parallel()
+	desired := newManifest(map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata":   map[string]interface{}{"name": "x"},
+	})
+	live := newManifest(map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata":   map[string]interface{}{"name": "x"},
+	})
+	stub := &stubResource{
+		resp: &meta_v1_unstruct.Unstructured{Object: desired.Raw.Object},
+	}
+	_ = computeDrift(context.Background(), stub, desired, live, nil, nil, ShowNone, ServerDriftEngine, "", false)
+	if stub.gotOptions.FieldManager != "kubectl" {
+		t.Errorf("empty FieldManager should default to %q; got %q", "kubectl", stub.gotOptions.FieldManager)
+	}
+}
+
+// TestClassifySSAError covers every category the WARN log surfaces.
+// The function is the security barrier between the apiserver's
+// possibly-payload-echoing error string and the log line, so each
+// branch must return a stable, non-sensitive label. Using
+// k8serrors helpers to construct the inputs guarantees the test
+// tracks the same predicates the production code uses.
+func TestClassifySSAError(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"nil", nil, "no-error"},
+		{
+			"forbidden",
+			k8serrors.NewForbidden(schema.GroupResource{Resource: "x"}, "n", errors.New("denied")),
+			"rbac-denied",
+		},
+		{
+			"unauthorized",
+			k8serrors.NewUnauthorized("auth failed"),
+			"rbac-denied",
+		},
+		{
+			"bad-request",
+			k8serrors.NewBadRequest("bad"),
+			"invalid-or-unsupported",
+		},
+		{
+			"invalid",
+			k8serrors.NewInvalid(schema.GroupKind{Kind: "X"}, "n", nil),
+			"invalid-or-unsupported",
+		},
+		{
+			"not-found",
+			k8serrors.NewNotFound(schema.GroupResource{Resource: "x"}, "n"),
+			"patch-unsupported",
+		},
+		{
+			"method-not-supported",
+			k8serrors.NewMethodNotSupported(schema.GroupResource{Resource: "x"}, "patch"),
+			"patch-unsupported",
+		},
+		{
+			"timeout",
+			k8serrors.NewTimeoutError("slow", 1),
+			"transient",
+		},
+		{
+			"server-timeout",
+			k8serrors.NewServerTimeout(schema.GroupResource{Resource: "x"}, "patch", 1),
+			"transient",
+		},
+		{
+			"service-unavailable",
+			k8serrors.NewServiceUnavailable("down"),
+			"transient",
+		},
+		{
+			"generic",
+			errors.New("connection refused: peer reset"),
+			"apiserver-error",
+		},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got := classifySSAError(c.err)
+			if got != c.want {
+				t.Errorf("classifySSAError(%v): got %q want %q", c.err, got, c.want)
+			}
+		})
 	}
 }

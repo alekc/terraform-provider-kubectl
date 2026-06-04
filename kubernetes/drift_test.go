@@ -563,6 +563,175 @@ func TestRenderDrift_DeterministicOrdering(t *testing.T) {
 	}
 }
 
+// TestRenderDrift_LeafTypeMismatch covers the dispatch branch in
+// collectAnyDrift where desired is a map and live is a scalar (or
+// vice versa). The renderer should emit the path with the
+// appropriate leaf marker rather than recurse into nothing.
+func TestRenderDrift_LeafTypeMismatch_DesiredMapLiveScalar(t *testing.T) {
+	desired := map[string]interface{}{
+		"spec": map[string]interface{}{
+			"x": map[string]interface{}{"inner": "value"},
+		},
+	}
+	live := map[string]interface{}{
+		"spec": map[string]interface{}{
+			"x": 42, // type mismatch
+		},
+	}
+	got := RenderDrift(desired, live, DriftOptions{ShowMode: ShowFull})
+	if !strings.Contains(got, "x:") {
+		t.Fatalf("expected drifted key in output, got %q", got)
+	}
+	if !strings.Contains(got, "<was:") {
+		t.Fatalf("expected was/now markers for type-mismatched leaf, got %q", got)
+	}
+}
+
+func TestRenderDrift_LeafTypeMismatch_DesiredSliceLiveScalar(t *testing.T) {
+	desired := map[string]interface{}{
+		"spec": map[string]interface{}{
+			"items": []interface{}{"a", "b"},
+		},
+	}
+	live := map[string]interface{}{
+		"spec": map[string]interface{}{
+			"items": "not-a-list",
+		},
+	}
+	got := RenderDrift(desired, live, DriftOptions{ShowMode: ShowNone})
+	if !strings.Contains(got, "items:") {
+		t.Fatalf("expected drifted key in output, got %q", got)
+	}
+}
+
+// TestRenderDrift_LeafEqual_NilCases exercises the explicit nil
+// branches in leafEqual that the higher-level RenderDrift tests
+// don't reach naturally.
+func TestRenderDrift_LeafEqual_NilCases(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name           string
+		desired, live  interface{}
+		wantEqual      bool
+	}{
+		{"both-nil", nil, nil, true},
+		{"desired-nil-live-string", nil, "x", false},
+		{"desired-string-live-nil", "x", nil, false},
+		{"trim-whitespace-equal", "foo\n", " foo ", true},
+		{"different-strings", "foo", "bar", false},
+		{"int-vs-float-not-coerced", 1, 1.0, false},
+		{"matching-ints", 42, 42, true},
+		{"int-vs-string", 1, "1", false},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got := leafEqual(c.desired, c.live)
+			if got != c.wantEqual {
+				t.Errorf("leafEqual(%v, %v) = %v, want %v", c.desired, c.live, got, c.wantEqual)
+			}
+		})
+	}
+}
+
+// TestRenderDrift_ShortHash_Nil exercises the explicit nil branch in
+// shortHash that the higher-level Hash-mode test doesn't reach.
+func TestRenderDrift_ShortHash_Nil(t *testing.T) {
+	if got := shortHash(nil); got != "missing" {
+		t.Errorf("shortHash(nil): got %q want %q", got, "missing")
+	}
+	if got := shortHash("foo"); len(got) != 8 {
+		t.Errorf("shortHash(string): expected 8-char prefix, got %q", got)
+	}
+	if a, b := shortHash(1), shortHash(2); a == b {
+		t.Errorf("shortHash should differ across values: %q == %q", a, b)
+	}
+}
+
+// TestRenderDrift_FormatValue_Variants covers the various Go types
+// formatValue handles for ShowFull rendering.
+func TestRenderDrift_FormatValue_Variants(t *testing.T) {
+	cases := []struct {
+		in       interface{}
+		contains string
+	}{
+		{"hello", `"hello"`},
+		{42, "42"},
+		{true, "true"},
+		{3.14, "3.14"},
+		{nil, missingMarker},
+	}
+	for _, c := range cases {
+		got := formatValue(c.in)
+		if !strings.Contains(got, c.contains) {
+			t.Errorf("formatValue(%v): expected to contain %q, got %q", c.in, c.contains, got)
+		}
+	}
+}
+
+// TestRenderDrift_MaskUnderArrayIndex confirms the mask globs apply
+// to leaves inside array elements. The common shape is
+// `spec.template.spec.containers.*.env.*.value`: env entries in
+// each container with potentially sensitive values.
+func TestRenderDrift_MaskUnderArrayIndex(t *testing.T) {
+	desired := map[string]interface{}{
+		"spec": map[string]interface{}{
+			"containers": []interface{}{
+				map[string]interface{}{
+					"name": "app",
+					"env": []interface{}{
+						map[string]interface{}{
+							"name":  "DB_PASSWORD",
+							"value": "before",
+						},
+					},
+				},
+			},
+		},
+	}
+	live := map[string]interface{}{
+		"spec": map[string]interface{}{
+			"containers": []interface{}{
+				map[string]interface{}{
+					"name": "app",
+					"env": []interface{}{
+						map[string]interface{}{
+							"name":  "DB_PASSWORD",
+							"value": "after",
+						},
+					},
+				},
+			},
+		},
+	}
+	// Array indices in the path render as "[N]"; the glob must
+	// match the literal segment "[0]" or use `*` to skip it.
+	got := RenderDrift(desired, live, DriftOptions{
+		MaskPaths: []string{"spec.containers.*.env.*.value"},
+		ShowMode:  ShowFull,
+	})
+	if strings.Contains(got, "before") || strings.Contains(got, "after") {
+		t.Fatalf("env value leaked under array glob mask: %q", got)
+	}
+	if !strings.Contains(got, "<drift sensitive>") {
+		t.Fatalf("expected sensitive marker on env.*.value, got %q", got)
+	}
+}
+
+func TestRenderDrift_IgnoreSetMatches_EmptyPath(t *testing.T) {
+	// Defensive: empty path should never match an ignore prefix.
+	// Otherwise a top-level RenderDrift call with `IgnoreFields =
+	// ["something"]` could short-circuit before walking children.
+	set := buildIgnoreSet([]string{"spec", "metadata"})
+	if set.matches(nil) {
+		t.Errorf("ignoreSet.matches(nil) should be false")
+	}
+	if set.matches([]string{}) {
+		t.Errorf("ignoreSet.matches(empty slice) should be false")
+	}
+}
+
 func TestRenderDrift_EmptyInputs(t *testing.T) {
 	got := RenderDrift(nil, nil, DriftOptions{})
 	if got != "" {
