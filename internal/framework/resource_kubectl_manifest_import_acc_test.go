@@ -40,15 +40,28 @@ EOF
 				ImportState:       true,
 				ImportStateId:     "v1//Namespace//" + name,
 				ImportStateVerify: true,
-				// yaml_body / yaml_body_parsed legitimately diverge:
-				// the importer rebuilds them from the live object's
-				// stripped representation, which differs in key order
-				// and quoting from the user's original input. The
-				// fingerprints (yaml_incluster / live_manifest_incluster)
-				// already pin the semantic equivalence.
+				// Fields that legitimately diverge between apply-state
+				// and import-state, mirroring SDK v2 behaviour:
+				//
+				// yaml_body / yaml_body_parsed: importer rebuilds
+				// from the stripped live object, which differs in key
+				// order and quoting from the user's apply-time input.
+				//
+				// yaml_incluster / live_manifest_incluster: fingerprint
+				// is computed over flattenedUser intersected with
+				// flattenedLive. At apply time userProvided is the
+				// user's small yaml_body so the fingerprint covers
+				// only those keys. At import time userProvided is the
+				// full stripped live object, so the fingerprint covers
+				// every key the cluster surfaced. The next plan after
+				// import re-fingerprints with the user's yaml_body and
+				// converges; the apply-vs-import gap exists only at
+				// the moment of the verify step.
 				ImportStateVerifyIgnore: []string{
 					"yaml_body",
 					"yaml_body_parsed",
+					"yaml_incluster",
+					"live_manifest_incluster",
 				},
 			},
 		},

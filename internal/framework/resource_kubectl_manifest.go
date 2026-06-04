@@ -1010,6 +1010,17 @@ func (r *manifestResource) ImportState(ctx context.Context, req resource.ImportS
 		return
 	}
 
+	// Capture identity attributes before stripping metadata. The strip
+	// below removes metadata.uid / selfLink so live.GetUID() would
+	// return "" if we read it after the strip; mirrors the order in
+	// the SDK v2 importer.
+	importedUID := live.GetUID()
+	importedSelfLink := live.GetSelfLink()
+	importedAPIVersion := live.GetAPIVersion()
+	importedKind := live.GetKind()
+	importedName := live.GetName()
+	importedNamespace := live.GetNamespace()
+
 	// Strip the same metadata that the SDK v2 importer stripped, so
 	// `yaml_body` represents user-controllable fields only. Without
 	// this, the next plan against an unchanged config would see drift
@@ -1033,20 +1044,26 @@ func (r *manifestResource) ImportState(ctx context.Context, req resource.ImportS
 	}
 
 	// Reuse the same fingerprint helper Create uses, with no ignore
-	// list (the user has no yaml_body yet to compare against).
+	// list (the user has no yaml_body yet to compare against). Pass the
+	// stripped live for both arguments, mirroring the SDK v2 importer.
+	// Note: the fingerprint will cover every key in the live object
+	// (because flattenedUser == flattenedLive at import time), not just
+	// the small subset a user's yaml_body would generate at apply time.
+	// That divergence is unavoidable without reconstructing the user's
+	// preferred field set, and matches the v2 behaviour.
 	fingerprint := kubernetes.GetLiveManifestFields(nil, live, live)
 
 	var data manifestResourceModel
-	data.ID = types.StringValue(live.GetSelfLink())
-	data.UID = types.StringValue(live.GetUID())
-	data.LiveUID = types.StringValue(live.GetUID())
+	data.ID = types.StringValue(importedSelfLink)
+	data.UID = types.StringValue(importedUID)
+	data.LiveUID = types.StringValue(importedUID)
 	data.YAMLInCluster = types.StringValue(fingerprint)
 	data.LiveManifestInCluster = types.StringValue(fingerprint)
-	data.APIVersion = types.StringValue(live.GetAPIVersion())
-	data.Kind = types.StringValue(live.GetKind())
-	data.Name = types.StringValue(live.GetName())
-	if live.GetNamespace() != "" {
-		data.Namespace = types.StringValue(live.GetNamespace())
+	data.APIVersion = types.StringValue(importedAPIVersion)
+	data.Kind = types.StringValue(importedKind)
+	data.Name = types.StringValue(importedName)
+	if importedNamespace != "" {
+		data.Namespace = types.StringValue(importedNamespace)
 	} else {
 		data.Namespace = types.StringNull()
 	}
