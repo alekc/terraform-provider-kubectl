@@ -78,11 +78,6 @@ func ApplyManifest(ctx context.Context, provider *KubeProvider, opts ApplyManife
 	log.Printf("[DEBUG] %v apply kubernetes resource:\n%s",
 		manifest, obfuscateForLog(opts.YAMLBody, opts.OverrideNamespace, opts.SensitiveFields))
 
-	restClient := GetRestClientFromUnstructured(manifest, provider)
-	if restClient.Error != nil {
-		return nil, fmt.Errorf("%v failed to create kubernetes rest client for update of resource: %+v", manifest, restClient.Error)
-	}
-
 	// Re-serialise after the namespace override so the temp file matches
 	// what we'll be diffing against the live state.
 	yamlBody, err := manifest.AsYAML()
@@ -108,22 +103,36 @@ func ApplyManifest(ctx context.Context, provider *KubeProvider, opts ApplyManife
 
 	log.Printf("[INFO] %s perform apply of manifest", manifest)
 
-	// applyAndFetch is the unit-of-retry: build a fresh ApplyOptions
-	// (apply.ApplyOptions tracks visitor state internally and cannot be
-	// safely re-run), run apply once, then re-read the object so the
-	// caller can persist its fingerprint. Retried under exponential
-	// backoff when provider.ApplyRetryCount > 0; called once directly
-	// otherwise. The retryCount == 0 short-circuit is for intent and
-	// readability (issue #228); the backoff path would also produce
-	// exactly one attempt for N = 0 because Retry calls the operation
-	// before consulting NextBackOff.
+	// applyAndFetch is the unit-of-retry: discover the REST client for
+	// the manifest's GroupVersionKind, build a fresh ApplyOptions
+	// (apply.ApplyOptions tracks visitor state internally and cannot
+	// be safely re-run), run apply once, then re-read the object so
+	// the caller can persist its fingerprint. Retried under
+	// exponential backoff when provider.ApplyRetryCount > 0; called
+	// once directly otherwise. The retryCount == 0 short-circuit is
+	// for intent and readability (issue #228); the backoff path would
+	// also produce exactly one attempt for N = 0 because Retry calls
+	// the operation before consulting NextBackOff.
 	//
-	// rawResponse is the last successful Get result. It is nil until at
-	// least one attempt writes it; if all attempts fail the loop returns
-	// a non-nil error before any caller can read it, so partial-write
-	// leak is impossible.
+	// Discovery is inside the retry boundary so that the
+	// CRD-then-instance race (issue #274 / _examples/crds/couchbase.tf)
+	// can recover when apply_retry_count is set: a freshly applied CRD
+	// is not always visible to the apiserver's discovery endpoint by
+	// the time the dependent instance's apply runs.
+	//
+	// restClient is the last successful REST client; rawResponse the
+	// last successful Get. Both are nil until at least one attempt
+	// writes them, and the retry loop returns a non-nil error before
+	// any caller can read a stale value, so partial-write leak is
+	// impossible.
+	var restClient *RestClientResult
 	var rawResponse *meta_v1_unstruct.Unstructured
 	applyAndFetch := func() error {
+		restClient = GetRestClientFromUnstructured(manifest, provider)
+		if restClient.Error != nil {
+			return fmt.Errorf("%v failed to create kubernetes rest client for update of resource: %+v", manifest, restClient.Error)
+		}
+
 		applyOptions := NewApplyOptions(yamlBody)
 		applyOptions.Builder = k8sresource.NewBuilder(k8sresource.RESTClientGetter(provider))
 		applyOptions.DeleteOptions = &k8sdelete.DeleteOptions{
@@ -168,12 +177,23 @@ func ApplyManifest(ctx context.Context, provider *KubeProvider, opts ApplyManife
 		exp := backoff.NewExponentialBackOff()
 		exp.InitialInterval = 3 * time.Second
 		exp.MaxInterval = 30 * time.Second
-		// Wrap the policy with WithContext so a cancelled ctx (Ctrl-C,
-		// resource timeout, parent plan abort) interrupts the inter-retry
-		// sleep instead of waiting out the full backoff window. Without
-		// this wrap, backoff.Retry's internal getContext falls back to
-		// context.Background() and a user who hits Ctrl-C during a 30s
-		// backoff would hang for the remainder of that sleep.
+		// RandomizationFactor = 0 makes MaxInterval a hard ceiling.
+		// Default 0.5 jitter is applied after MaxInterval clamps the
+		// base interval, so NextBackOff can return up to 1.5 *
+		// MaxInterval; users tuning apply_retry_count expect the
+		// documented 30s ceiling to actually hold.
+		exp.RandomizationFactor = 0
+		// MaxElapsedTime = 0 disables the wall-clock stop condition so
+		// WithMaxRetries below is the only thing bounding the loop.
+		// Default 15 minutes would silently truncate retries on slow
+		// clusters with large N.
+		exp.MaxElapsedTime = 0
+		// WithContext makes a cancelled ctx (Ctrl-C, resource timeout,
+		// parent plan abort) interrupt the inter-retry sleep instead
+		// of waiting out the full backoff window. Without this wrap,
+		// backoff.Retry's internal getContext falls back to
+		// context.Background() and a user who hits Ctrl-C during a
+		// 30s backoff would hang for the remainder of that sleep.
 		policy := backoff.WithContext(
 			backoff.WithMaxRetries(exp, provider.ApplyRetryCount),
 			ctx,
