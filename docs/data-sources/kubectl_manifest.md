@@ -178,13 +178,19 @@ data "kubectl_manifest" "cert_tls" {
   name        = "wildcard-tls"
   namespace   = "ingress"
 
-  # Block until cert-manager has materialised the Secret AND the
-  # parent Certificate's Ready condition is true.
+  # Block until cert-manager has materialised the Secret with the
+  # expected TLS type. If you also need to gate on the parent
+  # Certificate's Ready condition, target a `Certificate` resource
+  # in a separate data block with a `condition { type = "Ready" }`.
   wait_for {
     field {
       key   = "type"
       value = "kubernetes.io/tls"
     }
+  }
+
+  fields = {
+    crt = "data[\"tls.crt\"]"
   }
 
   timeouts {
