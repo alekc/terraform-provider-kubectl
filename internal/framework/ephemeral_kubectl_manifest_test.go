@@ -344,12 +344,19 @@ check "consumed" {
 // wait, so this test pins the per-surface attribute name as well
 // as the wiring through to kubernetes.WaitForManifest.
 //
+// Split across two TestSteps for the same reason as
+// TestAccKubectlEphemeralManifest_namespacedConfigMap: Terraform
+// evaluates ephemeral resources at pre-apply plan time even when
+// depends_on points at a managed resource being created in the
+// same step, so a single-step config would have the ephemeral's
+// wait_for poll for an object that the apply has not yet created.
+//
 // Issue #179.
 func TestAccKubectlEphemeralManifest_WaitForExistence(t *testing.T) {
 	t.Parallel()
 	skipIfOpenTofu(t)
 	name := fmt.Sprintf("acc-eph-wait-%s", acctest.RandString(8))
-	cfg := fmt.Sprintf(`
+	seedCfg := fmt.Sprintf(`
 resource "kubectl_manifest" "seed" {
   yaml_body = <<YAML
 apiVersion: v1
@@ -361,12 +368,13 @@ data:
   ready: "yes"
 YAML
 }
-
+`, name)
+	readCfg := seedCfg + fmt.Sprintf(`
 ephemeral "kubectl_manifest" "cm" {
   depends_on  = [kubectl_manifest.seed]
   api_version = "v1"
   kind        = "ConfigMap"
-  name        = "%s"
+  name        = %q
   namespace   = "default"
 
   wait_for {}
@@ -386,7 +394,7 @@ check "wait_succeeded" {
     error_message = "ephemeral wait_for did not return the expected ready value"
   }
 }
-`, name, name)
+`, name)
 
 	resource.Test(t, resource.TestCase{
 		PreCheck: func() { testAccPreCheck(t) },
@@ -396,7 +404,15 @@ check "wait_succeeded" {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: cfg,
+				// Step 1: apply the seed only. The ConfigMap lands
+				// on the cluster.
+				Config: seedCfg,
+			},
+			{
+				// Step 2: ephemeral resolves with the seeded value;
+				// wait_for sees the object on the first Phase A Get
+				// because the seed exists from step 1.
+				Config: readCfg,
 				ConfigStateChecks: []statecheck.StateCheck{
 					ephemeralNotInState{addressPrefix: "ephemeral.kubectl_manifest.cm"},
 				},
