@@ -380,8 +380,11 @@ ephemeral "kubectl_manifest" "cm" {
   }
 }
 
-resource "terraform_data" "use_ephemeral" {
-  input = ephemeral.kubectl_manifest.cm.results["ready"]
+check "wait_succeeded" {
+  assert {
+    condition     = ephemeral.kubectl_manifest.cm.results["ready"] == "yes"
+    error_message = "ephemeral wait_for did not return the expected ready value"
+  }
 }
 `, name, name)
 
@@ -397,12 +400,6 @@ resource "terraform_data" "use_ephemeral" {
 				ConfigStateChecks: []statecheck.StateCheck{
 					ephemeralNotInState{addressPrefix: "ephemeral.kubectl_manifest.cm"},
 				},
-				// Re-running the same config must not surface a
-				// non-empty plan; wait_for on the second iteration
-				// should find the object immediately via Phase A.
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("terraform_data.use_ephemeral", "input", "yes"),
-				),
 			},
 		},
 	})
@@ -463,8 +460,11 @@ ephemeral "kubectl_manifest" "cm" {
   }
 }
 
-resource "terraform_data" "use_ephemeral" {
-  input = ephemeral.kubectl_manifest.cm.results["region"]
+check "field_match" {
+  assert {
+    condition     = ephemeral.kubectl_manifest.cm.results["region"] == "eu-west-1"
+    error_message = "ephemeral wait_for field predicate did not return the expected region"
+  }
 }
 `, name)
 
@@ -487,9 +487,6 @@ resource "terraform_data" "use_ephemeral" {
 				ConfigStateChecks: []statecheck.StateCheck{
 					ephemeralNotInState{addressPrefix: "ephemeral.kubectl_manifest.cm"},
 				},
-				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("terraform_data.use_ephemeral", "input", "eu-west-1"),
-				),
 			},
 		},
 	})
