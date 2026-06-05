@@ -50,6 +50,14 @@ func ExtractByPath(doc interface{}, path string) (interface{}, bool, error) {
 	for _, seg := range segments {
 		switch node := current.(type) {
 		case map[string]interface{}:
+			if seg.bracketedIndex {
+				// `[N]` was used at a map node. Almost always
+				// a user typo (e.g. `metadata.annotations[0]`
+				// when the user thought annotations was a
+				// list). Surface loudly rather than silently
+				// look up the literal string key "N".
+				return nil, false, fmt.Errorf("segment [%s] applied to a map (expected an array)", seg.key)
+			}
 			v, ok := node[seg.key]
 			if !ok {
 				return nil, false, nil
@@ -78,13 +86,26 @@ func ExtractByPath(doc interface{}, path string) (interface{}, bool, error) {
 	return current, true, nil
 }
 
-// pathSegment captures one step of a parsed path. quoted=true
-// indicates the segment came from a bracketed string form
-// (`["foo.bar"]`) so it must be used as a map key verbatim and not
-// reinterpreted as an array index.
+// pathSegment captures one step of a parsed path.
+//
+//   - quoted=true: segment came from a quoted bracketed form
+//     (`["foo.bar"]`). It must be used as a map key verbatim and
+//     can never be reinterpreted as an array index, so applying it
+//     to a slice surfaces an error.
+//   - bracketedIndex=true: segment came from an unquoted-numeric
+//     bracketed form (`[0]`). It must be used as a slice index;
+//     applying it to a map surfaces an error rather than silently
+//     looking up the literal string key (which would mask user
+//     typos like `metadata.annotations[0]` written when an array
+//     was expected).
+//   - Both false: segment came from a bare dotted identifier
+//     (`metadata.name`, `containers.0`). The dispatch rules in
+//     ExtractByPath decide map-vs-slice handling from the parent
+//     node's runtime type.
 type pathSegment struct {
-	key    string
-	quoted bool
+	key            string
+	quoted         bool
+	bracketedIndex bool
 }
 
 // parsePathSegments lexes path into a slice of segments. The grammar:
@@ -126,6 +147,15 @@ func parsePathSegments(path string) ([]pathSegment, error) {
 			seg, next, err := parseBracketSegment(path, i)
 			if err != nil {
 				return nil, err
+			}
+			// After a `]`, the only legal continuations are
+			// end-of-path, a `.` introducing the next bare
+			// segment, or another `[` introducing another
+			// bracket. Anything else (e.g. `x[0]y`) is a syntax
+			// error: it would otherwise silently parse as
+			// `x[0].y` and mask the missing separator.
+			if next < len(path) && path[next] != '.' && path[next] != '[' {
+				return nil, fmt.Errorf("expected '.' or '[' after ']' in path %q at position %d", path, next)
 			}
 			out = append(out, seg)
 			i = next
@@ -199,6 +229,11 @@ func parseBracketSegment(path string, i int) (pathSegment, int, error) {
 	body := path[start:j]
 	if body == "" {
 		return pathSegment{}, 0, fmt.Errorf("empty bracket segment in path %q at position %d", path, i)
+	}
+	if _, err := strconv.Atoi(body); err == nil {
+		// Pure-integer body. Tag the segment so ExtractByPath can
+		// reject `[N]` against a map node as a type mismatch.
+		return pathSegment{key: body, bracketedIndex: true}, j + 1, nil
 	}
 	return pathSegment{key: body}, j + 1, nil
 }

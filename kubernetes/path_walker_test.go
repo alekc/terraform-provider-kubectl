@@ -189,7 +189,7 @@ func TestExtractByPath_ExplicitNullVsMissing(t *testing.T) {
 
 func TestExtractByPath_MalformedPaths(t *testing.T) {
 	t.Parallel()
-	doc := mustUnmarshal(t, `{"x": 1}`)
+	doc := mustUnmarshal(t, `{"x": 1, "spec": {"replicas": 3}}`)
 	cases := []string{
 		"",
 		".x",
@@ -203,6 +203,13 @@ func TestExtractByPath_MalformedPaths(t *testing.T) {
 		`x["unterminated`,
 		"x]",
 		"x[abc",
+		// Bracket segments must be followed by `.`, `[`, or
+		// end-of-path. Anything else (bare identifier touching
+		// the close-bracket) would otherwise parse as if a `.`
+		// were silently present, masking a typo.
+		"x[0]y",
+		`x["k"]y`,
+		`x['k']more`,
 	}
 	for _, p := range cases {
 		p := p
@@ -213,6 +220,63 @@ func TestExtractByPath_MalformedPaths(t *testing.T) {
 				t.Errorf("expected error for malformed path %q, got nil", p)
 			}
 		})
+	}
+}
+
+// TestExtractByPath_BracketedIndexAgainstMap regresses the
+// semantic that `[N]` (bracketed integer) is for slices only.
+// Applying it to a map node returns a type-mismatch error rather
+// than silently looking up the literal string key "N", which is
+// almost always a user typo (e.g. assuming `metadata.annotations`
+// is a list when it is in fact a map).
+func TestExtractByPath_BracketedIndexAgainstMap(t *testing.T) {
+	t.Parallel()
+	doc := mustUnmarshal(t, `{
+		"spec": {
+			"replicas": 3
+		},
+		"metadata": {
+			"annotations": {"0": "legacy-value", "app": "nginx"}
+		}
+	}`)
+	cases := []string{
+		"spec[0]",
+		"metadata.annotations[0]",
+	}
+	for _, p := range cases {
+		p := p
+		t.Run("path="+p, func(t *testing.T) {
+			t.Parallel()
+			_, _, err := ExtractByPath(doc, p)
+			if err == nil {
+				t.Errorf("expected type-mismatch error for %q (bracketed index against map), got nil", p)
+			}
+		})
+	}
+}
+
+// TestExtractByPath_BareNumericAgainstMap confirms the symmetric
+// case: a dot-separated numeric segment (e.g. `containers.0`) on a
+// map node IS allowed to be treated as a literal string key, since
+// it could equally have been written without the dot. Only the
+// explicit-bracket form `[N]` carries the "must be an index"
+// commitment.
+func TestExtractByPath_BareNumericAgainstMap(t *testing.T) {
+	t.Parallel()
+	doc := mustUnmarshal(t, `{
+		"metadata": {
+			"annotations": {"0": "legacy-value"}
+		}
+	}`)
+	v, found, err := ExtractByPath(doc, "metadata.annotations.0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !found {
+		t.Fatalf("expected to find annotations[\"0\"], got not-found")
+	}
+	if v != "legacy-value" {
+		t.Errorf("got %v, want legacy-value", v)
 	}
 }
 
