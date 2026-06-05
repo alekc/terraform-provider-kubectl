@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"log"
 	"regexp"
@@ -768,14 +767,12 @@ func matchesWaitConditions(manifest *meta_v1_unstruct.Unstructured, waitFields [
 	totalConditions := len(waitConditions) + len(waitFields)
 	totalMatches := 0
 
-	jsonBytes, err := manifest.MarshalJSON()
-	if err != nil {
-		return false, err
-	}
-	var doc interface{}
-	if err := json.Unmarshal(jsonBytes, &doc); err != nil {
-		return false, err
-	}
+	// Walk the already-decoded unstructured content directly; the
+	// previous gojsonq path Marshal-ed then Unmarshal-ed for every
+	// watch event, which is pure overhead since manifest is the
+	// same map[string]interface{} json.Unmarshal would produce on
+	// the JSON we'd have rendered.
+	doc := manifest.UnstructuredContent()
 
 	for _, c := range waitConditions {
 		if matchStatusCondition(doc, c.Type, c.Status) {
@@ -789,14 +786,32 @@ func matchesWaitConditions(manifest *meta_v1_unstruct.Unstructured, waitFields [
 	for _, c := range waitFields {
 		v, found, err := ExtractByPath(doc, c.Key)
 		if err != nil {
-			return false, fmt.Errorf("wait_for.field[%q]: %w", c.Key, err)
+			// Malformed path in user config. Log and skip rather
+			// than propagate: every watch event would otherwise
+			// hard-fail the wait, regressing the gojsonq
+			// behaviour that silently never matched a bad path
+			// and let the create_timeout bound the wait. A
+			// future plan-time validator is the right home for
+			// this diagnostic.
+			log.Printf("[WARN] wait_for.field[%q] in %s: %v (skipping for this event)", c.Key, name, err)
+			continue
 		}
-		if !found || v == nil {
+		if !found {
 			log.Printf("[TRACE] Key %s not found in %s", c.Key, name)
 			continue
 		}
 
-		stringVal := fmt.Sprintf("%v", v)
+		// stringifyValue produces the same string form as the
+		// data source's `fields` extraction, so users can write
+		// the same value they would for `data.kubectl_manifest.x
+		// .results[k]`. A JSON null at the path becomes "", so a
+		// caller wanting to wait for the field to clear can use
+		// value = "".
+		stringVal, err := stringifyValue(v)
+		if err != nil {
+			log.Printf("[WARN] wait_for.field[%q] in %s: stringify failed: %v (skipping for this event)", c.Key, name, err)
+			continue
+		}
 		switch c.ValueType {
 		case "regex":
 			matched, err := regexp.Match(c.Value, []byte(stringVal))
@@ -817,6 +832,15 @@ func matchesWaitConditions(manifest *meta_v1_unstruct.Unstructured, waitFields [
 			}
 			log.Printf("[TRACE] Value %s matches %s in %s (key %s)", stringVal, c.Value, name, c.Key)
 			totalMatches++
+
+		default:
+			// Unknown value_type. Schema validators normally
+			// reject this at plan time, but if a typo slips
+			// through (e.g. an older provider version or a
+			// future-added type the running binary doesn't know),
+			// surface it via WARN every event so the wait is not
+			// silently a no-op until create_timeout fires.
+			log.Printf("[WARN] wait_for.field[%q] in %s: unknown value_type %q (expected 'eq' or 'regex'), skipping for this event", c.Key, name, c.ValueType)
 		}
 	}
 

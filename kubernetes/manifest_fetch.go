@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -89,7 +90,12 @@ func FetchManifest(
 		return nil, fmt.Errorf("failed to render fetched object as YAML: %w", err)
 	}
 
-	results, err := extractFields(string(jsonBytes), fields)
+	// extractFields walks the already-decoded unstructured content
+	// directly rather than re-parsing jsonBytes; obj.UnstructuredContent
+	// is the same map[string]interface{} json.Unmarshal would produce
+	// on the JSON we just rendered, but without the marshal / unmarshal
+	// round-trip.
+	results, err := extractFields(obj.UnstructuredContent(), fields)
 	if err != nil {
 		return nil, err
 	}
@@ -102,22 +108,18 @@ func FetchManifest(
 	}, nil
 }
 
-// extractFields runs each user-supplied dot-and-bracket path
-// against the parsed JSON body and stringifies the value. The
-// walker returns (value, found) explicitly so an absent path
-// produces an error naming the offending key, while a present
-// path whose value is JSON null is preserved as the empty string
-// (the natural %v form of a nil interface). Scalars become their
-// natural string form; maps and slices are JSON-encoded so
-// callers can `jsondecode()` to recover structure.
-func extractFields(jsonBody string, fields map[string]string) (map[string]string, error) {
+// extractFields walks each user-supplied dot-and-bracket path on the
+// pre-decoded unstructured doc and stringifies the value. The walker
+// returns (value, found) explicitly: a path that does not resolve
+// produces an error naming the offending key. A path that resolves
+// to a JSON null stringifies to the empty string, matching the
+// stringifyValue contract. Scalars become their natural string form
+// via strconv (no scientific notation for large floats); maps and
+// slices are JSON-encoded so callers can `jsondecode()` to recover
+// structure.
+func extractFields(doc interface{}, fields map[string]string) (map[string]string, error) {
 	if len(fields) == 0 {
 		return map[string]string{}, nil
-	}
-
-	var doc interface{}
-	if err := json.Unmarshal([]byte(jsonBody), &doc); err != nil {
-		return nil, fmt.Errorf("failed to parse fetched object JSON: %w", err)
 	}
 
 	out := make(map[string]string, len(fields))
@@ -138,12 +140,39 @@ func extractFields(jsonBody string, fields map[string]string) (map[string]string
 	return out, nil
 }
 
+// stringifyValue renders a walked value as a Terraform string. A
+// JSON null comes through as the empty string (consistent with
+// extractFields' docstring contract). Floats use strconv with -1
+// precision so integer-valued large floats (e.g. metadata.generation
+// past 1e6, which json.Unmarshal decodes to float64) render as plain
+// decimals rather than fmt.Sprintf's %v default of scientific
+// notation. Other scalars route through strconv; complex values
+// (maps, slices, anything else) go through json.Marshal so callers
+// can `jsondecode()` to recover structure.
 func stringifyValue(v interface{}) (string, error) {
 	switch t := v.(type) {
+	case nil:
+		return "", nil
 	case string:
 		return t, nil
-	case bool, float64, float32, int, int32, int64, uint, uint32, uint64:
-		return fmt.Sprintf("%v", t), nil
+	case bool:
+		return strconv.FormatBool(t), nil
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64), nil
+	case float32:
+		return strconv.FormatFloat(float64(t), 'f', -1, 32), nil
+	case int:
+		return strconv.FormatInt(int64(t), 10), nil
+	case int32:
+		return strconv.FormatInt(int64(t), 10), nil
+	case int64:
+		return strconv.FormatInt(t, 10), nil
+	case uint:
+		return strconv.FormatUint(uint64(t), 10), nil
+	case uint32:
+		return strconv.FormatUint(uint64(t), 10), nil
+	case uint64:
+		return strconv.FormatUint(t, 10), nil
 	default:
 		b, err := json.Marshal(t)
 		if err != nil {

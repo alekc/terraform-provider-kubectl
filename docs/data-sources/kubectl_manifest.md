@@ -117,8 +117,9 @@ data "kubectl_manifest" "tls" {
   namespace   = "default"
 
   fields = {
-    crt = "data.tls\\.crt"
-    key = "data.tls\\.key"
+    # Bracket form for the dotted keys `tls.crt` and `tls.key`.
+    crt = "data[\"tls.crt\"]"
+    key = "data[\"tls.key\"]"
   }
 }
 

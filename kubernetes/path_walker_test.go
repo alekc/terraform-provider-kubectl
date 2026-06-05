@@ -193,9 +193,12 @@ func TestExtractByPath_MalformedPaths(t *testing.T) {
 	cases := []string{
 		"",
 		".x",
+		"x.",
 		"x..y",
 		"x[",
 		"x[]",
+		`x[""]`,
+		`x['']`,
 		"x['unterminated",
 		`x["unterminated`,
 		"x]",
@@ -253,18 +256,3 @@ func TestExtractByPath_TypeMismatch(t *testing.T) {
 	})
 }
 
-func TestPathContainsBracket(t *testing.T) {
-	t.Parallel()
-	cases := map[string]bool{
-		"metadata.name":                    false,
-		"metadata.labels.team":             false,
-		`metadata.labels["a.b/c"]`:         true,
-		"spec.containers[0].image":         true,
-		"spec.containers.[0].image":        true,
-	}
-	for path, want := range cases {
-		if got := pathContainsBracket(path); got != want {
-			t.Errorf("pathContainsBracket(%q): got %v want %v", path, got, want)
-		}
-	}
-}

@@ -3,7 +3,6 @@ package kubernetes
 import (
 	"fmt"
 	"strconv"
-	"strings"
 )
 
 // path_walker.go: dot-and-bracket path traversal for `fields`,
@@ -65,14 +64,14 @@ func ExtractByPath(doc interface{}, path string) (interface{}, bool, error) {
 				return nil, false, nil
 			}
 			current = node[idx]
-		case nil:
-			// Walking past an explicit null is "not found".
-			return nil, false, nil
 		default:
-			// Scalar mid-walk: the user's path goes deeper than
-			// the document; treat as not-found rather than
-			// raising an error, matching the previous gojsonq
-			// behaviour where Find returned nil at this point.
+			// Scalar mid-walk or walking past an explicit null:
+			// the path goes deeper than the document. Treat as
+			// not-found rather than raising an error, matching
+			// the previous gojsonq behaviour where Find returned
+			// nil at this point. extractFields then surfaces the
+			// original "path not found in fetched object" diagnostic
+			// at the caller.
 			return nil, false, nil
 		}
 	}
@@ -82,13 +81,10 @@ func ExtractByPath(doc interface{}, path string) (interface{}, bool, error) {
 // pathSegment captures one step of a parsed path. quoted=true
 // indicates the segment came from a bracketed string form
 // (`["foo.bar"]`) so it must be used as a map key verbatim and not
-// reinterpreted as an array index. bracketedIndex=true indicates a
-// bare integer bracketed form (`[0]`) so it must be used as a slice
-// index and not as a literal map key.
+// reinterpreted as an array index.
 type pathSegment struct {
-	key            string
-	quoted         bool
-	bracketedIndex bool
+	key    string
+	quoted bool
 }
 
 // parsePathSegments lexes path into a slice of segments. The grammar:
@@ -100,13 +96,18 @@ type pathSegment struct {
 //	integer  = digits
 //	identifier = chars excluding '.' '[' ']'
 //
-// Empty paths and empty segments are rejected as malformed. Quote
-// characters inside a quoted bracket segment do not need escaping;
-// the parser closes on the first matching close-bracket after the
-// closing quote.
+// Empty paths, leading dots, doubled dots, trailing dots, and empty
+// bracket segments are all rejected as malformed. Quote characters
+// inside a quoted bracket segment do not need escaping; the parser
+// closes on the first matching close-bracket after the closing
+// quote (so the chosen quote character cannot itself appear in the
+// segment, which is fine for valid Kubernetes label keys).
 func parsePathSegments(path string) ([]pathSegment, error) {
 	if path == "" {
 		return nil, fmt.Errorf("empty path")
+	}
+	if path[len(path)-1] == '.' {
+		return nil, fmt.Errorf("empty segment at end of path %q", path)
 	}
 	var out []pathSegment
 	i := 0
@@ -114,10 +115,10 @@ func parsePathSegments(path string) ([]pathSegment, error) {
 		c := path[i]
 		switch {
 		case c == '.':
-			// A leading or doubled dot would imply an empty
+			// A leading or doubled dot implies an empty
 			// segment. Reject so misconfigured paths surface
 			// loudly rather than as silent not-found.
-			if i == 0 || path[i-1] == '.' || path[i-1] == ']' && i == 0 {
+			if i == 0 || path[i-1] == '.' {
 				return nil, fmt.Errorf("empty segment in path %q at position %d", path, i)
 			}
 			i++
@@ -175,18 +176,19 @@ func parseBracketSegment(path string, i int) (pathSegment, int, error) {
 			return pathSegment{}, 0, fmt.Errorf("unterminated quoted bracket segment in path %q at position %d", path, i)
 		}
 		key := path[start:j]
+		if key == "" {
+			return pathSegment{}, 0, fmt.Errorf("empty quoted bracket segment in path %q at position %d", path, i)
+		}
 		j++ // consume close quote
 		if j >= len(path) || path[j] != ']' {
 			return pathSegment{}, 0, fmt.Errorf("expected ']' after quoted segment in path %q at position %d", path, j)
 		}
 		return pathSegment{key: key, quoted: true}, j + 1, nil
 	}
-	// Unquoted form: read until ']'. The contents may be either a
-	// pure integer (slice index) or a bare identifier (map key).
-	// Bare identifiers cannot contain dots; users who need that
-	// must reach for the quoted form. We treat purely-numeric
-	// content as an index and any other content as a key, which
-	// preserves the legacy `[N]` syntax.
+	// Unquoted form: read until ']'. The contents must be a pure
+	// integer (slice index) or a bare identifier (map key); bare
+	// identifiers cannot contain dots, slashes, or quotes, so users
+	// who need those must reach for the quoted form.
 	start := j
 	for j < len(path) && path[j] != ']' {
 		j++
@@ -197,9 +199,6 @@ func parseBracketSegment(path string, i int) (pathSegment, int, error) {
 	body := path[start:j]
 	if body == "" {
 		return pathSegment{}, 0, fmt.Errorf("empty bracket segment in path %q at position %d", path, i)
-	}
-	if _, err := strconv.Atoi(body); err == nil {
-		return pathSegment{key: body, bracketedIndex: true}, j + 1, nil
 	}
 	return pathSegment{key: body}, j + 1, nil
 }
@@ -220,9 +219,3 @@ func segmentToIndex(seg pathSegment) (int, error) {
 	return idx, nil
 }
 
-// pathContainsBracket is a cheap heuristic used by callers that
-// want to log whether a user has reached for the new syntax. Not
-// part of the parsing flow.
-func pathContainsBracket(path string) bool {
-	return strings.ContainsAny(path, "[]")
-}
