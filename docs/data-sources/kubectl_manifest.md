@@ -4,7 +4,7 @@ Reads a single Kubernetes object from the cluster by `api_version` + `kind` + `n
 
 The fetched object is exposed as both raw YAML and raw JSON. A `fields` map can declare named extractions that are returned in `results`.
 
-> **Tip:** the `fields` map is **optional**. Use it for cheap scalar extractions on simple gojsonq dot-paths; reach for `yamldecode(data.kubectl_manifest.x.yaml)` (or `jsondecode(data.kubectl_manifest.x.json)`, identical in shape) when you need arrays, nested maps, or keys containing dots, which gojsonq's dot-path syntax cannot address (see [#271](https://github.com/alekc/terraform-provider-kubectl/issues/271)).
+> **Tip:** the `fields` map is **optional**. Use it for cheap scalar extractions on a single value; reach for `yamldecode(data.kubectl_manifest.x.yaml)` (or `jsondecode(data.kubectl_manifest.x.json)`, identical in shape) when you want to traverse the object structurally (arrays of objects, `for` expressions, nested maps you keep referencing). `fields` paths support dotted keys via a bracket form (`metadata.labels["app.kubernetes.io/name"]`); see [Argument Reference](#argument-reference) for the full path grammar.
 
 For reads of sensitive data that must **never** be written to Terraform state, use the [`kubectl_manifest` ephemeral resource](../ephemeral-resources/kubectl_manifest.md) instead.
 
@@ -31,8 +31,8 @@ locals {
   dns_owner      = local.kube_dns.metadata.labels["app.kubernetes.io/name"]
 
   # Iterate the array. Terraform's `for` expression composes
-  # naturally with the decoded object; gojsonq `fields` paths
-  # cannot express this.
+  # naturally with the decoded object; `fields` paths address
+  # a single value per entry, not a list of derived values.
   dns_port_names = [for p in local.kube_dns.spec.ports : p.name]
 }
 ```
@@ -47,7 +47,8 @@ data "kubectl_manifest" "ca" {
   namespace   = "kube-system"
 
   fields = {
-    ca = "data.ca\\.crt"
+    # Bracket form for the dotted key `ca.crt`.
+    ca = "data[\"ca.crt\"]"
   }
 }
 
@@ -74,9 +75,13 @@ data "kubectl_manifest" "ns" {
 
 ### Read a CRD object and walk a nested array
 
-`fields` paths use [gojsonq](https://github.com/thedevsaddam/gojsonq)
-dot-notation. Array elements are addressed with the `[N]` form
-(`containers.[0]`, not `containers.0`).
+`fields` paths use a simple dot-and-bracket grammar:
+
+- `metadata.name`: plain dot-separated map keys.
+- `spec.containers[0].image` or `spec.containers.[0].image`: array index by bracketed or dotted integer; both forms work, dot-only `spec.containers.0.image` works too.
+- `metadata.labels["app.kubernetes.io/name"]`: quoted bracketed segment when the key itself contains dots, slashes, or any other character that a bare segment can't carry. Either `"..."` or `'...'` quotes are accepted; the content is taken as a literal map key.
+
+A path that does not resolve fails the read with an error naming the offending key.
 
 ```hcl
 data "kubectl_manifest" "dep" {
@@ -87,8 +92,10 @@ data "kubectl_manifest" "dep" {
 
   fields = {
     replicas        = "spec.replicas"
-    first_image     = "spec.template.spec.containers.[0].image"
+    first_image     = "spec.template.spec.containers[0].image"
     labels          = "metadata.labels"
+    # Domain-prefixed label keys need the bracketed form.
+    app_name        = "metadata.labels[\"app.kubernetes.io/name\"]"
   }
 }
 
@@ -141,7 +148,12 @@ The value is still written to `terraform.tfstate` in cleartext. If state-persist
 * `kind` - **(Required)** The Kind of the resource (e.g. `ConfigMap`, `Deployment`).
 * `name` - **(Required)** The `metadata.name` of the resource.
 * `namespace` - **(Optional)** The `metadata.namespace` of the resource. Leave empty for cluster-scoped kinds. For namespaced kinds, an empty value defaults to `default`. A namespace supplied for a cluster-scoped kind is silently ignored.
-* `fields` - **(Optional)** Map of named extractions to perform on the fetched object. Each value is a gojsonq dot-path expression. Each path must resolve; missing paths produce an error.
+* `fields` - **(Optional)** Map of named extractions to perform on the fetched object. Each value is a dot-and-bracket path expression:
+    * `metadata.name`: dot-separated map keys.
+    * `spec.containers[0].image` (or `spec.containers.[0].image`, or `spec.containers.0.image`): array index.
+    * `metadata.labels["app.kubernetes.io/name"]` (or single-quoted `'...'`): quoted bracketed segment for map keys that themselves contain dots, slashes, or any other character a bare segment can't carry.
+
+    Each path must resolve; missing paths produce an error naming the offending key. Scalar values are returned as their natural string form; objects and arrays are JSON-encoded so callers can `jsondecode()` to recover structure.
 
 ## Attribute Reference
 

@@ -4,10 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
-	"strings"
 
-	"github.com/thedevsaddam/gojsonq/v2"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	meta_v1_unstruct "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -48,9 +45,12 @@ func BuildSelfLinkID(apiVersion, namespace, kind, name string) string {
 // namespace may be empty. The underlying client helper defaults namespaced
 // resources to "default" and ignores the namespace for cluster-scoped kinds.
 //
-// fields maps a user-chosen key to a gojsonq dot-path (e.g. "spec.replicas",
-// "spec.template.spec.containers.0.image"). Missing paths cause FetchManifest
-// to return an error naming the offending key.
+// fields maps a user-chosen key to a dot-and-bracket path
+// expression (e.g. "spec.replicas",
+// "spec.template.spec.containers[0].image",
+// `metadata.labels["app.kubernetes.io/name"]`). See
+// path_walker.go for the full grammar. Missing paths cause
+// FetchManifest to return an error naming the offending key.
 func FetchManifest(
 	ctx context.Context,
 	provider *KubeProvider,
@@ -102,28 +102,32 @@ func FetchManifest(
 	}, nil
 }
 
-// extractFields runs each user-supplied gojsonq path against the JSON body
-// and stringifies the value. Missing paths produce an error naming the
-// offending key. Scalars become their natural string form; maps and slices
-// are JSON-encoded so callers can `jsondecode()` to recover structure.
+// extractFields runs each user-supplied dot-and-bracket path
+// against the parsed JSON body and stringifies the value. The
+// walker returns (value, found) explicitly so an absent path
+// produces an error naming the offending key, while a present
+// path whose value is JSON null is preserved as the empty string
+// (the natural %v form of a nil interface). Scalars become their
+// natural string form; maps and slices are JSON-encoded so
+// callers can `jsondecode()` to recover structure.
 func extractFields(jsonBody string, fields map[string]string) (map[string]string, error) {
 	if len(fields) == 0 {
 		return map[string]string{}, nil
 	}
 
-	out := make(map[string]string, len(fields))
-	gq := gojsonq.New().FromString(jsonBody)
+	var doc interface{}
+	if err := json.Unmarshal([]byte(jsonBody), &doc); err != nil {
+		return nil, fmt.Errorf("failed to parse fetched object JSON: %w", err)
+	}
 
+	out := make(map[string]string, len(fields))
 	for key, path := range fields {
-		value := gq.Reset().Find(path)
-		if value == nil {
-			exists, err := jsonPathExists(jsonBody, path)
-			if err != nil {
-				return nil, fmt.Errorf("fields[%q]: %w", key, err)
-			}
-			if !exists {
-				return nil, fmt.Errorf("fields[%q]: path %q not found in fetched object", key, path)
-			}
+		value, found, err := ExtractByPath(doc, path)
+		if err != nil {
+			return nil, fmt.Errorf("fields[%q]: %w", key, err)
+		}
+		if !found {
+			return nil, fmt.Errorf("fields[%q]: path %q not found in fetched object", key, path)
 		}
 		s, err := stringifyValue(value)
 		if err != nil {
@@ -132,54 +136,6 @@ func extractFields(jsonBody string, fields map[string]string) (map[string]string
 		out[key] = s
 	}
 	return out, nil
-}
-
-// jsonPathExists checks whether a dot-separated path exists in a JSON body.
-// Array segments may use bare or bracketed indices, as parsed by parsePathIndex.
-// Keep this path parsing behavior aligned with gojsonq path resolution semantics.
-func jsonPathExists(jsonBody, path string) (bool, error) {
-	var doc interface{}
-	if err := json.Unmarshal([]byte(jsonBody), &doc); err != nil {
-		return false, fmt.Errorf("failed to parse fetched object JSON: %w", err)
-	}
-
-	current := doc
-	for _, part := range strings.Split(path, ".") {
-		if part == "" {
-			return false, nil
-		}
-
-		switch node := current.(type) {
-		case map[string]interface{}:
-			value, ok := node[part]
-			if !ok {
-				return false, nil
-			}
-			current = value
-		case []interface{}:
-			index, ok := parsePathIndex(part)
-			if !ok || index < 0 || index >= len(node) {
-				return false, nil
-			}
-			current = node[index]
-		default:
-			return false, nil
-		}
-	}
-	return true, nil
-}
-
-// parsePathIndex parses an array index from either "N" or "[N]" path segments.
-// It returns the parsed index and whether the segment was a valid index.
-func parsePathIndex(part string) (int, bool) {
-	if strings.HasPrefix(part, "[") && strings.HasSuffix(part, "]") {
-		part = strings.TrimPrefix(strings.TrimSuffix(part, "]"), "[")
-	}
-	index, err := strconv.Atoi(part)
-	if err != nil {
-		return 0, false
-	}
-	return index, true
 }
 
 func stringifyValue(v interface{}) (string, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 	"regexp"
@@ -14,7 +15,6 @@ import (
 	"github.com/alekc/terraform-provider-kubectl/flatten"
 	"github.com/alekc/terraform-provider-kubectl/internal/types"
 	"github.com/alekc/terraform-provider-kubectl/yaml"
-	"github.com/thedevsaddam/gojsonq/v2"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/watch"
@@ -753,11 +753,13 @@ func WaitForConditions(ctx context.Context, restClient *RestClientResult, waitFi
 // watch events and against the post-close Get probe (#266).
 //
 // waitConditions match by exact (type, status) pair against the
-// manifest's status.conditions array. waitFields match a gojsonq
-// dot-path; the value is stringified and either compared verbatim
-// (ValueType "" or "eq") or against a regex (ValueType "regex"). An
-// error is only returned for hard failures (manifest unmarshalling,
-// regex compilation); a "not matched yet" outcome is just (false, nil).
+// manifest's status.conditions array. waitFields match a
+// dot-and-bracket path (see kubernetes/path_walker.go); the value
+// is stringified and either compared verbatim (ValueType "" or
+// "eq") or against a regex (ValueType "regex"). An error is only
+// returned for hard failures (manifest unmarshalling, regex
+// compilation, malformed path syntax); a "not matched yet"
+// outcome is just (false, nil).
 func matchesWaitConditions(manifest *meta_v1_unstruct.Unstructured, waitFields []types.WaitForField, waitConditions []types.WaitForStatusCondition, name string) (bool, error) {
 	if manifest == nil {
 		return false, nil
@@ -766,28 +768,30 @@ func matchesWaitConditions(manifest *meta_v1_unstruct.Unstructured, waitFields [
 	totalConditions := len(waitConditions) + len(waitFields)
 	totalMatches := 0
 
-	yamlJson, err := manifest.MarshalJSON()
+	jsonBytes, err := manifest.MarshalJSON()
 	if err != nil {
 		return false, err
 	}
-
-	gq := gojsonq.New().FromString(string(yamlJson))
+	var doc interface{}
+	if err := json.Unmarshal(jsonBytes, &doc); err != nil {
+		return false, err
+	}
 
 	for _, c := range waitConditions {
-		count := gq.Reset().From("status.conditions").
-			Where("type", "=", c.Type).
-			Where("status", "=", c.Status).Count()
-		if count == 0 {
-			log.Printf("[TRACE] Condition %s with status %s not found in %s", c.Type, c.Status, name)
+		if matchStatusCondition(doc, c.Type, c.Status) {
+			log.Printf("[TRACE] Condition %s with status %s found in %s", c.Type, c.Status, name)
+			totalMatches++
 			continue
 		}
-		log.Printf("[TRACE] Condition %s with status %s found in %s", c.Type, c.Status, name)
-		totalMatches++
+		log.Printf("[TRACE] Condition %s with status %s not found in %s", c.Type, c.Status, name)
 	}
 
 	for _, c := range waitFields {
-		v := gq.Reset().Find(c.Key)
-		if v == nil {
+		v, found, err := ExtractByPath(doc, c.Key)
+		if err != nil {
+			return false, fmt.Errorf("wait_for.field[%q]: %w", c.Key, err)
+		}
+		if !found || v == nil {
 			log.Printf("[TRACE] Key %s not found in %s", c.Key, name)
 			continue
 		}
@@ -822,6 +826,37 @@ func matchesWaitConditions(manifest *meta_v1_unstruct.Unstructured, waitFields [
 	}
 	log.Printf("[TRACE] %d/%d conditions met for %s. Waiting for next ", totalMatches, totalConditions, name)
 	return false, nil
+}
+
+// matchStatusCondition returns true when doc contains an element
+// in status.conditions whose `type` and `status` fields exactly
+// match the supplied pair. Replaces gojsonq's
+// `From("status.conditions").Where("type","=",t).Where("status","=",s).Count()`
+// with a direct walk so the surrounding helper has no JSON-query
+// dependency. Values are compared via fmt.Sprintf so a boolean
+// `status: True` from a typed condition (rare; Kubernetes always
+// stringifies it) still matches the documented "True"/"False"
+// inputs.
+func matchStatusCondition(doc interface{}, wantType, wantStatus string) bool {
+	v, found, err := ExtractByPath(doc, "status.conditions")
+	if err != nil || !found {
+		return false
+	}
+	list, ok := v.([]interface{})
+	if !ok {
+		return false
+	}
+	for _, raw := range list {
+		entry, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if fmt.Sprintf("%v", entry["type"]) == wantType &&
+			fmt.Sprintf("%v", entry["status"]) == wantStatus {
+			return true
+		}
+	}
+	return false
 }
 
 // Takes the result of flatmap.Expand for an array of strings
