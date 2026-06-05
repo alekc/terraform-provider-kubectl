@@ -14,7 +14,6 @@ import (
 	"github.com/alekc/terraform-provider-kubectl/flatten"
 	"github.com/alekc/terraform-provider-kubectl/internal/types"
 	"github.com/alekc/terraform-provider-kubectl/yaml"
-	"github.com/thedevsaddam/gojsonq/v2"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/watch"
@@ -753,11 +752,13 @@ func WaitForConditions(ctx context.Context, restClient *RestClientResult, waitFi
 // watch events and against the post-close Get probe (#266).
 //
 // waitConditions match by exact (type, status) pair against the
-// manifest's status.conditions array. waitFields match a gojsonq
-// dot-path; the value is stringified and either compared verbatim
-// (ValueType "" or "eq") or against a regex (ValueType "regex"). An
-// error is only returned for hard failures (manifest unmarshalling,
-// regex compilation); a "not matched yet" outcome is just (false, nil).
+// manifest's status.conditions array. waitFields match a
+// dot-and-bracket path (see kubernetes/path_walker.go); the value
+// is stringified and either compared verbatim (ValueType "" or
+// "eq") or against a regex (ValueType "regex"). An error is only
+// returned for hard failures (manifest unmarshalling, regex
+// compilation, malformed path syntax); a "not matched yet"
+// outcome is just (false, nil).
 func matchesWaitConditions(manifest *meta_v1_unstruct.Unstructured, waitFields []types.WaitForField, waitConditions []types.WaitForStatusCondition, name string) (bool, error) {
 	if manifest == nil {
 		return false, nil
@@ -766,33 +767,51 @@ func matchesWaitConditions(manifest *meta_v1_unstruct.Unstructured, waitFields [
 	totalConditions := len(waitConditions) + len(waitFields)
 	totalMatches := 0
 
-	yamlJson, err := manifest.MarshalJSON()
-	if err != nil {
-		return false, err
-	}
-
-	gq := gojsonq.New().FromString(string(yamlJson))
+	// Walk the already-decoded unstructured content directly; the
+	// previous gojsonq path Marshal-ed then Unmarshal-ed for every
+	// watch event, which is pure overhead since manifest is the
+	// same map[string]interface{} json.Unmarshal would produce on
+	// the JSON we'd have rendered.
+	doc := manifest.UnstructuredContent()
 
 	for _, c := range waitConditions {
-		count := gq.Reset().From("status.conditions").
-			Where("type", "=", c.Type).
-			Where("status", "=", c.Status).Count()
-		if count == 0 {
-			log.Printf("[TRACE] Condition %s with status %s not found in %s", c.Type, c.Status, name)
+		if matchStatusCondition(doc, c.Type, c.Status) {
+			log.Printf("[TRACE] Condition %s with status %s found in %s", c.Type, c.Status, name)
+			totalMatches++
 			continue
 		}
-		log.Printf("[TRACE] Condition %s with status %s found in %s", c.Type, c.Status, name)
-		totalMatches++
+		log.Printf("[TRACE] Condition %s with status %s not found in %s", c.Type, c.Status, name)
 	}
 
 	for _, c := range waitFields {
-		v := gq.Reset().Find(c.Key)
-		if v == nil {
+		v, found, err := ExtractByPath(doc, c.Key)
+		if err != nil {
+			// Malformed path in user config. Log and skip rather
+			// than propagate: every watch event would otherwise
+			// hard-fail the wait, regressing the gojsonq
+			// behaviour that silently never matched a bad path
+			// and let the create_timeout bound the wait. A
+			// future plan-time validator is the right home for
+			// this diagnostic.
+			log.Printf("[WARN] wait_for.field[%q] in %s: %v (skipping for this event)", c.Key, name, err)
+			continue
+		}
+		if !found {
 			log.Printf("[TRACE] Key %s not found in %s", c.Key, name)
 			continue
 		}
 
-		stringVal := fmt.Sprintf("%v", v)
+		// stringifyValue produces the same string form as the
+		// data source's `fields` extraction, so users can write
+		// the same value they would for `data.kubectl_manifest.x
+		// .results[k]`. A JSON null at the path becomes "", so a
+		// caller wanting to wait for the field to clear can use
+		// value = "".
+		stringVal, err := stringifyValue(v)
+		if err != nil {
+			log.Printf("[WARN] wait_for.field[%q] in %s: stringify failed: %v (skipping for this event)", c.Key, name, err)
+			continue
+		}
 		switch c.ValueType {
 		case "regex":
 			matched, err := regexp.Match(c.Value, []byte(stringVal))
@@ -813,6 +832,15 @@ func matchesWaitConditions(manifest *meta_v1_unstruct.Unstructured, waitFields [
 			}
 			log.Printf("[TRACE] Value %s matches %s in %s (key %s)", stringVal, c.Value, name, c.Key)
 			totalMatches++
+
+		default:
+			// Unknown value_type. Schema validators normally
+			// reject this at plan time, but if a typo slips
+			// through (e.g. an older provider version or a
+			// future-added type the running binary doesn't know),
+			// surface it via WARN every event so the wait is not
+			// silently a no-op until create_timeout fires.
+			log.Printf("[WARN] wait_for.field[%q] in %s: unknown value_type %q (expected 'eq' or 'regex'), skipping for this event", c.Key, name, c.ValueType)
 		}
 	}
 
@@ -822,6 +850,37 @@ func matchesWaitConditions(manifest *meta_v1_unstruct.Unstructured, waitFields [
 	}
 	log.Printf("[TRACE] %d/%d conditions met for %s. Waiting for next ", totalMatches, totalConditions, name)
 	return false, nil
+}
+
+// matchStatusCondition returns true when doc contains an element
+// in status.conditions whose `type` and `status` fields exactly
+// match the supplied pair. Replaces gojsonq's
+// `From("status.conditions").Where("type","=",t).Where("status","=",s).Count()`
+// with a direct walk so the surrounding helper has no JSON-query
+// dependency. Values are compared via fmt.Sprintf so a boolean
+// `status: True` from a typed condition (rare; Kubernetes always
+// stringifies it) still matches the documented "True"/"False"
+// inputs.
+func matchStatusCondition(doc interface{}, wantType, wantStatus string) bool {
+	v, found, err := ExtractByPath(doc, "status.conditions")
+	if err != nil || !found {
+		return false
+	}
+	list, ok := v.([]interface{})
+	if !ok {
+		return false
+	}
+	for _, raw := range list {
+		entry, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if fmt.Sprintf("%v", entry["type"]) == wantType &&
+			fmt.Sprintf("%v", entry["status"]) == wantStatus {
+			return true
+		}
+	}
+	return false
 }
 
 // Takes the result of flatmap.Expand for an array of strings

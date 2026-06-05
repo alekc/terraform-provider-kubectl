@@ -101,7 +101,7 @@ YAML
 * `validate_schema` - Optional. Setting to `false` will mimic `kubectl apply --validate=false` mode. Default `true`.
 * `wait` - Optional. When `true`, wait for finalizers to complete on deleted objects before returning. Default `false`.
 * `wait_for_rollout` - Optional. Set this flag to wait or not for `Deployment`, `DaemonSet`, `StatefulSet` & `APIService`  resources to complete rollout. Default `true`.
-* `wait_for` - Optional. If set, will wait until either all conditions are satisfied, or until timeout is reached (see [below for nested schema](#wait_for)). Under the hood [gojsonq](https://github.com/thedevsaddam/gojsonq) is used for querying, see the related syntax and examples.
+* `wait_for` - Optional. If set, will wait until either all conditions are satisfied, or until timeout is reached (see [below for nested schema](#wait_for)). `wait_for.field.key` uses the same dot-and-bracket path grammar as the data source's `fields` (plain dotted keys, `[N]` for array indices, `["key.with.dots"]` for keys whose name contains dots, slashes, or other reserved characters); see the [`kubectl_manifest` data source `fields` reference](../data-sources/kubectl_manifest.md#argument-reference) for the full grammar.
 * `delete_cascade` - Optional; `Background` or `Foreground` are valid options. If set this overrides the default provider behaviour which is to use `Background` unless `wait` is `true` when `Foreground` will be used. To duplicate the default behaviour of `kubectl` this should be explicitly set to `Background`.
 
 ### `wait_for`

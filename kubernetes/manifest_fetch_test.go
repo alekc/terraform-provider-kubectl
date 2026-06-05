@@ -28,7 +28,10 @@ func TestStringifyValue(t *testing.T) {
 		{"map encoded as JSON", map[string]interface{}{"a": "b", "c": float64(1)}, `{"a":"b","c":1}`},
 		{"slice of strings encoded as JSON", []interface{}{"a", "b"}, `["a","b"]`},
 		{"nested map+slice encoded as JSON", map[string]interface{}{"x": []interface{}{float64(1), float64(2)}}, `{"x":[1,2]}`},
-		{"nil encoded as JSON null", nil, "null"},
+		{"nil renders as empty string", nil, ""},
+		{"float64 large integral does not use scientific notation", float64(10000000), "10000000"},
+		{"float64 very large integral", float64(1234567890), "1234567890"},
+		{"int64 large", int64(1234567890123), "1234567890123"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -40,7 +43,7 @@ func TestStringifyValue(t *testing.T) {
 }
 
 func TestExtractFields(t *testing.T) {
-	body := `{
+	bodyJSON := `{
       "metadata": {
         "name": "demo",
         "labels": {"app": "nginx", "tier": "web"}
@@ -55,6 +58,8 @@ func TestExtractFields(t *testing.T) {
         ]
       }
     }`
+	var body interface{}
+	require.NoError(t, json.Unmarshal([]byte(bodyJSON), &body))
 
 	t.Run("nil fields returns empty map without parsing the body", func(t *testing.T) {
 		got, err := extractFields(body, nil)
@@ -115,22 +120,31 @@ func TestExtractFields(t *testing.T) {
 		assert.Equal(t, "nginx:1.25", container["image"])
 	})
 
-	t.Run("null object field is extracted as JSON null", func(t *testing.T) {
+	t.Run("null object field is extracted as empty string", func(t *testing.T) {
 		got, err := extractFields(body, map[string]string{"last_schedule": "spec.lastScheduleTime"})
 		require.NoError(t, err)
-		assert.Equal(t, "null", got["last_schedule"])
+		assert.Equal(t, "", got["last_schedule"])
 	})
 
-	t.Run("null array element field is extracted as JSON null", func(t *testing.T) {
+	t.Run("null array element field is extracted as empty string", func(t *testing.T) {
 		got, err := extractFields(body, map[string]string{"resources": "spec.containers.[1].resources"})
 		require.NoError(t, err)
-		assert.Equal(t, "null", got["resources"])
+		assert.Equal(t, "", got["resources"])
 	})
 
-	t.Run("bare array index against null field is extracted as JSON null", func(t *testing.T) {
+	t.Run("bare array index against null field is extracted as empty string", func(t *testing.T) {
 		got, err := extractFields(body, map[string]string{"resources": "spec.containers.1.resources"})
 		require.NoError(t, err)
-		assert.Equal(t, "null", got["resources"])
+		assert.Equal(t, "", got["resources"])
+	})
+
+	t.Run("large integer-valued float does not render in scientific notation", func(t *testing.T) {
+		bigJSON := `{"spec":{"generation":10000000}}`
+		var bigBody interface{}
+		require.NoError(t, json.Unmarshal([]byte(bigJSON), &bigBody))
+		got, err := extractFields(bigBody, map[string]string{"gen": "spec.generation"})
+		require.NoError(t, err)
+		assert.Equal(t, "10000000", got["gen"])
 	})
 
 	t.Run("missing path returns error naming the field key", func(t *testing.T) {

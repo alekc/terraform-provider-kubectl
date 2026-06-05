@@ -78,7 +78,10 @@ func (r *manifestEphemeralResource) Schema(_ context.Context, _ ephemeral.Schema
 			"fields": schema.MapAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
-				Description: "Map of result-key to gojsonq dot-path expressions to extract from the fetched object.",
+				Description: "Map of result-key to dot-and-bracket path expressions to extract from the fetched object. " +
+					"Same grammar as the `kubectl_manifest` data source's `fields`: plain dotted keys, `[N]` for " +
+					"array indices, and `[\"key.with.dots\"]` for map keys containing dots or other reserved characters. " +
+					"Each path must resolve; missing paths produce an error.",
 			},
 
 			"yaml": schema.StringAttribute{

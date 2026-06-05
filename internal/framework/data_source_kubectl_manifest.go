@@ -91,10 +91,12 @@ func (d *manifestDataSource) Schema(_ context.Context, _ datasource.SchemaReques
 			"fields": schema.MapAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
-				Description: "Map of result-key to gojsonq dot-path expressions to extract from the fetched " +
-					"object (e.g. `replicas = \"spec.replicas\"`, `image = \"spec.template.spec.containers.[0].image\"`). " +
-					"Array indices use the `[N]` form, e.g. `containers.[0]`. " +
-					"Each path must resolve; missing paths produce an error.",
+				Description: "Map of result-key to dot-and-bracket path expressions to extract from the fetched " +
+					"object. Plain dotted keys (`replicas = \"spec.replicas\"`), array indices via " +
+					"`[N]`, `.[N]`, or bare `.N` (`image = \"spec.containers[0].image\"`), and quoted " +
+					"bracketed segments for keys containing dots, slashes, or other reserved characters " +
+					"(`app = \"metadata.labels[\\\"app.kubernetes.io/name\\\"]\"`). Each path must " +
+					"resolve; missing paths produce an error naming the offending key.",
 			},
 
 			"yaml": schema.StringAttribute{

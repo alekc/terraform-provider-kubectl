@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
-	"strings"
 
-	"github.com/thedevsaddam/gojsonq/v2"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	meta_v1_unstruct "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -48,9 +46,12 @@ func BuildSelfLinkID(apiVersion, namespace, kind, name string) string {
 // namespace may be empty. The underlying client helper defaults namespaced
 // resources to "default" and ignores the namespace for cluster-scoped kinds.
 //
-// fields maps a user-chosen key to a gojsonq dot-path (e.g. "spec.replicas",
-// "spec.template.spec.containers.0.image"). Missing paths cause FetchManifest
-// to return an error naming the offending key.
+// fields maps a user-chosen key to a dot-and-bracket path
+// expression (e.g. "spec.replicas",
+// "spec.template.spec.containers[0].image",
+// `metadata.labels["app.kubernetes.io/name"]`). See
+// path_walker.go for the full grammar. Missing paths cause
+// FetchManifest to return an error naming the offending key.
 func FetchManifest(
 	ctx context.Context,
 	provider *KubeProvider,
@@ -89,7 +90,12 @@ func FetchManifest(
 		return nil, fmt.Errorf("failed to render fetched object as YAML: %w", err)
 	}
 
-	results, err := extractFields(string(jsonBytes), fields)
+	// extractFields walks the already-decoded unstructured content
+	// directly rather than re-parsing jsonBytes; obj.UnstructuredContent
+	// is the same map[string]interface{} json.Unmarshal would produce
+	// on the JSON we just rendered, but without the marshal / unmarshal
+	// round-trip.
+	results, err := extractFields(obj.UnstructuredContent(), fields)
 	if err != nil {
 		return nil, err
 	}
@@ -102,28 +108,28 @@ func FetchManifest(
 	}, nil
 }
 
-// extractFields runs each user-supplied gojsonq path against the JSON body
-// and stringifies the value. Missing paths produce an error naming the
-// offending key. Scalars become their natural string form; maps and slices
-// are JSON-encoded so callers can `jsondecode()` to recover structure.
-func extractFields(jsonBody string, fields map[string]string) (map[string]string, error) {
+// extractFields walks each user-supplied dot-and-bracket path on the
+// pre-decoded unstructured doc and stringifies the value. The walker
+// returns (value, found) explicitly: a path that does not resolve
+// produces an error naming the offending key. A path that resolves
+// to a JSON null stringifies to the empty string, matching the
+// stringifyValue contract. Scalars become their natural string form
+// via strconv (no scientific notation for large floats); maps and
+// slices are JSON-encoded so callers can `jsondecode()` to recover
+// structure.
+func extractFields(doc interface{}, fields map[string]string) (map[string]string, error) {
 	if len(fields) == 0 {
 		return map[string]string{}, nil
 	}
 
 	out := make(map[string]string, len(fields))
-	gq := gojsonq.New().FromString(jsonBody)
-
 	for key, path := range fields {
-		value := gq.Reset().Find(path)
-		if value == nil {
-			exists, err := jsonPathExists(jsonBody, path)
-			if err != nil {
-				return nil, fmt.Errorf("fields[%q]: %w", key, err)
-			}
-			if !exists {
-				return nil, fmt.Errorf("fields[%q]: path %q not found in fetched object", key, path)
-			}
+		value, found, err := ExtractByPath(doc, path)
+		if err != nil {
+			return nil, fmt.Errorf("fields[%q]: %w", key, err)
+		}
+		if !found {
+			return nil, fmt.Errorf("fields[%q]: path %q not found in fetched object", key, path)
 		}
 		s, err := stringifyValue(value)
 		if err != nil {
@@ -134,60 +140,39 @@ func extractFields(jsonBody string, fields map[string]string) (map[string]string
 	return out, nil
 }
 
-// jsonPathExists checks whether a dot-separated path exists in a JSON body.
-// Array segments may use bare or bracketed indices, as parsed by parsePathIndex.
-// Keep this path parsing behavior aligned with gojsonq path resolution semantics.
-func jsonPathExists(jsonBody, path string) (bool, error) {
-	var doc interface{}
-	if err := json.Unmarshal([]byte(jsonBody), &doc); err != nil {
-		return false, fmt.Errorf("failed to parse fetched object JSON: %w", err)
-	}
-
-	current := doc
-	for _, part := range strings.Split(path, ".") {
-		if part == "" {
-			return false, nil
-		}
-
-		switch node := current.(type) {
-		case map[string]interface{}:
-			value, ok := node[part]
-			if !ok {
-				return false, nil
-			}
-			current = value
-		case []interface{}:
-			index, ok := parsePathIndex(part)
-			if !ok || index < 0 || index >= len(node) {
-				return false, nil
-			}
-			current = node[index]
-		default:
-			return false, nil
-		}
-	}
-	return true, nil
-}
-
-// parsePathIndex parses an array index from either "N" or "[N]" path segments.
-// It returns the parsed index and whether the segment was a valid index.
-func parsePathIndex(part string) (int, bool) {
-	if strings.HasPrefix(part, "[") && strings.HasSuffix(part, "]") {
-		part = strings.TrimPrefix(strings.TrimSuffix(part, "]"), "[")
-	}
-	index, err := strconv.Atoi(part)
-	if err != nil {
-		return 0, false
-	}
-	return index, true
-}
-
+// stringifyValue renders a walked value as a Terraform string. A
+// JSON null comes through as the empty string (consistent with
+// extractFields' docstring contract). Floats use strconv with -1
+// precision so integer-valued large floats (e.g. metadata.generation
+// past 1e6, which json.Unmarshal decodes to float64) render as plain
+// decimals rather than fmt.Sprintf's %v default of scientific
+// notation. Other scalars route through strconv; complex values
+// (maps, slices, anything else) go through json.Marshal so callers
+// can `jsondecode()` to recover structure.
 func stringifyValue(v interface{}) (string, error) {
 	switch t := v.(type) {
+	case nil:
+		return "", nil
 	case string:
 		return t, nil
-	case bool, float64, float32, int, int32, int64, uint, uint32, uint64:
-		return fmt.Sprintf("%v", t), nil
+	case bool:
+		return strconv.FormatBool(t), nil
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64), nil
+	case float32:
+		return strconv.FormatFloat(float64(t), 'f', -1, 32), nil
+	case int:
+		return strconv.FormatInt(int64(t), 10), nil
+	case int32:
+		return strconv.FormatInt(int64(t), 10), nil
+	case int64:
+		return strconv.FormatInt(t, 10), nil
+	case uint:
+		return strconv.FormatUint(uint64(t), 10), nil
+	case uint32:
+		return strconv.FormatUint(uint64(t), 10), nil
+	case uint64:
+		return strconv.FormatUint(t, 10), nil
 	default:
 		b, err := json.Marshal(t)
 		if err != nil {

@@ -326,6 +326,77 @@ func TestMatchesWaitConditions_TableDriven(t *testing.T) {
 			nil,
 			false,
 		},
+		{
+			// Malformed path should NOT abort the wait. Pre-c77b9f9
+			// behaviour propagated the parse error from
+			// ExtractByPath, hard-failing the apply on the first
+			// reconcile event. Post-fix: WARN-log and skip,
+			// preserving the gojsonq behaviour of letting the
+			// wait time out at create_timeout instead.
+			"malformed path WARNs and skips (no error)",
+			makeManifest(map[string]interface{}{
+				"status": map[string]interface{}{"phase": "Active"},
+			}),
+			nil,
+			[]types.WaitForField{{Key: "status..phase", Value: "Active", ValueType: "eq"}},
+			false,
+		},
+		{
+			// Misspelled or unknown value_type should also not
+			// abort. Schema validators usually catch this at
+			// plan time; if a typo slips through (older binary,
+			// future-added type), surface a WARN every event.
+			"unknown value_type WARNs and skips",
+			makeManifest(map[string]interface{}{
+				"status": map[string]interface{}{"phase": "Active"},
+			}),
+			nil,
+			[]types.WaitForField{{Key: "status.phase", Value: "Active", ValueType: "equals"}},
+			false,
+		},
+		{
+			// Explicit JSON null at the path: post-c77b9f9 the
+			// value flows through stringifyValue as the empty
+			// string, so a user can match the cleared state via
+			// value = "". Previously the `!found || v == nil`
+			// guard skipped this case entirely.
+			"explicit-null at path matches value=\"\"",
+			makeManifest(map[string]interface{}{
+				"status": map[string]interface{}{"lastScheduleTime": nil},
+			}),
+			nil,
+			[]types.WaitForField{{Key: "status.lastScheduleTime", Value: "", ValueType: "eq"}},
+			true,
+		},
+		{
+			// Large integer-valued numeric field must NOT render
+			// in scientific notation. Pre-c77b9f9 the value
+			// stringified as "1e+07" and never matched.
+			"large integer-valued field eq match (no scientific notation)",
+			makeManifest(map[string]interface{}{
+				"status": map[string]interface{}{"observedGeneration": float64(10000000)},
+			}),
+			nil,
+			[]types.WaitForField{{Key: "status.observedGeneration", Value: "10000000", ValueType: "eq"}},
+			true,
+		},
+		{
+			"bracket-form key with dots in the key",
+			makeManifest(map[string]interface{}{
+				"metadata": map[string]interface{}{
+					"labels": map[string]interface{}{
+						"app.kubernetes.io/name": "frontend",
+					},
+				},
+			}),
+			nil,
+			[]types.WaitForField{{
+				Key:       `metadata.labels["app.kubernetes.io/name"]`,
+				Value:     "frontend",
+				ValueType: "eq",
+			}},
+			true,
+		},
 	}
 
 	for _, tc := range cases {
@@ -338,6 +409,103 @@ func TestMatchesWaitConditions_TableDriven(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Errorf("matchesWaitConditions = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMatchStatusCondition directly exercises the helper used by
+// the waitConditions loop. matchesWaitConditions exercises it
+// implicitly; this test pins the not-found, not-an-array, missing-
+// field, and exact-match-of-many cases that the table above does
+// not cover.
+func TestMatchStatusCondition(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		doc        interface{}
+		wantType   string
+		wantStatus string
+		expect     bool
+	}{
+		{
+			"match found among many",
+			map[string]interface{}{
+				"status": map[string]interface{}{
+					"conditions": []interface{}{
+						map[string]interface{}{"type": "Progressing", "status": "False"},
+						map[string]interface{}{"type": "Ready", "status": "True"},
+						map[string]interface{}{"type": "Synced", "status": "True"},
+					},
+				},
+			},
+			"Ready", "True", true,
+		},
+		{
+			"status mismatch among matching type",
+			map[string]interface{}{
+				"status": map[string]interface{}{
+					"conditions": []interface{}{
+						map[string]interface{}{"type": "Ready", "status": "False"},
+					},
+				},
+			},
+			"Ready", "True", false,
+		},
+		{
+			"status.conditions missing entirely",
+			map[string]interface{}{
+				"status": map[string]interface{}{"phase": "Pending"},
+			},
+			"Ready", "True", false,
+		},
+		{
+			"status.conditions is not an array",
+			map[string]interface{}{
+				"status": map[string]interface{}{
+					"conditions": "broken",
+				},
+			},
+			"Ready", "True", false,
+		},
+		{
+			"condition entry missing type or status field is skipped",
+			map[string]interface{}{
+				"status": map[string]interface{}{
+					"conditions": []interface{}{
+						map[string]interface{}{"reason": "PartialEntry"},
+						map[string]interface{}{"type": "Ready", "status": "True"},
+					},
+				},
+			},
+			"Ready", "True", true,
+		},
+		{
+			"non-map element in conditions slice is skipped",
+			map[string]interface{}{
+				"status": map[string]interface{}{
+					"conditions": []interface{}{
+						"not-a-condition",
+						map[string]interface{}{"type": "Ready", "status": "True"},
+					},
+				},
+			},
+			"Ready", "True", true,
+		},
+		{
+			"empty document",
+			map[string]interface{}{},
+			"Ready", "True", false,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := matchStatusCondition(tc.doc, tc.wantType, tc.wantStatus)
+			if got != tc.expect {
+				t.Errorf("matchStatusCondition(%v, %q, %q) = %v, want %v",
+					tc.doc, tc.wantType, tc.wantStatus, got, tc.expect)
 			}
 		})
 	}
