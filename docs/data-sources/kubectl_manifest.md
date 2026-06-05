@@ -156,6 +156,71 @@ The value is still written to `terraform.tfstate` in cleartext. If state-persist
 
     Each path must resolve; missing paths produce an error naming the offending key. Scalar values are returned as their natural string form; objects and arrays are JSON-encoded so callers can `jsondecode()` to recover structure.
 
+* `wait_for` - **(Optional)** Block. If set, the read blocks until the target object exists and any supplied predicates match, or until `timeouts.read` elapses. See [Wait for the object to exist](#wait-for-the-object-to-exist).
+
+* `timeouts` - **(Optional)** Block. Honoured only when `wait_for` is set. Supports a single attribute `read` (Go duration string, default `5m`).
+
+## Wait for the object to exist
+
+By default, reading an object that does not exist fails immediately with an error. When the object is created by another controller in the same plan/apply (e.g. an Operator that materialises a `Secret` after a CRD is applied), set `wait_for` to block the read until the object exists and any supplied predicates are satisfied.
+
+The block mirrors the `kubectl_manifest` resource's `wait_for` shape so users have one mental model across resource / data source / ephemeral. Inside the block:
+
+* `field` blocks compare a dot-and-bracket path value against a literal. Use `value_type = "regex"` for regex match; the default is `eq`.
+* `condition` blocks match `status.conditions[type=X, status=Y]` entries, the standard Kubernetes "Ready / Available / Synced" pattern.
+
+A bare `wait_for {}` block with no nested children waits only for the object to exist; predicates make the wait stricter.
+
+```hcl
+data "kubectl_manifest" "cert_tls" {
+  api_version = "v1"
+  kind        = "Secret"
+  name        = "wildcard-tls"
+  namespace   = "ingress"
+
+  # Block until cert-manager has materialised the Secret AND the
+  # parent Certificate's Ready condition is true.
+  wait_for {
+    field {
+      key   = "type"
+      value = "kubernetes.io/tls"
+    }
+  }
+
+  timeouts {
+    read = "10m"
+  }
+}
+
+output "tls_crt_pem" {
+  value     = base64decode(data.kubectl_manifest.cert_tls.results["crt"])
+  sensitive = true
+}
+```
+
+```hcl
+data "kubectl_manifest" "argo_app" {
+  api_version = "argoproj.io/v1alpha1"
+  kind        = "Application"
+  name        = "platform-bootstrap"
+  namespace   = "argocd"
+
+  # Wait until Argo CD reports both Synced=True and Healthy=True.
+  wait_for {
+    condition {
+      type   = "Synced"
+      status = "True"
+    }
+    condition {
+      type   = "Healthy"
+      status = "True"
+    }
+  }
+}
+```
+
+Internally the helper runs a poll-then-watch hybrid: a short polling loop (1s initial, capped at 10s) until the apiserver returns the object, then a watch with field-selector on the resource name driven by the existing `wait_for` predicate engine. Conditions and fields are re-evaluated on each Added / Modified event. RBAC: the data source's service account must hold `get` and `watch` on the target kind for the wait to succeed.
+
 ## Attribute Reference
 
 * `yaml` - The fetched object serialised as YAML.
@@ -165,6 +230,6 @@ The value is still written to `terraform.tfstate` in cleartext. If state-persist
 
 ## Notes
 
-* If the requested object does not exist on the cluster, the data source fails with an error. (Convention shared with `data "kubernetes_secret"` in `terraform-provider-kubernetes`.)
+* If the requested object does not exist on the cluster AND `wait_for` is unset, the data source fails immediately. With `wait_for` set, the read blocks until the object exists or `timeouts.read` elapses.
 * If `fields` declares a path that does not resolve, the read fails with an error naming the offending key. There is no per-field "lenient" mode today.
 * `kind` is matched as-supplied — `Deployment` works, `deployment` does not. Match the actual Kubernetes object Kind exactly.

@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework-timeouts/ephemeral/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral/schema"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/alekc/terraform-provider-kubectl/kubernetes"
@@ -39,24 +42,28 @@ type manifestEphemeralModel struct {
 	Name       types.String `tfsdk:"name"`
 	Namespace  types.String `tfsdk:"namespace"`
 	Fields     types.Map    `tfsdk:"fields"`
+	WaitFor    types.List   `tfsdk:"wait_for"`
 
-	YAML    types.String `tfsdk:"yaml"`
-	JSON    types.String `tfsdk:"json"`
-	UID     types.String `tfsdk:"uid"`
-	Results types.Map    `tfsdk:"results"`
+	YAML     types.String   `tfsdk:"yaml"`
+	JSON     types.String   `tfsdk:"json"`
+	UID      types.String   `tfsdk:"uid"`
+	Results  types.Map      `tfsdk:"results"`
+	Timeouts timeouts.Value `tfsdk:"timeouts"`
 }
 
 func (r *manifestEphemeralResource) Metadata(_ context.Context, req ephemeral.MetadataRequest, resp *ephemeral.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_manifest"
 }
 
-func (r *manifestEphemeralResource) Schema(_ context.Context, _ ephemeral.SchemaRequest, resp *ephemeral.SchemaResponse) {
+func (r *manifestEphemeralResource) Schema(ctx context.Context, _ ephemeral.SchemaRequest, resp *ephemeral.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Description: "Reads a single Kubernetes object from the cluster by apiVersion + kind + name (+ namespace) " +
 			"and optionally extracts user-supplied fields by dot-path. Values produced by this ephemeral " +
 			"resource are never persisted to Terraform state and can only be referenced during apply " +
 			"(via write-only attributes on other resources, check blocks, or provisioners). " +
-			"For state-persisting reads see the `kubectl_manifest` data source.",
+			"For state-persisting reads see the `kubectl_manifest` data source. " +
+			"When `wait_for` is set, the open blocks until the object exists AND any supplied predicates " +
+			"match, bounded by `timeouts.open` (default 5m). See issue #179.",
 		Attributes: map[string]schema.Attribute{
 			"api_version": schema.StringAttribute{
 				Required:    true,
@@ -103,6 +110,56 @@ func (r *manifestEphemeralResource) Schema(_ context.Context, _ ephemeral.Schema
 					"Scalar values are stringified; objects and arrays are JSON-encoded.",
 			},
 		},
+		Blocks: map[string]schema.Block{
+			"wait_for": schema.ListNestedBlock{
+				Description: "Block the open until the target object exists and any supplied predicates match. " +
+					"Same shape as the `kubectl_manifest` data source's `wait_for` block; see those docs.",
+				Validators: []validator.List{
+					listvalidator.SizeAtMost(1),
+				},
+				NestedObject: schema.NestedBlockObject{
+					Blocks: map[string]schema.Block{
+						"condition": schema.ListNestedBlock{
+							NestedObject: schema.NestedBlockObject{
+								Attributes: map[string]schema.Attribute{
+									"type": schema.StringAttribute{
+										Required:    true,
+										Description: "The .status.conditions[].type to match.",
+									},
+									"status": schema.StringAttribute{
+										Required:    true,
+										Description: "The .status.conditions[].status value to wait for (typically `True`).",
+									},
+								},
+							},
+						},
+						"field": schema.ListNestedBlock{
+							NestedObject: schema.NestedBlockObject{
+								Attributes: map[string]schema.Attribute{
+									"key": schema.StringAttribute{
+										Required:    true,
+										Description: "Dot-and-bracket path into the live object.",
+									},
+									"value": schema.StringAttribute{
+										Required:    true,
+										Description: "Expected value at `key`. Compared as a string.",
+									},
+									"value_type": schema.StringAttribute{
+										Optional:    true,
+										Computed:    true,
+										Description: "How to compare `value`: `eq` (default) or `regex`.",
+										Validators: []validator.String{
+											stringOneOfValidator{allowed: []string{"eq", "regex"}},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			"timeouts": timeouts.Block(ctx),
+		},
 	}
 }
 
@@ -146,13 +203,65 @@ func (r *manifestEphemeralResource) Open(ctx context.Context, req ephemeral.Open
 		fields = raw
 	}
 
+	apiVersion := data.APIVersion.ValueString()
+	kind := data.Kind.ValueString()
+	name := data.Name.ValueString()
+	namespace := data.Namespace.ValueString()
+
+	// wait_for: optional pre-fetch block. Mirrors the data
+	// source's behaviour so users have one mental model across
+	// `data.kubectl_manifest` and `ephemeral.kubectl_manifest`.
+	// The timeouts.open attribute bounds both phases (existence
+	// poll + condition watch) of the helper.
+	if !data.WaitFor.IsNull() && !data.WaitFor.IsUnknown() {
+		waitFor, waitDiags := extractWaitForBlock(ctx, data.WaitFor, waitForSurfaceEphemeral)
+		resp.Diagnostics.Append(waitDiags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		timeout, timeoutDiags := data.Timeouts.Open(ctx, kubernetes.DefaultManifestWaitTimeout)
+		resp.Diagnostics.Append(timeoutDiags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		// Defence-in-depth coercion. The plugin-framework
+		// timeouts package parses durations during Config decode
+		// and rejects non-positive literals at plan time, so under
+		// normal use this branch is unreachable. We keep it (and
+		// degrade to the package default with a warning instead of
+		// hard-failing) so a future schema regression or a caller
+		// that constructs Timeouts programmatically cannot
+		// silently feed an already-cancelled context to Phase A.
+		// Not unit-tested because the only way to drive it from a
+		// public entry point is to bypass the validator, which a
+		// future reader should NOT do just to satisfy coverage.
+		if timeout <= 0 {
+			resp.Diagnostics.AddWarning(
+				"kubectl_manifest ephemeral: non-positive timeouts.open, using default",
+				fmt.Sprintf("timeouts.open = %v is not a valid wait duration; falling back to %v.", timeout, kubernetes.DefaultManifestWaitTimeout),
+			)
+			timeout = kubernetes.DefaultManifestWaitTimeout
+		}
+		if err := kubernetes.WaitForManifest(ctx, r.kubeProvider, kubernetes.WaitForManifestOptions{
+			APIVersion: apiVersion,
+			Kind:       kind,
+			Name:       name,
+			Namespace:  namespace,
+			WaitFor:    waitFor,
+			Timeout:    timeout,
+		}); err != nil {
+			resp.Diagnostics.AddError("kubectl_manifest ephemeral: wait_for did not complete", err.Error())
+			return
+		}
+	}
+
 	result, err := kubernetes.FetchManifest(
 		ctx,
 		r.kubeProvider,
-		data.APIVersion.ValueString(),
-		data.Kind.ValueString(),
-		data.Name.ValueString(),
-		data.Namespace.ValueString(),
+		apiVersion,
+		kind,
+		name,
+		namespace,
 		fields,
 	)
 	if err != nil {
@@ -176,3 +285,4 @@ func (r *manifestEphemeralResource) Open(ctx context.Context, req ephemeral.Open
 
 	resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 }
+
