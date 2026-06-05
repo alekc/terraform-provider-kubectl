@@ -1,6 +1,10 @@
 # ADR 0001 - Framework migration and `moved {}` block support
 
-- **Status**: Proposed (2026-05-20). Phase A of execution; gated by phase-by-phase merges.
+- **Status**: Accepted (2026-05-20), implemented and shipping in v3.0.0. The
+  provider is now framework-only (SDK v2 + mux removed) and native
+  cross-provider `moved {}` from `gavinbunney/kubectl` is live and covered by
+  the cross-provider upgrade smoke. The phase plan below is retained as the
+  historical execution record; all phases have landed.
 - **Tracking issue**: [#123](https://github.com/alekc/terraform-provider-kubectl/issues/123)
 - **Milestone**: [v3.0.0 - framework migration](https://github.com/alekc/terraform-provider-kubectl/milestone/1)
 - **Authors**: alekc

@@ -23,6 +23,38 @@ This `terraform-provider-kubectl` provider has been originally forked from `gavi
 | Data source        | [`kubectl_path_documents`](./data-sources/kubectl_path_documents.md)       | Glob a directory and split every matched file into individual documents.                             |
 | Ephemeral resource | [`kubectl_manifest`](./ephemeral-resources/kubectl_manifest.md)            | Same shape as the data source, but the fetched value is **never written to state**. Terraform 1.10+. |
 
+## Upgrading from v2 to v3
+
+v3 ports the provider from the Terraform SDK v2 to the plugin framework and is
+framework-only (the SDK v2 + mux server is gone). Existing `alekc/kubectl` state
+migrates automatically through resource state upgraders, no `terraform state`
+surgery is required, but a few attribute and behaviour contracts tightened.
+Review the per-resource notes before upgrading:
+
+- **`kubectl_manifest` drift attributes**: the opaque `yaml_incluster` and
+  `live_manifest_incluster` fingerprints are replaced by the readable `drift`
+  attribute. State migrates automatically; only HCL that referenced the old
+  fingerprints needs a one-line change. See
+  [Migration from v2](./resources/kubectl_manifest.md#migration-from-v2-yaml_incluster).
+- **`kubectl_server_version` triggers**: `triggers` is now `map(string)`.
+  Wrap non-string values with `tostring()`. See
+  [Upgrading from v2](./resources/kubectl_server_version.md#upgrading-from-v2).
+- **`kubectl_filename_list` id**: the `id` hash format changed, so the id
+  rotates once on the first post-upgrade plan. Invisible churn unless you wired
+  `id` into a downstream `triggers` map. See
+  [Upgrading from v2](./data-sources/kubectl_filename_list.md#upgrading-from-v2).
+
+### Migrating from `gavinbunney/kubectl`
+
+v3 implements native cross-provider state move for `kubectl_manifest`, so users
+coming from `gavinbunney/kubectl` can migrate in place with a `moved {}` block
+during a normal `plan` / `apply`, no `terraform state replace-provider` dance
+and no resource churn. Terraform rejects `moved` blocks whose `from` and `to`
+addresses are identical even when the provider differs, so the migration uses a
+rename-and-rename-back pattern. The full recipe is in the
+[README "Migrating from gavinbunney/kubectl"](https://github.com/alekc/terraform-provider-kubectl#migrating-from-gavinbunneykubectl)
+section.
+
 ## Installation
 
 ### Terraform 0.13+
@@ -36,7 +68,7 @@ terraform {
   required_providers {
     kubectl = {
       source  = "alekc/kubectl"
-      version = ">= 2.0.0"
+      version = ">= 3.0.0"
     }
   }
 }
