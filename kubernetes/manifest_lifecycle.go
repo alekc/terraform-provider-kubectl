@@ -101,6 +101,73 @@ type ApplyManifestResult struct {
 	Drift string
 }
 
+// Apply-retry backoff tuning. InitialInterval is the first inter-retry
+// sleep; MaxInterval is the hard ceiling (see newApplyBackoff for why it
+// is hard rather than jittered). Named so the docs and the unit tests
+// reference one source of truth rather than re-stating the literals.
+const (
+	applyRetryInitialInterval = 3 * time.Second
+	applyRetryMaxInterval     = 30 * time.Second
+)
+
+// newApplyBackoff builds the exponential backoff used between apply
+// retries. Two deliberate deviations from the library defaults:
+//
+//   - RandomizationFactor = 0 makes MaxInterval a hard ceiling. The
+//     default 0.5 jitter is applied AFTER MaxInterval clamps the base
+//     interval, so NextBackOff could otherwise return up to 1.5 *
+//     MaxInterval; users tuning apply_retry_count expect the documented
+//     30s ceiling to actually hold.
+//   - MaxElapsedTime = 0 disables the wall-clock stop condition so the
+//     WithMaxRetries wrapper is the sole loop bound. The default 15m
+//     would silently truncate retries on slow clusters with large N.
+func newApplyBackoff() *backoff.ExponentialBackOff {
+	exp := backoff.NewExponentialBackOff()
+	exp.InitialInterval = applyRetryInitialInterval
+	exp.MaxInterval = applyRetryMaxInterval
+	exp.RandomizationFactor = 0
+	exp.MaxElapsedTime = 0
+	return exp
+}
+
+// runWithApplyRetry runs op subject to the apply retry policy. When
+// retryCount == 0 it runs op exactly once with no backoff wrapper (issue
+// #228: avoid double-spending the rate-limit budget when retry is not
+// wanted). When retryCount > 0 it wraps op in exponential backoff bounded
+// by retryCount ADDITIONAL attempts (so worst case is retryCount + 1
+// total runs) and cancellable via ctx, so a Ctrl-C / resource timeout /
+// plan abort interrupts the inter-retry sleep instead of waiting out the
+// full backoff window.
+//
+// Extracted from ApplyManifest so the retry control flow (single-shot
+// short-circuit, attempt bound, ctx-cancel during sleep, 30s ceiling) is
+// unit-testable without a cluster: op is any func() error.
+func runWithApplyRetry(ctx context.Context, retryCount uint64, op func() error) error {
+	return runWithApplyRetryPolicy(ctx, retryCount, newApplyBackoff(), op)
+}
+
+// runWithApplyRetryPolicy is the testable core of runWithApplyRetry. It
+// takes the base backoff explicitly so unit tests can inject a
+// zero-interval policy and exercise the attempt bound and ctx-cancel
+// behaviour without sleeping for the production 3s..30s intervals. The
+// base argument is ignored when retryCount == 0 (single-shot path).
+func runWithApplyRetryPolicy(ctx context.Context, retryCount uint64, base backoff.BackOff, op func() error) error {
+	if retryCount == 0 {
+		return op()
+	}
+	policy := backoff.WithContext(
+		backoff.WithMaxRetries(base, retryCount),
+		ctx,
+	)
+	return backoff.Retry(func() error {
+		if err := op(); err != nil {
+			log.Printf("[ERROR] applying manifest failed: %+v", err)
+			return err
+		}
+		return nil
+	}, policy)
+}
+
 // ApplyManifest runs `kubectl apply` against the given manifest, optionally
 // waits for rollout / user-supplied conditions, and returns the final state
 // the caller should persist.
@@ -217,45 +284,11 @@ func ApplyManifest(ctx context.Context, provider *KubeProvider, opts ApplyManife
 		return nil
 	}
 
-	if provider.ApplyRetryCount == 0 {
-		if err := applyAndFetch(); err != nil {
-			return nil, err
-		}
-	} else {
-		exp := backoff.NewExponentialBackOff()
-		exp.InitialInterval = 3 * time.Second
-		exp.MaxInterval = 30 * time.Second
-		// RandomizationFactor = 0 makes MaxInterval a hard ceiling.
-		// Default 0.5 jitter is applied after MaxInterval clamps the
-		// base interval, so NextBackOff can return up to 1.5 *
-		// MaxInterval; users tuning apply_retry_count expect the
-		// documented 30s ceiling to actually hold.
-		exp.RandomizationFactor = 0
-		// MaxElapsedTime = 0 disables the wall-clock stop condition so
-		// WithMaxRetries below is the only thing bounding the loop.
-		// Default 15 minutes would silently truncate retries on slow
-		// clusters with large N.
-		exp.MaxElapsedTime = 0
-		// WithContext makes a cancelled ctx (Ctrl-C, resource timeout,
-		// parent plan abort) interrupt the inter-retry sleep instead
-		// of waiting out the full backoff window. Without this wrap,
-		// backoff.Retry's internal getContext falls back to
-		// context.Background() and a user who hits Ctrl-C during a
-		// 30s backoff would hang for the remainder of that sleep.
-		policy := backoff.WithContext(
-			backoff.WithMaxRetries(exp, provider.ApplyRetryCount),
-			ctx,
-		)
-		retryErr := backoff.Retry(func() error {
-			if err := applyAndFetch(); err != nil {
-				log.Printf("[ERROR] applying manifest failed: %+v", err)
-				return err
-			}
-			return nil
-		}, policy)
-		if retryErr != nil {
-			return nil, retryErr
-		}
+	// Retry orchestration (single-shot vs bounded exponential backoff,
+	// ctx-cancellable) lives in runWithApplyRetry so it is unit-testable
+	// without a cluster. applyAndFetch is the per-attempt operation.
+	if err := runWithApplyRetry(ctx, provider.ApplyRetryCount, applyAndFetch); err != nil {
+		return nil, err
 	}
 	response := yaml.NewFromUnstructured(rawResponse)
 
