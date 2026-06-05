@@ -57,13 +57,17 @@ section.
 
 ## Installation
 
-### Terraform 0.13+
+### Terraform 1.0+
+
+v3 is built on the Terraform plugin framework and serves plugin protocol 6.0
+only, so it requires Terraform 1.0+ (or a protocol-6 capable OpenTofu). On v2.x,
+which still served protocol 5.0, older Terraform works.
 
 The provider can be installed and managed automatically by Terraform. Sample `versions.tf` file :
 
 ```hcl
 terraform {
-  required_version = ">= 0.13"
+  required_version = ">= 1.0"
 
   required_providers {
     kubectl = {

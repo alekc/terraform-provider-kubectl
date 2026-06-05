@@ -51,7 +51,7 @@ The versions in the tables are the snapshot resolved at the time of writing; the
 
 ## Installation
 
-### Terraform 0.13+
+### Terraform 1.0+
 
 The provider can be installed and managed automatically by Terraform. Sample `versions.tf` file:
 
@@ -62,13 +62,13 @@ terraform {
   required_providers {
     kubectl = {
       source  = "alekc/kubectl"
-      version = "~> 2.3"
+      version = "~> 3.0"
     }
   }
 }
 ```
 
-The provider itself works back to Terraform 0.13. The example above pins `>= 1.0` because most users will be on a supported Terraform release; if you need to run older Terraform, you can drop the constraint to `>= 0.13`.
+v3 is built on the Terraform plugin framework and serves plugin protocol 6.0 only, so it requires Terraform 1.0+ (or a protocol-6 capable OpenTofu). If you must run older Terraform (0.13 to 0.15), stay on the v2.x line, which still serves protocol 5.0.
 
 If your configuration uses the `ephemeral "kubectl_manifest"` block (covered below), the floor moves up to **Terraform 1.10**, because ephemeral resources are a 1.10+ language feature regardless of the provider version. Bump `required_version` to `">= 1.10"` in that case.
 
