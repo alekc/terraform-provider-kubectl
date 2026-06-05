@@ -403,7 +403,12 @@ data "kubectl_manifest" "wait" {
 		Steps: []resource.TestStep{
 			{
 				Config:      cfg,
-				ExpectError: regexp.MustCompile(`did not exist within the wait timeout`),
+				// Terraform's diagnostic renderer hard-wraps long
+			// lines, so the literal phrase "did not exist within
+			// the wait timeout" gets split across two lines. Use
+			// a tolerant whitespace class so the regex matches
+			// both the wrapped and the unwrapped form.
+			ExpectError: regexp.MustCompile(`did not exist within the wait\s+timeout`),
 			},
 		},
 	})
