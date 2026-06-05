@@ -50,3 +50,11 @@ signs:
 release:
   draft: false
   prerelease: auto
+  # Upload the Terraform Registry manifest as a release asset. The
+  # registry reads metadata.protocol_versions from this file to learn the
+  # provider speaks plugin protocol 6.0 (terraform-plugin-framework). v3
+  # is framework-only, so without this asset the registry would fall back
+  # to advertising protocol 5.0 and mis-resolve for old Terraform clients.
+  extra_files:
+    - glob: terraform-registry-manifest.json
+      name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
