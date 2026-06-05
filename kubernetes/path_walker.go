@@ -230,12 +230,42 @@ func parseBracketSegment(path string, i int) (pathSegment, int, error) {
 	if body == "" {
 		return pathSegment{}, 0, fmt.Errorf("empty bracket segment in path %q at position %d", path, i)
 	}
-	if _, err := strconv.Atoi(body); err == nil {
-		// Pure-integer body. Tag the segment so ExtractByPath can
-		// reject `[N]` against a map node as a type mismatch.
+	// Anything that LOOKS numeric (starts with a digit or a sign)
+	// must match the strict unsigned-integer form. Signed forms
+	// `[+1]` / `[-1]` are not valid: negative indices have no
+	// meaning against `[]interface{}`, and a `+`-prefixed index is
+	// a foot-gun for anyone expecting a signed offset. strconv.Atoi
+	// would silently accept them. Mixed forms like `[1foo]` are
+	// also rejected. Users who genuinely want a literal map key
+	// that starts with a digit or sign must reach for the quoted
+	// form `["1foo"]` / `["+1"]`.
+	if body[0] == '+' || body[0] == '-' || (body[0] >= '0' && body[0] <= '9') {
+		if !isASCIIDigits(body) {
+			return pathSegment{}, 0, fmt.Errorf("invalid numeric bracket segment %q in path %q at position %d (only unsigned digits allowed; use quoted form for literal keys)", body, path, i)
+		}
+		// Pure unsigned-integer body. Tag the segment so
+		// ExtractByPath can reject `[N]` against a map as a type
+		// mismatch rather than silently looking up the literal
+		// string key "N".
 		return pathSegment{key: body, bracketedIndex: true}, j + 1, nil
 	}
 	return pathSegment{key: body}, j + 1, nil
+}
+
+// isASCIIDigits reports whether s is non-empty and consists only of
+// the bytes '0'-'9'. Used as a strict pre-check before tagging a
+// bracket body as a numeric index.
+func isASCIIDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // segmentToIndex returns the integer index implied by a segment

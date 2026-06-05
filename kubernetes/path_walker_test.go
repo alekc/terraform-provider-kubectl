@@ -210,6 +210,19 @@ func TestExtractByPath_MalformedPaths(t *testing.T) {
 		"x[0]y",
 		`x["k"]y`,
 		`x['k']more`,
+		// Numeric-looking bracket bodies must be strict unsigned
+		// digits. strconv.Atoi happily accepts signed forms and
+		// would mask a foot-gun where the user expects a signed
+		// offset (it isn't), so we reject at parse time. Anyone
+		// who genuinely wants a literal map key with a leading
+		// sign must use the quoted form `["+1"]`.
+		"x[+1]",
+		"x[-1]",
+		// Mixed numeric-then-identifier bodies are also rejected
+		// rather than silently treated as bare identifiers
+		// (which would mask a typo for a real index).
+		"x[1foo]",
+		"x[0x10]",
 	}
 	for _, p := range cases {
 		p := p
