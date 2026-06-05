@@ -246,3 +246,170 @@ data "kubectl_manifest" "ns" {
 		},
 	})
 }
+
+// TestAccKubectlDataSourceManifest_WaitForExistence exercises the
+// wait_for block in its simplest shape: an empty block that asks
+// the data source to wait for the object to exist before reading.
+// Pairs the data source against a kubectl_manifest resource via
+// depends_on so the dependency order is deterministic; the
+// existence-poll phase still has to fire because the resource
+// completes before the data source starts.
+//
+// Real-world value: the same shape works for a Secret a controller
+// will create asynchronously, an Argo CD Application whose
+// status.conditions converge after sync, etc. This test pins the
+// schema wiring and end-to-end flow; the kubernetes package's
+// wait_for_manifest_test.go covers the helper's branching.
+//
+// Issue #179.
+func TestAccKubectlDataSourceManifest_WaitForExistence(t *testing.T) {
+	t.Parallel()
+	name := fmt.Sprintf("acc-wait-cm-%s", acctest.RandString(8))
+	cfg := fmt.Sprintf(`
+resource "kubectl_manifest" "seed" {
+  yaml_body = <<YAML
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: %s
+  namespace: default
+data:
+  ready: "yes"
+YAML
+}
+
+data "kubectl_manifest" "wait" {
+  depends_on  = [kubectl_manifest.seed]
+  api_version = "v1"
+  kind        = "ConfigMap"
+  name        = "%s"
+  namespace   = "default"
+
+  wait_for {}
+
+  timeouts {
+    read = "30s"
+  }
+
+  fields = {
+    ready = "data.ready"
+  }
+}
+`, name, name)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckkubectlDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: cfg,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("data.kubectl_manifest.wait", "results.ready", "yes"),
+					resource.TestCheckResourceAttrSet("data.kubectl_manifest.wait", "uid"),
+				),
+			},
+		},
+	})
+}
+
+// TestAccKubectlDataSourceManifest_WaitForField exercises the
+// `field` predicate inside `wait_for`: the data source must
+// observe a specific scalar value on the object before returning.
+// Uses an eq comparison on a stable ConfigMap key so the test
+// runs deterministically.
+//
+// Issue #179.
+func TestAccKubectlDataSourceManifest_WaitForField(t *testing.T) {
+	t.Parallel()
+	name := fmt.Sprintf("acc-wait-field-%s", acctest.RandString(8))
+	cfg := fmt.Sprintf(`
+resource "kubectl_manifest" "seed" {
+  yaml_body = <<YAML
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: %s
+  namespace: default
+data:
+  phase: "Ready"
+YAML
+}
+
+data "kubectl_manifest" "wait" {
+  depends_on  = [kubectl_manifest.seed]
+  api_version = "v1"
+  kind        = "ConfigMap"
+  name        = "%s"
+  namespace   = "default"
+
+  wait_for {
+    field {
+      key   = "data.phase"
+      value = "Ready"
+    }
+  }
+
+  timeouts {
+    read = "30s"
+  }
+}
+`, name, name)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckkubectlDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: cfg,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("data.kubectl_manifest.wait", "kind", "ConfigMap"),
+					resource.TestCheckResourceAttrSet("data.kubectl_manifest.wait", "uid"),
+				),
+			},
+		},
+	})
+}
+
+// TestAccKubectlDataSourceManifest_WaitForTimeout exercises the
+// failure path: a wait against a non-existent object with a very
+// short timeout must return a diagnostic mentioning the wait
+// timing out, NOT a "resource not found" (the latter is what
+// happens without wait_for).
+//
+// Issue #179.
+func TestAccKubectlDataSourceManifest_WaitForTimeout(t *testing.T) {
+	t.Parallel()
+	name := fmt.Sprintf("acc-wait-timeout-%s", acctest.RandString(8))
+	cfg := fmt.Sprintf(`
+data "kubectl_manifest" "wait" {
+  api_version = "v1"
+  kind        = "ConfigMap"
+  name        = "%s"
+  namespace   = "default"
+
+  wait_for {}
+
+  timeouts {
+    read = "2s"
+  }
+}
+`, name)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      cfg,
+				// Terraform's diagnostic renderer hard-wraps long
+			// lines, so the literal phrase "did not exist within
+			// the wait timeout" gets split across two lines. Use
+			// a tolerant whitespace class so the regex matches
+			// both the wrapped and the unwrapped form.
+			ExpectError: regexp.MustCompile(`did not exist within the wait\s+timeout`),
+			},
+		},
+	})
+}

@@ -335,3 +335,175 @@ check "consumed" {
 		},
 	})
 }
+
+// TestAccKubectlEphemeralManifest_WaitForExistence pairs the
+// data source acc test by exercising the ephemeral resource's
+// wait_for block end-to-end: an empty wait_for plus a depends_on
+// on the seed resource. The interesting bit is that the
+// ephemeral's `timeouts.open` (not `timeouts.read`) bounds the
+// wait, so this test pins the per-surface attribute name as well
+// as the wiring through to kubernetes.WaitForManifest.
+//
+// Split across two TestSteps for the same reason as
+// TestAccKubectlEphemeralManifest_namespacedConfigMap: Terraform
+// evaluates ephemeral resources at pre-apply plan time even when
+// depends_on points at a managed resource being created in the
+// same step, so a single-step config would have the ephemeral's
+// wait_for poll for an object that the apply has not yet created.
+//
+// Issue #179.
+func TestAccKubectlEphemeralManifest_WaitForExistence(t *testing.T) {
+	t.Parallel()
+	skipIfOpenTofu(t)
+	name := fmt.Sprintf("acc-eph-wait-%s", acctest.RandString(8))
+	seedCfg := fmt.Sprintf(`
+resource "kubectl_manifest" "seed" {
+  yaml_body = <<YAML
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: %s
+  namespace: default
+data:
+  ready: "yes"
+YAML
+}
+`, name)
+	readCfg := seedCfg + fmt.Sprintf(`
+ephemeral "kubectl_manifest" "cm" {
+  depends_on  = [kubectl_manifest.seed]
+  api_version = "v1"
+  kind        = "ConfigMap"
+  name        = %q
+  namespace   = "default"
+
+  wait_for {}
+
+  timeouts {
+    open = "30s"
+  }
+
+  fields = {
+    ready = "data.ready"
+  }
+}
+
+check "wait_succeeded" {
+  assert {
+    condition     = ephemeral.kubectl_manifest.cm.results["ready"] == "yes"
+    error_message = "ephemeral wait_for did not return the expected ready value"
+  }
+}
+`, name)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() { testAccPreCheck(t) },
+		TerraformVersionChecks: []tfversion.TerraformVersionCheck{
+			tfversion.SkipBelow(tfversion.Version1_10_0),
+		},
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				// Step 1: apply the seed only. The ConfigMap lands
+				// on the cluster.
+				Config: seedCfg,
+			},
+			{
+				// Step 2: ephemeral resolves with the seeded value;
+				// wait_for sees the object on the first Phase A Get
+				// because the seed exists from step 1.
+				Config: readCfg,
+				ConfigStateChecks: []statecheck.StateCheck{
+					ephemeralNotInState{addressPrefix: "ephemeral.kubectl_manifest.cm"},
+				},
+			},
+		},
+	})
+}
+
+// TestAccKubectlEphemeralManifest_WaitForField mirrors the data
+// source's wait_for-with-field test on the ephemeral surface: it
+// exercises Phase B (the predicate watch) end-to-end so a future
+// refactor of the shared kubernetes.WaitForManifest helper that
+// regresses field-path evaluation surfaces a failure on the
+// ephemeral path too, not just the data source.
+//
+// We seed a ConfigMap with data.region=eu-west-1, then open the
+// ephemeral with wait_for.field { key="data.region" value="eu-west-1" }.
+// The wait must complete promptly (the seed lands in step 1 before
+// the ephemeral plans in step 2) and the consumed value must equal
+// what was seeded.
+//
+// Issue #179.
+func TestAccKubectlEphemeralManifest_WaitForField(t *testing.T) {
+	t.Parallel()
+	skipIfOpenTofu(t)
+	name := fmt.Sprintf("acc-eph-wait-field-%s", acctest.RandString(8))
+	seedCfg := fmt.Sprintf(`
+resource "kubectl_manifest" "seed" {
+  yaml_body = <<YAML
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: %s
+  namespace: default
+data:
+  region: eu-west-1
+YAML
+}
+`, name)
+	readCfg := seedCfg + fmt.Sprintf(`
+ephemeral "kubectl_manifest" "cm" {
+  depends_on  = [kubectl_manifest.seed]
+  api_version = "v1"
+  kind        = "ConfigMap"
+  name        = %q
+  namespace   = "default"
+
+  wait_for {
+    field {
+      key   = "data.region"
+      value = "eu-west-1"
+    }
+  }
+
+  timeouts {
+    open = "30s"
+  }
+
+  fields = {
+    region = "data.region"
+  }
+}
+
+check "field_match" {
+  assert {
+    condition     = ephemeral.kubectl_manifest.cm.results["region"] == "eu-west-1"
+    error_message = "ephemeral wait_for field predicate did not return the expected region"
+  }
+}
+`, name)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() { testAccPreCheck(t) },
+		TerraformVersionChecks: []tfversion.TerraformVersionCheck{
+			tfversion.SkipBelow(tfversion.Version1_10_0),
+		},
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				// Step 1: apply the seed only. The field predicate
+				// can only be evaluated against an existing object,
+				// so we land it before the ephemeral plan.
+				Config: seedCfg,
+			},
+			{
+				// Step 2: ephemeral resolves with the seeded value.
+				Config: readCfg,
+				ConfigStateChecks: []statecheck.StateCheck{
+					ephemeralNotInState{addressPrefix: "ephemeral.kubectl_manifest.cm"},
+				},
+			},
+		},
+	})
+}

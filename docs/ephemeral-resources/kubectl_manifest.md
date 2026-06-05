@@ -62,6 +62,10 @@ Same as the [data source](../data-sources/kubectl_manifest.md):
 * `namespace` - **(Optional)** — leave empty for cluster-scoped kinds.
 * `fields` - **(Optional)** map of named extractions. Same dot-and-bracket path grammar as the data source's `fields` (plain dotted keys, `[N]` for array indices, `["key.with.dots"]` for map keys whose name contains dots or other reserved characters). See the data source's [Argument Reference](../data-sources/kubectl_manifest.md#argument-reference) for the full grammar.
 
+* `wait_for` - **(Optional)** Block. Same shape as the [data source's `wait_for`](../data-sources/kubectl_manifest.md#wait-for-the-object-to-exist): blocks the open until the target object exists and any supplied `field` / `condition` predicates match. Use when reading a Secret a controller hasn't yet materialised, or a CRD whose status fields need to converge before the value is meaningful.
+
+* `timeouts` - **(Optional)** Block. Honoured only when `wait_for` is set. Supports `open` (Go duration string, default `5m`).
+
 ## Attribute Reference
 
 * `yaml` - The fetched object serialised as YAML.
