@@ -115,6 +115,9 @@ func BuildKubeProvider(cfg ProviderConfig, terraformVersion string) (*KubeProvid
 		if parsed < 0 {
 			return nil, fmt.Errorf("KUBECTL_PROVIDER_DISCOVERY_TIMEOUT must be >= 0 (seconds), got %d", parsed)
 		}
+		if int64(parsed) > maxDiscoveryTimeoutSeconds {
+			return nil, fmt.Errorf("KUBECTL_PROVIDER_DISCOVERY_TIMEOUT must be <= %d (seconds), got %d", maxDiscoveryTimeoutSeconds, parsed)
+		}
 		discoveryTimeout = time.Duration(parsed) * time.Second
 	}
 

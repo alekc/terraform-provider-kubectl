@@ -198,6 +198,28 @@ func TestBuildKubeProvider_DiscoveryTimeoutRejectsNegative(t *testing.T) {
 	}
 }
 
+// TestBuildKubeProvider_DiscoveryTimeoutRejectsOverflow guards the int64
+// nanosecond conversion (time.Duration(parsed) * time.Second): a seconds value
+// large enough to overflow time.Duration must be rejected rather than silently
+// wrapping to a negative duration, which discoveryRestConfig would read as "no
+// bound" and quietly disable the timeout.
+func TestBuildKubeProvider_DiscoveryTimeoutRejectsOverflow(t *testing.T) {
+	t.Setenv("KUBECTL_PROVIDER_APPLY_RETRY_COUNT", "")
+	// ~9.999e9 > the ~9.22e9 cap, but still parses as a valid int64.
+	t.Setenv("KUBECTL_PROVIDER_DISCOVERY_TIMEOUT", "9999999999")
+
+	_, err := BuildKubeProvider(ProviderConfig{
+		LoadConfigFile: false,
+		Host:           "http://example.invalid",
+	}, "test")
+	if err == nil {
+		t.Fatalf("expected error on overflowing KUBECTL_PROVIDER_DISCOVERY_TIMEOUT, got nil")
+	}
+	if !strings.Contains(err.Error(), "KUBECTL_PROVIDER_DISCOVERY_TIMEOUT") || !strings.Contains(err.Error(), "<=") {
+		t.Errorf("unexpected diagnostic: %s", err)
+	}
+}
+
 // TestBuildKubeProvider_DiscoveryTimeoutSurfacesParseError pins the fail-early
 // guard for a non-integer value.
 func TestBuildKubeProvider_DiscoveryTimeoutSurfacesParseError(t *testing.T) {

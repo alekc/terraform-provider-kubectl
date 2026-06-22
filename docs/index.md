@@ -245,15 +245,17 @@ historic unbounded behaviour):
 export KUBECTL_PROVIDER_DISCOVERY_TIMEOUT=45
 ```
 
-To find the offending backend, look for APIServices that are not `Available`:
+To find the offending backend, list the APIServices whose `Available` condition
+is not `True`:
 
 ```sh
-kubectl get apiservices | grep -v 'True'
+kubectl get apiservices -o json \
+  | jq -r '.items[] | select(any(.status.conditions[]?; .type == "Available" and .status != "True")) | .metadata.name'
 ```
 
-A `False` entry (commonly a metrics or other aggregated API whose pod is down)
-is the usual cause; fixing or removing that APIService removes the stall at
-the source.
+A non-`Available` entry (commonly a metrics or other aggregated API whose
+backing pod is down) is the usual cause. Fix or remove the backing Service or
+endpoint first; only delete the APIService itself if it is genuinely obsolete.
 
 ## Building from source
 

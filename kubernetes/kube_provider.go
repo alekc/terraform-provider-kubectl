@@ -3,6 +3,7 @@ package kubernetes
 import (
 	"fmt"
 	"log"
+	"math"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -71,6 +72,13 @@ type KubeProvider struct {
 // timer fails the whole read with "timed out fetching resources from discovery
 // client" (issue #344).
 const defaultDiscoveryTimeout = 30 * time.Second
+
+// maxDiscoveryTimeoutSeconds is the largest KUBECTL_PROVIDER_DISCOVERY_TIMEOUT
+// value that still fits in a time.Duration once multiplied by time.Second.
+// Larger values overflow int64 nanoseconds and wrap to a negative duration,
+// which discoveryRestConfig would read as "no bound" and silently disable the
+// timeout. It is ~292 years, so no real configuration loses out.
+const maxDiscoveryTimeoutSeconds = int64(math.MaxInt64 / int64(time.Second))
 
 var _ k8sresource.RESTClientGetter = &KubeProvider{}
 
