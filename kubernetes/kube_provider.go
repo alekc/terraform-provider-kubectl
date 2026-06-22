@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mitchellh/go-homedir"
@@ -13,6 +14,7 @@ import (
 	k8sresource "k8s.io/cli-runtime/pkg/resource"
 	"k8s.io/client-go/discovery"
 	diskcached "k8s.io/client-go/discovery/cached/disk"
+	memcached "k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/kubernetes"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	restclient "k8s.io/client-go/rest"
@@ -30,8 +32,8 @@ import (
 // (ApplyManifest, ReadManifest, etc.) so they can re-use the configured
 // REST config without re-reading kubeconfig.
 type KubeProvider struct {
-	MainClientset       *kubernetes.Clientset
-	RestConfig          restclient.Config
+	MainClientset *kubernetes.Clientset
+	RestConfig    restclient.Config
 	// AggregatorClientset is the interface (not a concrete clientset) so
 	// tests can substitute the upstream fake from
 	// kube-aggregator/.../clientset/fake without faking out the REST
@@ -44,7 +46,31 @@ type KubeProvider struct {
 	// Held per-provider so aliased blocks with different values do not
 	// clobber each other (issue #265).
 	ApplyRetryCount uint64
+
+	// DiscoveryTimeout bounds each discovery HTTP request so a slow or
+	// unhealthy aggregated APIService cannot pin the full discovery
+	// enumeration (issue #344). Sourced from KUBECTL_PROVIDER_DISCOVERY_TIMEOUT
+	// (default defaultDiscoveryTimeout). Zero means "no bound", which is the
+	// historic behaviour and what a directly-constructed KubeProvider (tests)
+	// gets. The bound is applied to a copy of RestConfig used only for
+	// discovery, never the dynamic apply/read client.
+	DiscoveryTimeout time.Duration
+
+	// discoveryOnce memoises the cached discovery client so every resource in
+	// this process shares one in-memory discovery result instead of
+	// re-enumerating the cluster per call. KubeProvider is always used by
+	// pointer, so the embedded sync.Once is never copied.
+	discoveryOnce   sync.Once
+	discoveryClient discovery.CachedDiscoveryInterface
+	discoveryErr    error
 }
+
+// defaultDiscoveryTimeout bounds a single discovery HTTP request. It sits well
+// below the 60s outer timer in getRestClientFromUnstructured so a slow group
+// times out (and is tolerated as a GroupDiscoveryFailedError) before the outer
+// timer fails the whole read with "timed out fetching resources from discovery
+// client" (issue #344).
+const defaultDiscoveryTimeout = 30 * time.Second
 
 var _ k8sresource.RESTClientGetter = &KubeProvider{}
 
@@ -62,18 +88,62 @@ func (p *KubeProvider) ToRESTConfig() (*restclient.Config, error) {
 	return &p.RestConfig, nil
 }
 
-// ToDiscoveryClient returns a disk-cached discovery client scoped to the
-// configured apiserver. The cache directory layout mirrors the kubectl
-// convention (~/.kube/cache/discovery/<hostname>) so concurrent kubectl
-// usage shares the cache.
+// ToDiscoveryClient returns the provider's shared cached discovery client,
+// building it once on first use. Sharing one client across every resource in
+// the process means discovery is enumerated once (the in-memory cache
+// serialises concurrent first-fetches) instead of N parallel resources each
+// re-enumerating the cluster on a cold cache (issue #344). The memoised error
+// is only the construction error, which is deterministic; transient discovery
+// failures are not cached because the HTTP fetch happens later, on the
+// returned client.
 func (p *KubeProvider) ToDiscoveryClient() (discovery.CachedDiscoveryInterface, error) {
+	p.discoveryOnce.Do(func() {
+		p.discoveryClient, p.discoveryErr = p.newCachedDiscoveryClient()
+	})
+	return p.discoveryClient, p.discoveryErr
+}
+
+// newCachedDiscoveryClient builds the two-layer discovery client: a disk-cached
+// client (cross-process, ~/.kube/cache/discovery/<hostname>, mirroring the
+// kubectl convention so concurrent kubectl usage shares the cache) wrapped in
+// an in-memory cache (in-process sharing + concurrent-fetch dedup).
+//
+// The REST config is copied and given a per-request Timeout so a slow or
+// unhealthy aggregated APIService (metrics.k8s.io, custom.metrics,
+// webhook-backed groups) surfaces as a tolerated GroupDiscoveryFailedError
+// instead of pinning the enumeration until the 60s outer timer fails the read
+// (issue #344). The bound is scoped to this copy and never reaches the dynamic
+// apply/read client, which must stay unbounded for long applies and waits. A
+// zero DiscoveryTimeout (directly-constructed KubeProvider) leaves the config
+// timeout untouched, preserving the historic behaviour.
+func (p *KubeProvider) newCachedDiscoveryClient() (discovery.CachedDiscoveryInterface, error) {
 	home, err := homedir.Dir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to determine home directory for discovery cache: %w", err)
 	}
 	httpCacheDir := filepath.Join(home, ".kube", "http-cache")
 	discoveryCacheDir := computeDiscoverCacheDir(filepath.Join(home, ".kube", "cache", "discovery"), p.RestConfig.Host)
-	return diskcached.NewCachedDiscoveryClientForConfig(&p.RestConfig, discoveryCacheDir, httpCacheDir, 10*time.Minute)
+
+	discoveryConfig := discoveryRestConfig(p.RestConfig, p.DiscoveryTimeout)
+	diskClient, err := diskcached.NewCachedDiscoveryClientForConfig(&discoveryConfig, discoveryCacheDir, httpCacheDir, 10*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	return memcached.NewMemCacheClient(diskClient), nil
+}
+
+// discoveryRestConfig returns a copy of base bounded to timeout for discovery
+// HTTP requests. A zero (or negative) timeout leaves base untouched, preserving
+// the historic unbounded behaviour. Otherwise the copy's Timeout is lowered to
+// timeout only when it is unset or already larger, so a user-supplied tighter
+// kubeconfig timeout still wins. base is taken by value and returned, so the
+// caller's RestConfig (and the dynamic apply/read client built from it) is
+// never mutated; only discovery is bounded (issue #344).
+func discoveryRestConfig(base restclient.Config, timeout time.Duration) restclient.Config {
+	if timeout > 0 && (base.Timeout == 0 || base.Timeout > timeout) {
+		base.Timeout = timeout
+	}
+	return base
 }
 
 // ToRESTMapper returns a deferred-discovery REST mapper wrapped in the
