@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/mitchellh/go-homedir"
 	apimachineryschema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -100,6 +101,26 @@ func BuildKubeProvider(cfg ProviderConfig, terraformVersion string) (*KubeProvid
 		applyRetryCount = uint64(parsed)
 	}
 
+	// discoveryTimeout bounds each discovery HTTP request (issue #344).
+	// Defaults to defaultDiscoveryTimeout; KUBECTL_PROVIDER_DISCOVERY_TIMEOUT
+	// overrides it with a whole number of seconds. 0 disables the bound
+	// (historic behaviour). Negative or non-integer values fail the configure
+	// step with an explicit diagnostic rather than silently degrading.
+	discoveryTimeout := defaultDiscoveryTimeout
+	if v := os.Getenv("KUBECTL_PROVIDER_DISCOVERY_TIMEOUT"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("KUBECTL_PROVIDER_DISCOVERY_TIMEOUT: %w", err)
+		}
+		if parsed < 0 {
+			return nil, fmt.Errorf("KUBECTL_PROVIDER_DISCOVERY_TIMEOUT must be >= 0 (seconds), got %d", parsed)
+		}
+		if int64(parsed) > maxDiscoveryTimeoutSeconds {
+			return nil, fmt.Errorf("KUBECTL_PROVIDER_DISCOVERY_TIMEOUT must be <= %d (seconds), got %d", maxDiscoveryTimeoutSeconds, parsed)
+		}
+		discoveryTimeout = time.Duration(parsed) * time.Second
+	}
+
 	restCfg.QPS = 100.0
 	restCfg.Burst = 100
 	restCfg.UserAgent = fmt.Sprintf("HashiCorp/1.0 Terraform/%s", terraformVersion)
@@ -118,6 +139,7 @@ func BuildKubeProvider(cfg ProviderConfig, terraformVersion string) (*KubeProvid
 		RestConfig:          *restCfg,
 		AggregatorClientset: a,
 		ApplyRetryCount:     applyRetryCount,
+		DiscoveryTimeout:    discoveryTimeout,
 	}, nil
 }
 

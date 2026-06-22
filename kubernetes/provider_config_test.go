@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	restclient "k8s.io/client-go/rest"
 )
@@ -119,6 +120,120 @@ func TestBuildKubeProvider_ApplyRetryCountEnvVarRejectsNegative(t *testing.T) {
 		t.Fatalf("expected error on negative KUBECTL_PROVIDER_APPLY_RETRY_COUNT, got nil")
 	}
 	if !strings.Contains(err.Error(), "KUBECTL_PROVIDER_APPLY_RETRY_COUNT") || !strings.Contains(err.Error(), ">= 0") {
+		t.Errorf("unexpected diagnostic: %s", err)
+	}
+}
+
+// TestBuildKubeProvider_DiscoveryTimeoutDefault pins the issue #344 default:
+// with no env override the provider carries defaultDiscoveryTimeout so
+// discovery is always bounded out of the box.
+func TestBuildKubeProvider_DiscoveryTimeoutDefault(t *testing.T) {
+	t.Setenv("KUBECTL_PROVIDER_APPLY_RETRY_COUNT", "")
+	t.Setenv("KUBECTL_PROVIDER_DISCOVERY_TIMEOUT", "")
+
+	p, err := BuildKubeProvider(ProviderConfig{
+		LoadConfigFile: false,
+		Host:           "http://example.invalid",
+	}, "test")
+	if err != nil {
+		t.Fatalf("BuildKubeProvider: %v", err)
+	}
+	if p.DiscoveryTimeout != defaultDiscoveryTimeout {
+		t.Errorf("DiscoveryTimeout = %v, want default %v", p.DiscoveryTimeout, defaultDiscoveryTimeout)
+	}
+}
+
+// TestBuildKubeProvider_DiscoveryTimeoutEnvOverride verifies the env var sets
+// the bound in whole seconds.
+func TestBuildKubeProvider_DiscoveryTimeoutEnvOverride(t *testing.T) {
+	t.Setenv("KUBECTL_PROVIDER_APPLY_RETRY_COUNT", "")
+	t.Setenv("KUBECTL_PROVIDER_DISCOVERY_TIMEOUT", "10")
+
+	p, err := BuildKubeProvider(ProviderConfig{
+		LoadConfigFile: false,
+		Host:           "http://example.invalid",
+	}, "test")
+	if err != nil {
+		t.Fatalf("BuildKubeProvider: %v", err)
+	}
+	if p.DiscoveryTimeout != 10*time.Second {
+		t.Errorf("DiscoveryTimeout = %v, want 10s", p.DiscoveryTimeout)
+	}
+}
+
+// TestBuildKubeProvider_DiscoveryTimeoutZeroDisables verifies that an explicit
+// 0 opts back into the historic unbounded discovery behaviour.
+func TestBuildKubeProvider_DiscoveryTimeoutZeroDisables(t *testing.T) {
+	t.Setenv("KUBECTL_PROVIDER_APPLY_RETRY_COUNT", "")
+	t.Setenv("KUBECTL_PROVIDER_DISCOVERY_TIMEOUT", "0")
+
+	p, err := BuildKubeProvider(ProviderConfig{
+		LoadConfigFile: false,
+		Host:           "http://example.invalid",
+	}, "test")
+	if err != nil {
+		t.Fatalf("BuildKubeProvider: %v", err)
+	}
+	if p.DiscoveryTimeout != 0 {
+		t.Errorf("DiscoveryTimeout = %v, want 0 (bound disabled)", p.DiscoveryTimeout)
+	}
+}
+
+// TestBuildKubeProvider_DiscoveryTimeoutRejectsNegative pins the fail-early
+// guard: a negative value fails the configure step rather than silently
+// degrading.
+func TestBuildKubeProvider_DiscoveryTimeoutRejectsNegative(t *testing.T) {
+	t.Setenv("KUBECTL_PROVIDER_APPLY_RETRY_COUNT", "")
+	t.Setenv("KUBECTL_PROVIDER_DISCOVERY_TIMEOUT", "-1")
+
+	_, err := BuildKubeProvider(ProviderConfig{
+		LoadConfigFile: false,
+		Host:           "http://example.invalid",
+	}, "test")
+	if err == nil {
+		t.Fatalf("expected error on negative KUBECTL_PROVIDER_DISCOVERY_TIMEOUT, got nil")
+	}
+	if !strings.Contains(err.Error(), "KUBECTL_PROVIDER_DISCOVERY_TIMEOUT") || !strings.Contains(err.Error(), ">= 0") {
+		t.Errorf("unexpected diagnostic: %s", err)
+	}
+}
+
+// TestBuildKubeProvider_DiscoveryTimeoutRejectsOverflow guards the int64
+// nanosecond conversion (time.Duration(parsed) * time.Second): a seconds value
+// large enough to overflow time.Duration must be rejected rather than silently
+// wrapping to a negative duration, which discoveryRestConfig would read as "no
+// bound" and quietly disable the timeout.
+func TestBuildKubeProvider_DiscoveryTimeoutRejectsOverflow(t *testing.T) {
+	t.Setenv("KUBECTL_PROVIDER_APPLY_RETRY_COUNT", "")
+	// ~9.999e9 > the ~9.22e9 cap, but still parses as a valid int64.
+	t.Setenv("KUBECTL_PROVIDER_DISCOVERY_TIMEOUT", "9999999999")
+
+	_, err := BuildKubeProvider(ProviderConfig{
+		LoadConfigFile: false,
+		Host:           "http://example.invalid",
+	}, "test")
+	if err == nil {
+		t.Fatalf("expected error on overflowing KUBECTL_PROVIDER_DISCOVERY_TIMEOUT, got nil")
+	}
+	if !strings.Contains(err.Error(), "KUBECTL_PROVIDER_DISCOVERY_TIMEOUT") || !strings.Contains(err.Error(), "<=") {
+		t.Errorf("unexpected diagnostic: %s", err)
+	}
+}
+
+// TestBuildKubeProvider_DiscoveryTimeoutSurfacesParseError pins the fail-early
+// guard for a non-integer value.
+func TestBuildKubeProvider_DiscoveryTimeoutSurfacesParseError(t *testing.T) {
+	t.Setenv("KUBECTL_PROVIDER_APPLY_RETRY_COUNT", "")
+	t.Setenv("KUBECTL_PROVIDER_DISCOVERY_TIMEOUT", "oops")
+
+	_, err := BuildKubeProvider(ProviderConfig{
+		LoadConfigFile: false,
+		Host:           "http://example.invalid",
+	}, "test")
+	if err == nil {
+		t.Fatalf("expected error on invalid KUBECTL_PROVIDER_DISCOVERY_TIMEOUT, got nil")
+	}
+	if !strings.Contains(err.Error(), "KUBECTL_PROVIDER_DISCOVERY_TIMEOUT") {
 		t.Errorf("unexpected diagnostic: %s", err)
 	}
 }

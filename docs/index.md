@@ -221,6 +221,42 @@ Workarounds, in order of preference:
    }
    ```
 
+### `timed out fetching resources from discovery client`
+
+The full message is `failed to create kubernetes rest client for read of
+resource: ... timed out fetching resources from discovery client`. To map a
+manifest's `apiVersion`/`kind` to a REST endpoint, the provider asks the
+apiserver to enumerate every API group on the cluster. That enumeration
+includes aggregated APIServices (`metrics.k8s.io`, `custom.metrics.k8s.io`,
+and other webhook- or extension-apiserver-backed groups). If one of those
+backends is slow or unhealthy, the enumeration stalls on it. Other providers
+that resolve a single known type tend not to hit this, which is why the same
+cluster can work with `hashicorp/kubernetes` but time out here.
+
+Each discovery request is bounded (30s by default) so a slow group surfaces
+as a tolerated partial-discovery failure rather than stalling the whole read,
+and the discovery result is cached and shared across resources so a transient
+stall usually clears on the next apply. If your cluster has genuinely slow
+discovery, tune the bound with the `KUBECTL_PROVIDER_DISCOVERY_TIMEOUT`
+environment variable (whole seconds; `0` disables the bound and restores the
+historic unbounded behaviour):
+
+```sh
+export KUBECTL_PROVIDER_DISCOVERY_TIMEOUT=45
+```
+
+To find the offending backend, list the APIServices whose `Available` condition
+is not `True`:
+
+```sh
+kubectl get apiservices -o json \
+  | jq -r '.items[] | select(any(.status.conditions[]?; .type == "Available" and .status != "True")) | .metadata.name'
+```
+
+A non-`Available` entry (commonly a metrics or other aggregated API whose
+backing pod is down) is the usual cause. Fix or remove the backing Service or
+endpoint first; only delete the APIService itself if it is genuinely obsolete.
+
 ## Building from source
 
 To try a fix on `master` before a release is cut, see
