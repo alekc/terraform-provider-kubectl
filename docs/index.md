@@ -221,7 +221,7 @@ Workarounds, in order of preference:
    }
    ```
 
-On workflows that support [deferred actions](https://developer.hashicorp.com/terraform/language/resources/terraform-data#deferred-actions)
+On workflows that support [deferred actions](https://developer.hashicorp.com/terraform/language/stacks/use-cases)
 (Terraform Stacks, and `terraform plan`/`apply` runs that opt into deferral),
 none of the workarounds above are needed. When the provider configuration is
 not yet fully known (for example `host`, `token`, or `cluster_ca_certificate`
