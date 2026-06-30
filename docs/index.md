@@ -221,6 +221,18 @@ Workarounds, in order of preference:
    }
    ```
 
+On workflows that support [deferred actions](https://developer.hashicorp.com/terraform/language/resources/terraform-data#deferred-actions)
+(Terraform Stacks, and `terraform plan`/`apply` runs that opt into deferral),
+none of the workarounds above are needed. When the provider configuration is
+not yet fully known (for example `host`, `token`, or `cluster_ca_certificate`
+sourced from an EKS component that has not been applied yet), the provider
+automatically returns a deferral instead of building a client from unknown
+values. Terraform then defers every `kubectl` resource and data source to a
+follow-up apply, once the upstream values are known, rather than failing with
+`Called ValidateResourceConfig on an unconfigured provider`. This is automatic
+and requires no provider configuration; see
+[#354](https://github.com/alekc/terraform-provider-kubectl/issues/354).
+
 ### `timed out fetching resources from discovery client`
 
 The full message is `failed to create kubernetes rest client for read of
