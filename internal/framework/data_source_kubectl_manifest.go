@@ -205,6 +205,18 @@ func (d *manifestDataSource) Configure(_ context.Context, req datasource.Configu
 // distinct diagnostic so callers can pattern-match the "not found" case
 // without parsing free-form text. Implements datasource.DataSource.
 func (d *manifestDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	// Deferred actions: defer this data source when the client allows
+	// deferral and its configuration is not yet fully known (e.g. name or
+	// namespace interpolated from a not-yet-applied resource in a
+	// deferral-aware run). Gated on the deferral client capability so the
+	// classic read path is unchanged. See #356.
+	if req.ClientCapabilities.DeferralAllowed && !req.Config.Raw.IsFullyKnown() {
+		resp.Deferred = &datasource.Deferred{
+			Reason: datasource.DeferredReasonDataSourceConfigUnknown,
+		}
+		return
+	}
+
 	var data manifestDataModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
