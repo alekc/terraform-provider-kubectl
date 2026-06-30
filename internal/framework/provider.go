@@ -195,6 +195,23 @@ func (p *kubectlFrameworkProvider) Schema(_ context.Context, _ provider.SchemaRe
 // it on each downstream-data field so resources and data sources read it
 // directly via Configure → req.ProviderData. Implements provider.Provider.
 func (p *kubectlFrameworkProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
+	// Deferred actions (Terraform Stacks and other deferral-aware
+	// workflows): when the client allows deferral and the provider
+	// configuration is not yet fully known (e.g. host / token /
+	// cluster_ca_certificate sourced from a not-yet-applied component's
+	// outputs), defer rather than build a client from unknown values. The
+	// framework then automatically defers every resource and data source
+	// for this provider, so Terraform core no longer calls
+	// ValidateResourceConfig against an unconfigured provider (#354).
+	// This only fires under the experimental deferral client capability;
+	// the classic plan/apply flow and the lazy_load fallback are unaffected.
+	if req.ClientCapabilities.DeferralAllowed && !req.Config.Raw.IsFullyKnown() {
+		resp.Deferred = &provider.Deferred{
+			Reason: provider.DeferredReasonProviderConfigUnknown,
+		}
+		return
+	}
+
 	var data providerConfigModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
@@ -394,4 +411,3 @@ func (v int64AtLeastValidator) ValidateInt64(_ context.Context, req validator.In
 		)
 	}
 }
-
