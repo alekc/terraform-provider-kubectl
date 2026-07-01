@@ -63,6 +63,10 @@ func (d *filenameListDataSource) Schema(_ context.Context, _ datasource.SchemaRe
 }
 
 func (d *filenameListDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	if deferIfConfigUnknown(req, resp) {
+		return
+	}
+
 	var data filenameListModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {

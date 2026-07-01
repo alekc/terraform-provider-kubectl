@@ -87,6 +87,10 @@ func (d *kustomizeDocumentsDataSource) Schema(_ context.Context, _ datasource.Sc
 }
 
 func (d *kustomizeDocumentsDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	if deferIfConfigUnknown(req, resp) {
+		return
+	}
+
 	var data kustomizeDocumentsModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {

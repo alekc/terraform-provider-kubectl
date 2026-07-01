@@ -205,6 +205,10 @@ func (d *manifestDataSource) Configure(_ context.Context, req datasource.Configu
 // distinct diagnostic so callers can pattern-match the "not found" case
 // without parsing free-form text. Implements datasource.DataSource.
 func (d *manifestDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	if deferIfConfigUnknown(req, resp) {
+		return
+	}
+
 	var data manifestDataModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {

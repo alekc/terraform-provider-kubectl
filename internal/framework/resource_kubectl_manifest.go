@@ -771,6 +771,20 @@ func (r *manifestResource) ModifyPlan(ctx context.Context, req resource.ModifyPl
 		return
 	}
 
+	// Deferred actions: when the client allows deferral and the resource
+	// configuration is not yet fully known (e.g. yaml_body interpolates a
+	// value from a not-yet-applied resource in a deferral-aware run), defer
+	// this resource rather than plan it from unknown values. Gated on the
+	// deferral client capability so the classic plan/apply flow is
+	// unchanged; provider-config-unknown is handled separately in
+	// Configure (#354). See #356.
+	if req.ClientCapabilities.DeferralAllowed && !req.Config.Raw.IsFullyKnown() {
+		resp.Deferred = &resource.Deferred{
+			Reason: resource.DeferredReasonResourceConfigUnknown,
+		}
+		return
+	}
+
 	var plan manifestResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {

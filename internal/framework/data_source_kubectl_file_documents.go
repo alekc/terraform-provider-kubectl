@@ -65,6 +65,10 @@ func (d *fileDocumentsDataSource) Schema(_ context.Context, _ datasource.SchemaR
 }
 
 func (d *fileDocumentsDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	if deferIfConfigUnknown(req, resp) {
+		return
+	}
+
 	var data fileDocumentsModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
