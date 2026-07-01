@@ -18,6 +18,10 @@ import (
 func TestManifestResourceModifyPlanDeferredActions(t *testing.T) {
 	ctx := context.Background()
 	r := NewManifestResource()
+	rmp, ok := r.(resource.ResourceWithModifyPlan)
+	if !ok {
+		t.Fatalf("manifest resource does not implement ResourceWithModifyPlan")
+	}
 
 	var schemaResp resource.SchemaResponse
 	r.Schema(ctx, resource.SchemaRequest{}, &schemaResp)
@@ -52,7 +56,7 @@ func TestManifestResourceModifyPlanDeferredActions(t *testing.T) {
 		resp := &resource.ModifyPlanResponse{
 			Plan: tfsdk.Plan{Schema: schemaResp.Schema, Raw: planVal},
 		}
-		r.(resource.ResourceWithModifyPlan).ModifyPlan(ctx, req, resp)
+		rmp.ModifyPlan(ctx, req, resp)
 		return resp
 	}
 
