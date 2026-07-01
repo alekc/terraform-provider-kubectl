@@ -65,15 +65,7 @@ func (d *fileDocumentsDataSource) Schema(_ context.Context, _ datasource.SchemaR
 }
 
 func (d *fileDocumentsDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
-	// Deferred actions: defer this data source when the client allows
-	// deferral and its configuration is not yet fully known (e.g. an input
-	// interpolated from a not-yet-applied resource in a deferral-aware run).
-	// Gated on the deferral client capability so the classic read path is
-	// unchanged. See #356.
-	if req.ClientCapabilities.DeferralAllowed && !req.Config.Raw.IsFullyKnown() {
-		resp.Deferred = &datasource.Deferred{
-			Reason: datasource.DeferredReasonDataSourceConfigUnknown,
-		}
+	if deferIfConfigUnknown(req, resp) {
 		return
 	}
 
