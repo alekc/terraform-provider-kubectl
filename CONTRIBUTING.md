@@ -143,19 +143,21 @@ failures fast without burning 20 kind clusters on a syntax error.
 
 ## Project layout
 
-- `kubernetes/` is the SDK v2 half of the provider (legacy
-  `terraform-plugin-sdk/v2`). Holds resources, data sources, and the
-  authoritative provider configuration schema.
-- `internal/framework/` is the plugin-framework half
-  (`terraform-plugin-framework`). Currently hosts the ephemeral
-  `kubectl_manifest` resource and a mirror of the provider configuration
-  schema.
-- `internal/mux/` brings both halves together via `tf6muxserver`.
-- `kubernetes/provider.go` and `internal/framework/provider.go` declare
-  the **same** provider configuration schema. `tf6muxserver` compares
-  them at startup and refuses to start if they differ.
-  `internal/mux/mux_test.go` pins this and will fail in CI when only one
-  side is updated.
+- `internal/framework/` is the entire provider (`terraform-plugin-framework`).
+  It hosts every resource and data source, the ephemeral `kubectl_manifest`
+  resource, and the authoritative provider configuration schema in
+  `internal/framework/provider.go`. v3 completed the SDK v2 to plugin-framework
+  migration; the old `tf6muxserver` hybrid is gone (see
+  `docs/adr/0001-framework-migration-and-moved-blocks.md` for the history).
+- `kubernetes/` is the transport-agnostic implementation layer the framework
+  resources call into: the Kubernetes client (`BuildKubeProvider`,
+  `ProviderConfig`), manifest lifecycle helpers (`ApplyManifest`,
+  `ReadManifest`, `DeleteManifest`), and fetch / drift / wait-for / YAML
+  logic. It no longer registers a provider, resource, or data source of its
+  own.
+- `internal/types/` holds small shared type helpers.
+- `main.go` serves the framework provider directly via
+  `providerserver.Serve`; there is no mux server.
 - `docs/` holds the Terraform Registry-rendered documentation. Resource
   / data-source pages live under `docs/resources/`, `docs/data-sources/`,
   and `docs/ephemeral-resources/`.
@@ -174,9 +176,11 @@ failures fast without burning 20 kind clusters on a syntax error.
    [DCO](https://developercertificate.org/) for contributions.
 5. Keep PRs focused. A diagnostic improvement and an unrelated refactor
    should be two PRs, not one.
-6. Update the muxed schema on **both** sides if you touch provider
-   configuration. The `internal/mux.TestMuxServer_GetProviderSchemaIsClean`
-   test will catch a half-update.
+6. Provider configuration lives in one place: `internal/framework/provider.go`.
+   When you add or change a provider argument, update all three parts together:
+   the wire schema in `Schema`, the decode model `providerConfigModel`, and the
+   env-var / default handling in `Configure`. There is no second schema to keep
+   in sync.
 7. Update relevant docs in the same PR. New provider attribute means a
    line in `docs/index.md` "Argument Reference"; new behaviour means a
    note in Troubleshooting; new resource means a page under
