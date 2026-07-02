@@ -1,5 +1,6 @@
 package types
 
+// WaitFor represents a wait condition configuration.
 type WaitFor struct {
 	Field []WaitForField
 	Condition []WaitForStatusCondition
