@@ -222,7 +222,7 @@ Workarounds, in order of preference:
    ```
 
 On workflows that support [deferred actions](https://developer.hashicorp.com/terraform/language/stacks/use-cases)
-(Terraform Stacks, and `terraform plan`/`apply` runs that opt into deferral),
+(Terraform Stacks, and other deferral-aware Terraform clients),
 none of the workarounds above are needed. When the provider configuration is
 not yet fully known (for example `host`, `token`, or `cluster_ca_certificate`
 sourced from an EKS component that has not been applied yet), the provider
