@@ -90,10 +90,10 @@ func (p *KubeProvider) ToRawKubeConfigLoader() clientcmd.ClientConfig {
 	return nil
 }
 
-// ToRESTConfig returns the configured REST config. Pointer is to the
-// struct on KubeProvider, so callers must not mutate it.
+// ToRESTConfig returns a caller-owned config. cli-runtime mutates its API path
+// and content settings when constructing clients for individual resource groups.
 func (p *KubeProvider) ToRESTConfig() (*restclient.Config, error) {
-	return &p.RestConfig, nil
+	return restclient.CopyConfig(&p.RestConfig), nil
 }
 
 // ToDiscoveryClient returns the provider's shared cached discovery client,
