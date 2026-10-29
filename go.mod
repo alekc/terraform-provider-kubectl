@@ -2,7 +2,7 @@ module github.com/alekc/terraform-provider-kubectl
 
 go 1.26.0
 
-toolchain go1.26.3
+toolchain go1.26.10
 
 require (
 	github.com/cenkalti/backoff/v4 v4.3.0
@@ -109,7 +109,7 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.40.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
+	golang.org/x/crypto v0.56.0 // indirect
 	golang.org/x/mod v0.40.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/oauth2 v0.34.0 // indirect
