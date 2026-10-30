@@ -963,6 +963,11 @@ func identityChanges(state manifestResourceModel, kind, name, namespace string) 
 	if !state.Name.IsNull() && state.Name.ValueString() != name {
 		paths = append(paths, path.Root("name"))
 	}
+	// Apply sends an omitted namespace of a namespaced object to "default",
+	// so an imported default-namespace object is not a change.
+	if namespace == "" && state.Namespace.ValueString() != "" {
+		namespace = "default"
+	}
 	if state.Namespace.ValueString() != namespace {
 		paths = append(paths, path.Root("namespace"))
 	}

@@ -284,6 +284,19 @@ func TestModifyPlan_IdentityChangeRequiresReplace(t *testing.T) {
 			planBody: body("b", "ns1"),
 		},
 		{
+			name: "omitted namespace, state default (import)",
+			state: stateFor(body("a", "default"), str("RoleBinding"), str("a"),
+				str("default")),
+			planBody: str(strings.Replace(fmt.Sprintf(rb, "a", "x"), "  namespace: x\n", "", 1)),
+		},
+		{
+			name: "omitted namespace, state other namespace",
+			state: stateFor(body("a", "ns1"), str("RoleBinding"), str("a"),
+				str("ns1")),
+			planBody: str(strings.Replace(fmt.Sprintf(rb, "a", "x"), "  namespace: x\n", "", 1)),
+			want:     []string{"namespace"},
+		},
+		{
 			name: "cluster-scoped, null namespace",
 			state: stateFor(str("apiVersion: v1\nkind: Namespace\nmetadata:\n  name: a\n"),
 				str("Namespace"), str("a"), types.StringNull()),
