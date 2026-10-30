@@ -7,7 +7,7 @@ toolchain go1.26.10
 require (
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/hashicorp/hcl/v2 v2.24.0
-	github.com/hashicorp/terraform v0.12.29
+	github.com/hashicorp/terraform v0.15.5
 	github.com/hashicorp/terraform-plugin-framework v1.19.0
 	github.com/hashicorp/terraform-plugin-framework-timeouts v0.7.0
 	github.com/hashicorp/terraform-plugin-framework-validators v0.19.0
