@@ -110,6 +110,32 @@ func testAccCheckkubectlStatus(s *terraform.State, shouldExist bool) error {
 	return nil
 }
 
+// testAccCheckkubectlAbsent fails unless the object at absPath is gone or
+// mid-deletion; for objects no longer in state, e.g. a pre-rename name.
+func testAccCheckkubectlAbsent(absPath string) func(*terraform.State) error {
+	return func(*terraform.State) error {
+		cfg, err := clientcmd.BuildConfigFromFlags("", os.Getenv("KUBECONFIG"))
+		if err != nil {
+			return fmt.Errorf("BuildConfigFromFlags: %v", err)
+		}
+		cs, err := kclient.NewForConfig(cfg)
+		if err != nil {
+			return fmt.Errorf("NewForConfig: %v", err)
+		}
+		content, err := cs.RESTClient().Get().AbsPath(absPath).DoRaw(context.TODO())
+		switch {
+		case err == nil && isDeleting(content):
+			return nil
+		case err == nil:
+			return fmt.Errorf("object still exists at %s", absPath)
+		case errors.IsNotFound(err) || errors.IsGone(err):
+			return nil
+		default:
+			return fmt.Errorf("failed to query %s: %w", absPath, err)
+		}
+	}
+}
+
 // isDeleting returns true when the JSON body decoded from a Kubernetes API
 // response carries a non-empty metadata.deletionTimestamp, which means the
 // controller has accepted a delete request and is finishing async cleanup
