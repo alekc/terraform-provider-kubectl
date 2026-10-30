@@ -1,6 +1,8 @@
 module github.com/alekc/terraform-provider-kubectl
 
-go 1.27.0
+go 1.26.0
+
+toolchain go1.26.10
 
 require (
 	github.com/cenkalti/backoff/v4 v4.3.0
@@ -17,10 +19,10 @@ require (
 	github.com/zclconf/go-cty v1.19.0
 	github.com/zclconf/go-cty-yaml v1.2.0
 	gopkg.in/yaml.v2 v2.4.0
-	k8s.io/api v0.37.1
-	k8s.io/apimachinery v0.37.1
+	k8s.io/api v0.37.2
+	k8s.io/apimachinery v0.37.2
 	k8s.io/cli-runtime v0.37.1
-	k8s.io/client-go v0.37.1
+	k8s.io/client-go v0.37.2
 	k8s.io/kube-aggregator v0.37.1
 	k8s.io/kubectl v0.37.1
 	sigs.k8s.io/kustomize/api v0.21.2
@@ -126,7 +128,7 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.51.0 // indirect
 	google.golang.org/appengine v1.6.8 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20261019180522-ce908d29299b // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260610212136-7ab31c22f7ad // indirect
 	google.golang.org/grpc v1.83.2 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
