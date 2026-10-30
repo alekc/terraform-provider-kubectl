@@ -2,5 +2,13 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "github>alekc/renovate-config:ci-automerge"
+  ],
+  "packageRules": [
+    {
+      "description": "v0.12.29 is the last terraform module whose lang/funcs builds here: v0.15 requires k8s.io/client-go v10.0.0+incompatible, and v1.x moved the package under internal/",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["github.com/hashicorp/terraform"],
+      "enabled": false
+    }
   ]
 }
