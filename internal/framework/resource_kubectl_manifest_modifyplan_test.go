@@ -2,6 +2,7 @@ package framework
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -65,6 +66,16 @@ func newCreatePlan(ctx context.Context, t *testing.T, model manifestResourceMode
 		State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(tfType, nil)},
 	}
 	resp := &resource.ModifyPlanResponse{Plan: plan}
+	return req, resp
+}
+
+// newUpdatePlan is newCreatePlan with prior state seeded from stateModel.
+func newUpdatePlan(ctx context.Context, t *testing.T, stateModel, planModel manifestResourceModel) (resource.ModifyPlanRequest, *resource.ModifyPlanResponse) {
+	t.Helper()
+	req, resp := newCreatePlan(ctx, t, planModel)
+	if diags := req.State.Set(ctx, &stateModel); diags.HasError() {
+		t.Fatalf("seeding state: %+v", diags)
+	}
 	return req, resp
 }
 
@@ -195,6 +206,116 @@ func TestModifyPlan_ForceConflictsRequiresSSA(t *testing.T) {
 			}
 			if resp.Diagnostics.HasError() {
 				t.Fatalf("unexpected error: %+v", resp.Diagnostics)
+			}
+		})
+	}
+}
+
+// TestModifyPlan_IdentityChangeRequiresReplace asserts a change to kind,
+// metadata.name or namespace in yaml_body forces replacement (#365), and that
+// an unchanged identity or a null kind/name in state does not.
+func TestModifyPlan_IdentityChangeRequiresReplace(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := &manifestResource{}
+
+	const rb = "apiVersion: rbac.authorization.k8s.io/v1\nkind: RoleBinding\n" +
+		"metadata:\n  name: %s\n  namespace: %s\n" +
+		"roleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: Role\n  name: r\n"
+
+	stateFor := func(yamlBody, kind, name, namespace types.String) manifestResourceModel {
+		m := baseModel()
+		m.YAMLBody = yamlBody
+		m.APIVersion = types.StringValue("rbac.authorization.k8s.io/v1")
+		m.Kind = kind
+		m.Name = name
+		m.Namespace = namespace
+		m.UID = types.StringValue("uid-1")
+		m.LiveUID = types.StringValue("uid-1")
+		return m
+	}
+	body := func(name, ns string) types.String {
+		return types.StringValue(fmt.Sprintf(rb, name, ns))
+	}
+	str := types.StringValue
+
+	cases := []struct {
+		name     string
+		state    manifestResourceModel
+		planBody types.String
+		override string
+		want     []string
+	}{
+		{
+			name:     "unchanged",
+			state:    stateFor(body("a", "ns1"), str("RoleBinding"), str("a"), str("ns1")),
+			planBody: body("a", "ns1"),
+		},
+		{
+			name:     "rename",
+			state:    stateFor(body("a", "ns1"), str("RoleBinding"), str("a"), str("ns1")),
+			planBody: body("b", "ns1"),
+			want:     []string{"name"},
+		},
+		{
+			name:     "namespace change",
+			state:    stateFor(body("a", "ns1"), str("RoleBinding"), str("a"), str("ns1")),
+			planBody: body("a", "ns2"),
+			want:     []string{"namespace"},
+		},
+		{
+			name:     "override_namespace change",
+			state:    stateFor(body("a", "ns1"), str("RoleBinding"), str("a"), str("ns1")),
+			planBody: body("a", "ns1"),
+			override: "ns3",
+			want:     []string{"namespace"},
+		},
+		{
+			name:  "kind change",
+			state: stateFor(body("a", "ns1"), str("RoleBinding"), str("a"), str("ns1")),
+			planBody: types.StringValue(strings.Replace(
+				fmt.Sprintf(rb, "a", "ns1"), "kind: RoleBinding", "kind: ClusterRoleBinding", 1)),
+			want: []string{"kind"},
+		},
+		{
+			name: "null kind and name in state",
+			state: stateFor(body("a", "ns1"), types.StringNull(), types.StringNull(),
+				str("ns1")),
+			planBody: body("b", "ns1"),
+		},
+		{
+			name: "cluster-scoped, null namespace",
+			state: stateFor(str("apiVersion: v1\nkind: Namespace\nmetadata:\n  name: a\n"),
+				str("Namespace"), str("a"), types.StringNull()),
+			planBody: str("apiVersion: v1\nkind: Namespace\nmetadata:\n  name: a\n"),
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pm := baseModel()
+			pm.YAMLBody = tc.planBody
+			if tc.override != "" {
+				pm.OverrideNamespace = types.StringValue(tc.override)
+			}
+			if tc.state.Kind.ValueString() == "Namespace" {
+				tc.state.APIVersion = types.StringValue("v1")
+			}
+			req, resp := newUpdatePlan(ctx, t, tc.state, pm)
+
+			r.ModifyPlan(ctx, req, resp)
+
+			if resp.Diagnostics.HasError() {
+				t.Fatalf("unexpected error: %+v", resp.Diagnostics)
+			}
+			got := make([]string, 0, len(resp.RequiresReplace))
+			for _, p := range resp.RequiresReplace {
+				got = append(got, p.String())
+			}
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("RequiresReplace = %v, want %v", got, tc.want)
 			}
 		})
 	}

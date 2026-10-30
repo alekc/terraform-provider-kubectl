@@ -10,6 +10,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 )
 
 func TestKubectlManifest_RetryOnFailure(t *testing.T) {
@@ -1226,6 +1227,71 @@ YAML
 						}
 						return nil
 					}),
+				),
+			},
+		},
+	})
+}
+
+// TestAccKubectl_RenameForcesReplace verifies that changing metadata.name in
+// yaml_body plans a replace and recreates the object (#365).
+func TestAccKubectl_RenameForcesReplace(t *testing.T) {
+	t.Parallel()
+
+	name := "test-rename-" + acctest.RandString(10)
+	config := func(n string) string {
+		return fmt.Sprintf(`
+resource "kubectl_manifest" "test" {
+	yaml_body = <<YAML
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: %s
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: does-not-exist
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: default
+YAML
+}
+`, n)
+	}
+
+	var uid string
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckkubectlDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: config(name),
+				Check: resource.TestCheckResourceAttrWith("kubectl_manifest.test", "uid", func(value string) error {
+					uid = value
+					return nil
+				}),
+			},
+			{
+				Config: config(name + "-renamed"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction("kubectl_manifest.test", plancheck.ResourceActionReplace),
+					},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("kubectl_manifest.test", "name", name+"-renamed"),
+					resource.TestCheckResourceAttrWith("kubectl_manifest.test", "uid", func(value string) error {
+						if value == uid {
+							return fmt.Errorf("resource was NOT recreated: UID remained %s", uid)
+						}
+						return nil
+					}),
+					testAccCheckkubectlExists,
+					testAccCheckkubectlAbsent(
+						"/apis/rbac.authorization.k8s.io/v1/namespaces/default/rolebindings/"+name),
 				),
 			},
 		},

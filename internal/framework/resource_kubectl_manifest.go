@@ -877,6 +877,11 @@ func (r *manifestResource) ModifyPlan(ctx context.Context, req resource.ModifyPl
 			resp.RequiresReplace = append(resp.RequiresReplace, path.Root("api_version"))
 		}
 
+		// The attribute RequiresReplace modifiers on these run before this
+		// method sets them from yaml_body, so they never fire (#365).
+		resp.RequiresReplace = append(resp.RequiresReplace,
+			identityChanges(state, parsed.GetKind(), parsed.GetName(), parsed.GetNamespace())...)
+
 		if state.LiveUID.ValueString() != state.UID.ValueString() {
 			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("uid"), types.StringUnknown())...)
 		}
@@ -945,6 +950,23 @@ func (r *manifestResource) ModifyPlan(ctx context.Context, req resource.ModifyPl
 		return
 	}
 	resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("yaml_body_parsed"), obfuscated)...)
+}
+
+// identityChanges returns the kind/name/namespace paths whose planned value
+// differs from state. A null kind or name in state is skipped rather than
+// read as a change; a null namespace means cluster-scoped and compares as "".
+func identityChanges(state manifestResourceModel, kind, name, namespace string) []path.Path {
+	var paths []path.Path
+	if !state.Kind.IsNull() && state.Kind.ValueString() != kind {
+		paths = append(paths, path.Root("kind"))
+	}
+	if !state.Name.IsNull() && state.Name.ValueString() != name {
+		paths = append(paths, path.Root("name"))
+	}
+	if state.Namespace.ValueString() != namespace {
+		paths = append(paths, path.Root("namespace"))
+	}
+	return paths
 }
 
 // UpgradeState chains state migrations forward to the current schema
