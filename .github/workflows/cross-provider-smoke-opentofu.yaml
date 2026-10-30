@@ -62,7 +62,8 @@ jobs:
         id: versions
         run: |
           set -euo pipefail
-          opentofu="$(curl -sSfL https://endoflife.date/api/opentofu.json | jq -rc 'sort_by(.releaseDate) | reverse | .[0].latest')"
+          # Same index setup-opentofu installs from; see tests.yaml.
+          opentofu="$(curl -sSfL https://get.opentofu.org/tofu/api.json | jq -rc '[.versions[].id | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))] | max_by(split(".") | map(tonumber))')"
           k8s_cycles="$(curl -sSfL https://endoflife.date/api/kubernetes.json | jq -rc '[sort_by(.releaseDate) | reverse | .[0:5] | .[].cycle]')"
           k8s="$(curl -sSfL "https://endoflife.date/api/kubernetes/$(echo "${k8s_cycles}" | jq -r '.[0]').json" | jq -rc '.latest')"
           echo "opentofu=${opentofu}" >> "${GITHUB_OUTPUT}"

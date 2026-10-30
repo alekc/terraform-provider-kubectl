@@ -51,8 +51,10 @@ jobs:
           terraform_versions="$(curl -sSfL https://endoflife.date/api/terraform.json | jq -rc '[sort_by(.releaseDate) | reverse | .[0:5] | .[].latest] + ["1.5.7"]')"
           # OpenTofu version list. No legacy pin equivalent to Terraform's
           # 1.5.7 because OpenTofu's first GA is 1.6.0 and there is no
-          # MPL/BSL transition to commemorate.
-          opentofu_versions="$(curl -sSfL https://endoflife.date/api/opentofu.json | jq -rc '[sort_by(.releaseDate) | reverse | .[0:5] | .[].latest]')"
+          # MPL/BSL transition to commemorate. Read from the index
+          # setup-opentofu installs from, since endoflife.date listed
+          # 1.13.5 before it was released.
+          opentofu_versions="$(curl -sSfL https://get.opentofu.org/tofu/api.json | jq -rc '[.versions[].id | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))] | group_by(split(".")[0:2] | join(".")) | map(max_by(split(".") | map(tonumber))) | sort_by(split(".") | map(tonumber)) | reverse | .[0:5]')"
 
           {
             echo "terraform_versions=${terraform_versions}"
