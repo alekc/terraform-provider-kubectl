@@ -25,6 +25,11 @@ updates:
         update-types:
           - minor
           - patch
+    # kustomize v0.21.3 needs structured-merge-diff/v7; k8s.io v0.37 is on v6.
+    # Lift with the k8s.io v0.38 bump, same as the hold in renovate.json.
+    ignore:
+      - dependency-name: sigs.k8s.io/kustomize/*
+        versions: [">=0.21.3"]
     labels: [dependencies]
     assignees: [alekc]
     reviewers: [alekc]
