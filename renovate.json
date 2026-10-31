@@ -9,6 +9,12 @@
       "matchManagers": ["gomod"],
       "matchPackageNames": ["github.com/hashicorp/terraform"],
       "enabled": false
+    },
+    {
+      "description": "kustomize v0.21.3 pulls kube-openapi built on structured-merge-diff/v7, while k8s.io/apimachinery v0.37 still builds against v6. Lift together with the k8s.io module set that moves to smd v7 (v0.38)",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["sigs.k8s.io/kustomize/api", "sigs.k8s.io/kustomize/kyaml"],
+      "allowedVersions": "<0.21.3"
     }
   ]
 }
