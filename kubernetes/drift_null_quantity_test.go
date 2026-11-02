@@ -20,10 +20,12 @@ func mustParse(t *testing.T, body string) map[string]interface{} {
 // clientOpts mirrors what computeDriftClient passes to RenderDrift.
 var clientOpts = DriftOptions{NullAsAbsent: true, CanonicalQuantities: true}
 
-// clientOptsFor is clientOpts for a given apiVersion, which gates quantities.
-func clientOptsFor(apiVersion string) DriftOptions {
+// clientOptsFor is clientOpts for a kind: apiVersion gates quantities, and
+// apiVersion plus kind pick the patch type that decides null handling.
+func clientOptsFor(apiVersion, kind string) DriftOptions {
 	o := clientOpts
 	o.APIVersion = apiVersion
+	o.Kind = kind
 	return o
 }
 
@@ -54,7 +56,7 @@ func TestRenderDrift_ServerEngine_NoQuantityMatching(t *testing.T) {
 	if got == "" {
 		t.Fatal("server engine must not canonicalise quantities")
 	}
-	if got := RenderDrift(desired, live, clientOptsFor("apps/v1")); got != "" {
+	if got := RenderDrift(desired, live, clientOptsFor("apps/v1", "Deployment")); got != "" {
 		t.Fatalf("client engine on a core kind should match, got %q", got)
 	}
 }
@@ -99,7 +101,7 @@ spec:
   tags:
   - a
 `)
-	got := RenderDrift(desired, live, clientOptsFor("drifttest.kubectl.alekc.dev/v1"))
+	got := RenderDrift(desired, live, clientOptsFor("drifttest.kubectl.alekc.dev/v1", "DriftWidget"))
 	want := "spec:\n  hard:\n    tier: <drift>\n  limits:\n    cpu: <drift>\n  max:\n    cpu: <drift>\n  sizeLimit: <drift>\n  surge: <drift>\n"
 	if got != want {
 		t.Fatalf("CRD must compare strictly, null map/list still absent:\ngot  %q\nwant %q", got, want)
@@ -138,7 +140,7 @@ func TestRenderDrift_SelectorKeySizeLimitStillDrifts(t *testing.T) {
 		"selector": map[string]interface{}{"sizeLimit": "500m"},
 	}}
 	want := "spec:\n  selector:\n    sizeLimit: <drift>\n"
-	if got := RenderDrift(desired, live, clientOptsFor("v1")); got != want {
+	if got := RenderDrift(desired, live, clientOptsFor("v1", "Service")); got != want {
 		t.Fatalf("got %q want %q", got, want)
 	}
 }
@@ -227,7 +229,7 @@ spec:
         limits: "500m"
 `)
 	// Core group, so only the path rule can keep these as drift.
-	got := RenderDrift(desired, live, clientOptsFor("v1"))
+	got := RenderDrift(desired, live, clientOptsFor("v1", "Pod"))
 	want := "spec:\n  max: <drift>\n  resources:\n    version: <drift>\n  template:\n    metadata:\n      annotations:\n        limits: <drift>\n"
 	if got != want {
 		t.Fatalf("got %q want %q", got, want)
@@ -282,10 +284,113 @@ func TestRenderDrift_NullInDesired_ListAndScalar(t *testing.T) {
 			"replicas": int64(2),
 		},
 	}
-	got := RenderDrift(desired, live, clientOpts)
-	want := "spec:\n  replicas: <drift>\n"
+	// Built-in kind: the strategic patch keeps null and deletes the live list.
+	got := RenderDrift(desired, live, clientOptsFor("v1", "Service"))
+	want := "spec:\n  ports: <drift>\n  replicas: <drift>\n"
 	if got != want {
-		t.Fatalf("null list is absent, null scalar is drift: got %q want %q", got, want)
+		t.Fatalf("built-in: got %q want %q", got, want)
+	}
+	// CRD: JSON merge patch makes null a no-op; a null scalar still drifts.
+	got = RenderDrift(desired, live, clientOptsFor("example.com/v1", "Widget"))
+	want = "spec:\n  replicas: <drift>\n"
+	if got != want {
+		t.Fatalf("CRD: got %q want %q", got, want)
+	}
+}
+
+// A null on labels or pod template annotations of a built-in kind: apply
+// would delete the live content, so it is drift, as kubectl diff shows it.
+func TestRenderDrift_NullBuiltinMapsStillDrift(t *testing.T) {
+	t.Parallel()
+	desired := map[string]interface{}{
+		"metadata": map[string]interface{}{"labels": nil},
+		"spec": map[string]interface{}{"template": map[string]interface{}{
+			"metadata": map[string]interface{}{"annotations": nil},
+		}},
+	}
+	live := map[string]interface{}{
+		"metadata": map[string]interface{}{"labels": map[string]interface{}{"team": "a"}},
+		"spec": map[string]interface{}{"template": map[string]interface{}{
+			"metadata": map[string]interface{}{"annotations": map[string]interface{}{
+				"kubectl.kubernetes.io/restartedAt": "2026-11-02T00:00:00Z",
+			}},
+		}},
+	}
+	got := RenderDrift(desired, live, clientOptsFor("apps/v1", "Deployment"))
+	want := "metadata:\n  labels: <drift>\nspec:\n  template:\n    metadata:\n      annotations: <drift>\n"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+// The apiserver re-adds kubernetes.io/metadata.name to every Namespace, so a
+// null labels map against only that label is not drift; any other label is.
+func TestRenderDrift_NamespaceNullLabels(t *testing.T) {
+	t.Parallel()
+	desired := map[string]interface{}{"metadata": map[string]interface{}{"name": "ns", "labels": nil}}
+	live := map[string]interface{}{"metadata": map[string]interface{}{"name": "ns",
+		"labels": map[string]interface{}{namespaceNameLabel: "ns"}}}
+	if got := RenderDrift(desired, live, clientOptsFor("v1", "Namespace")); got != "" {
+		t.Fatalf("auto label only should not drift, got %q", got)
+	}
+	live["metadata"].(map[string]interface{})["labels"].(map[string]interface{})["team"] = "a"
+	if got := RenderDrift(desired, live, clientOptsFor("v1", "Namespace")); got != "metadata:\n  labels: <drift>\n" {
+		t.Fatalf("extra label must drift, got %q", got)
+	}
+	// Only Namespace gets the exception.
+	live["metadata"].(map[string]interface{})["labels"] = map[string]interface{}{namespaceNameLabel: "ns"}
+	if got := RenderDrift(desired, live, clientOptsFor("v1", "ConfigMap")); got == "" {
+		t.Fatal("the name label exception is Namespace only")
+	}
+}
+
+// CRDs get a JSON merge patch, where a null labels map is a no-op too.
+func TestRenderDrift_CRDNullLabels(t *testing.T) {
+	t.Parallel()
+	desired := map[string]interface{}{"metadata": map[string]interface{}{"labels": nil}}
+	live := map[string]interface{}{"metadata": map[string]interface{}{
+		"labels": map[string]interface{}{"team": "a"}}}
+	if got := RenderDrift(desired, live, clientOptsFor("example.com/v1", "Widget")); got != "" {
+		t.Fatalf("CRD null labels should not drift, got %q", got)
+	}
+}
+
+// Top-level annotations null on a built-in kind with controller and manual
+// annotations: apply re-adds last-applied and leaves the rest, so no drift.
+func TestRenderDrift_BuiltinNullAnnotationsWithExtras(t *testing.T) {
+	t.Parallel()
+	desired := map[string]interface{}{"metadata": map[string]interface{}{"annotations": nil}}
+	live := map[string]interface{}{"metadata": map[string]interface{}{
+		"annotations": map[string]interface{}{
+			"kubectl.kubernetes.io/last-applied-configuration": "{}",
+			"deployment.kubernetes.io/revision":                "3",
+			"owner":                                            "someone",
+		}}}
+	if got := RenderDrift(desired, live, clientOptsFor("apps/v1", "Deployment")); got != "" {
+		t.Fatalf("top-level null annotations should not drift, got %q", got)
+	}
+}
+
+func TestUsesMergePatch(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		apiVersion, kind string
+		want             bool
+	}{
+		{"v1", "Pod", false},
+		{"v1", "Namespace", false},
+		{"apps/v1", "Deployment", false},
+		{"batch/v1", "CronJob", false},
+		{"example.com/v1", "Widget", true},
+		{"gateway.networking.k8s.io/v1", "HTTPRoute", true},
+		{"cilium.io/v2", "CiliumNetworkPolicy", true},
+		{"", "Pod", false},
+		{"v1", "", false},
+	}
+	for _, c := range cases {
+		if got := usesMergePatch(c.apiVersion, c.kind); got != c.want {
+			t.Errorf("usesMergePatch(%q, %q) = %v, want %v", c.apiVersion, c.kind, got, c.want)
+		}
 	}
 }
 
@@ -312,8 +417,9 @@ func TestComputeDriftClient_SecretNullData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := computeDriftClient(desired, live, nil, nil, ShowNone); got != "" {
-		t.Fatalf("Secret with null data should not drift, got %q", got)
+	// Strategic patch keeps data: null, so apply would wipe the Secret's data.
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone); got != "data: <drift sensitive>\n" {
+		t.Fatalf("Secret with null data against live data must drift, got %q", got)
 	}
 }
 
@@ -354,8 +460,12 @@ func TestRenderDrift_NullInsideSliceElement(t *testing.T) {
 			}},
 		},
 	}
-	if got := RenderDrift(desired, live, clientOpts); got != "" {
-		t.Fatalf("null list inside a slice element should not drift, got %q", got)
+	if got := RenderDrift(desired, live, clientOptsFor("example.com/v1", "Widget")); got != "" {
+		t.Fatalf("CRD: null list inside a slice element should not drift, got %q", got)
+	}
+	want := "spec:\n  containers:\n  - _index_: 0\n    env: <drift>\n"
+	if got := RenderDrift(desired, live, clientOptsFor("v1", "Pod")); got != want {
+		t.Fatalf("built-in: got %q want %q", got, want)
 	}
 }
 
@@ -397,7 +507,7 @@ spec:
             cpu: 500m
             memory: 1Gi
 `)
-	if got := RenderDrift(desired, live, clientOptsFor("apps/v1")); got != "" {
+	if got := RenderDrift(desired, live, clientOptsFor("apps/v1", "DaemonSet")); got != "" {
 		t.Fatalf("canonicalised quantities should not drift, got %q", got)
 	}
 }

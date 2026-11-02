@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/kubectl/pkg/scheme"
 	yamlWriter "sigs.k8s.io/yaml"
 )
 
@@ -89,8 +91,8 @@ type DriftOptions struct {
 	Kind       string
 	APIVersion string
 
-	// NullAsAbsent treats a desired null against a live map or list as an
-	// absent key. Client engine only: a server dry-run null is real (#401).
+	// NullAsAbsent treats a desired null against a live map or list as absent
+	// where apply leaves it alone: CRDs, metadata.annotations. Client only.
 	NullAsAbsent bool
 
 	// CanonicalQuantities lets a quantity match the apiserver's canonical
@@ -102,6 +104,48 @@ type DriftOptions struct {
 type walkFlags struct {
 	nullAsAbsent bool
 	quantities   bool
+	mergePatch   bool // apply sends a JSON merge patch (CRDs): null is a no-op
+	namespace    bool // v1 Namespace: the apiserver re-adds its name label
+}
+
+// namespaceNameLabel is the label the apiserver sets on every Namespace.
+const namespaceNameLabel = "kubernetes.io/metadata.name"
+
+// usesMergePatch mirrors kubectl's apply.Patcher: kinds its scheme does not
+// know (CRDs) get a JSON merge patch, the rest a strategic merge patch.
+func usesMergePatch(apiVersion, kind string) bool {
+	if apiVersion == "" || kind == "" {
+		return false
+	}
+	return !scheme.Scheme.Recognizes(schema.FromAPIVersionAndKind(apiVersion, kind))
+}
+
+// nullIsNoop reports whether a desired null against live map or list
+// content leaves it in place on a client-side apply (measured, #402).
+func nullIsNoop(live interface{}, path []string, flags walkFlags) bool {
+	if flags.mergePatch {
+		return true
+	}
+	if len(path) != 2 || path[0] != "metadata" {
+		return false
+	}
+	switch path[1] {
+	case "annotations":
+		// apply writes last-applied into the map, so the patch is {}.
+		return true
+	case "labels":
+		m, ok := live.(map[string]interface{})
+		if !flags.namespace || !ok {
+			return false
+		}
+		for k := range m {
+			if k != namespaceNameLabel {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // coreQuantityGroups are the built-in API groups whose quantity fields
@@ -145,6 +189,8 @@ func RenderDrift(desired, live map[string]interface{}, opts DriftOptions) string
 	flags := walkFlags{
 		nullAsAbsent: opts.NullAsAbsent,
 		quantities:   opts.CanonicalQuantities && coreQuantityGroup(opts.APIVersion),
+		mergePatch:   usesMergePatch(opts.APIVersion, opts.Kind),
+		namespace:    opts.APIVersion == "v1" && opts.Kind == "Namespace",
 	}
 	tree, hasDrift := collectMapDrift(desired, live, nil, ignore, masks, opts.ShowMode, flags)
 	if !hasDrift {
@@ -214,12 +260,14 @@ func collectMapDrift(desired, live map[string]interface{}, path []string, ignore
 
 // collectAnyDrift dispatches on the desired value's concrete type.
 func collectAnyDrift(desired, live interface{}, path []string, ignore ignoreSet, masks []maskGlob, mode ShowMode, flags walkFlags) (interface{}, bool) {
-	// A YAML null where live holds a map or list (`annotations:` with no
-	// value) means the same as an absent key: live-only content is ignored.
+	// A YAML null against a live map or list (`annotations:` with no value)
+	// counts as absent only where the apply would leave live content alone.
 	if desired == nil && flags.nullAsAbsent {
 		switch live.(type) {
 		case map[string]interface{}, []interface{}:
-			return nil, false
+			if nullIsNoop(live, path, flags) {
+				return nil, false
+			}
 		}
 	}
 	switch d := desired.(type) {
