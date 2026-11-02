@@ -227,7 +227,9 @@ The comparison walks every key the user wrote in `yaml_body`. Extra fields the a
 - A value the user wrote differs from the live value (string equality, with whitespace trimmed)
 - A field the user wrote is absent from the live object
 
-Tends to over-report on objects that go through normalisation (memory units, durations) or admission-webhook mutation. The fix in v2 was to add the noisy path to `ignore_fields`; the same fix works here.
+A key written as YAML `null` (for example a bare `annotations:`) is treated like an absent key when the live value is a map or a list. Resource quantities are compared in the apiserver's canonical form, so `cpu: 1` matches `"1"` and `cpu: 0.5` matches `"500m"`. A number matches its canonical string anywhere except under `metadata` and top-level `data` / `stringData` / `binaryData`. A string such as `"1024Mi"` matches `"1Gi"` only under a core quantity field (`resources`, `requests`, `limits`, `capacity`, `allocatable`, `hard`, `overhead`, `sizeLimit`, and the LimitRange `max` / `min` / `default` / `defaultRequest` / `maxLimitRequestRatio` keys), so a hand-edited `env` value or CRD string still shows as drift.
+
+Tends to over-report on objects that go through other normalisation (durations) or admission-webhook mutation. The fix in v2 was to add the noisy path to `ignore_fields`; the same fix works here.
 
 #### `server` engine
 

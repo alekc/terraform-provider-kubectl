@@ -7,8 +7,10 @@ import (
 	"log"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	yamlWriter "sigs.k8s.io/yaml"
 )
 
@@ -178,6 +180,14 @@ func collectMapDrift(desired, live map[string]interface{}, path []string, ignore
 
 // collectAnyDrift dispatches on the desired value's concrete type.
 func collectAnyDrift(desired, live interface{}, path []string, ignore ignoreSet, masks []maskGlob, mode ShowMode) (interface{}, bool) {
+	// A YAML null where live holds a map or list (`annotations:` with no
+	// value) means the same as an absent key: live-only content is ignored.
+	if desired == nil {
+		switch live.(type) {
+		case map[string]interface{}, []interface{}:
+			return nil, false
+		}
+	}
 	switch d := desired.(type) {
 	case map[string]interface{}:
 		l, _ := live.(map[string]interface{})
@@ -196,7 +206,7 @@ func collectAnyDrift(desired, live interface{}, path []string, ignore ignoreSet,
 		}
 		return collectSliceDrift(d, l, path, ignore, masks, mode)
 	default:
-		if leafEqual(desired, live) {
+		if leafEqual(desired, live) || quantityEqual(desired, live, path) {
 			return nil, false
 		}
 		return renderLeaf(desired, live, path, masks, mode), true
@@ -359,6 +369,68 @@ func leafEqual(desired, live interface{}) bool {
 		}
 	}
 	return reflect.DeepEqual(desired, live)
+}
+
+// quantityEqual reports whether live is the canonical form the apiserver
+// stores for a resource.Quantity written as desired: 1 -> "1", 0.5 -> "500m".
+func quantityEqual(desired, live interface{}, path []string) bool {
+	ls, ok := live.(string)
+	if !ok || !quantityPathAllowed(path) {
+		return false
+	}
+	var raw string
+	switch d := desired.(type) {
+	case string:
+		if !quantityPathKnown(path) {
+			return false
+		}
+		raw = strings.TrimSpace(d)
+	case int, int32, int64, uint, uint32, uint64:
+		raw = fmt.Sprintf("%d", d)
+	case float64:
+		raw = strconv.FormatFloat(d, 'f', -1, 64)
+	case float32:
+		raw = strconv.FormatFloat(float64(d), 'f', -1, 32)
+	default:
+		return false
+	}
+	q, err := resource.ParseQuantity(raw)
+	if err != nil {
+		return false
+	}
+	return q.String() == strings.TrimSpace(ls)
+}
+
+// quantityPathAllowed excludes metadata and ConfigMap / Secret payloads, where
+// "1.0" becoming "1" is a real edit rather than apiserver canonicalisation.
+func quantityPathAllowed(path []string) bool {
+	if len(path) == 0 {
+		return false
+	}
+	switch path[0] {
+	case "metadata", "data", "stringData", "binaryData":
+		return false
+	}
+	return true
+}
+
+// quantityKeys name the core-API fields that hold resource.Quantity values.
+// A string only counts as a quantity under one of them; a number anywhere.
+var quantityKeys = map[string]bool{
+	"resources": true, "requests": true, "limits": true, "capacity": true,
+	"allocatable": true, "hard": true, "overhead": true, "podFixed": true,
+	"sizeLimit": true, "max": true, "min": true, "default": true,
+	"defaultRequest": true, "maxLimitRequestRatio": true,
+}
+
+// quantityPathKnown reports whether any segment of path is a quantity key.
+func quantityPathKnown(path []string) bool {
+	for _, p := range path {
+		if quantityKeys[p] {
+			return true
+		}
+	}
+	return false
 }
 
 // ignoreSet packages the dotted paths that should be skipped entirely.
