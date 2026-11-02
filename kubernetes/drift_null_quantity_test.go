@@ -72,6 +72,34 @@ func TestRenderDrift_NullInDesired_ListAndScalar(t *testing.T) {
 	}
 }
 
+func TestRenderDrift_NullInDesired_LiveKeyAbsent(t *testing.T) {
+	t.Parallel()
+	desired := map[string]interface{}{
+		"metadata": map[string]interface{}{"name": "x", "annotations": nil},
+	}
+	live := map[string]interface{}{
+		"metadata": map[string]interface{}{"name": "x"},
+	}
+	if got := RenderDrift(desired, live, DriftOptions{}); got != "" {
+		t.Fatalf("null against an absent live key should not drift, got %q", got)
+	}
+}
+
+func TestComputeDriftClient_SecretNullData(t *testing.T) {
+	t.Parallel()
+	desired, err := yaml.ParseYAML("apiVersion: v1\nkind: Secret\nmetadata:\n  name: s\ndata:\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := yaml.ParseYAML("apiVersion: v1\nkind: Secret\nmetadata:\n  name: s\ndata:\n  k: dg==\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone); got != "" {
+		t.Fatalf("Secret with null data should not drift, got %q", got)
+	}
+}
+
 func TestRenderDrift_NullInsideSliceElement(t *testing.T) {
 	t.Parallel()
 	desired := map[string]interface{}{
