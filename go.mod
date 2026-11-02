@@ -13,7 +13,7 @@ require (
 	github.com/hashicorp/terraform-plugin-framework-validators v0.19.0
 	github.com/hashicorp/terraform-plugin-go v0.31.0
 	github.com/hashicorp/terraform-plugin-testing v1.16.0
-	github.com/icza/dyno v0.0.0-20200205103839-49cb13720835
+	github.com/icza/dyno v0.0.0-20260912175837-51f8ab52fd15
 	github.com/mitchellh/go-homedir v1.1.0
 	github.com/stretchr/testify v1.12.1
 	github.com/zclconf/go-cty v1.19.0
