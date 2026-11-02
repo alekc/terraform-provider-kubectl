@@ -17,6 +17,83 @@ func mustParse(t *testing.T, body string) map[string]interface{} {
 	return m.Raw.Object
 }
 
+// clientOpts mirrors what computeDriftClient passes to RenderDrift.
+var clientOpts = DriftOptions{NullAsAbsent: true}
+
+// The server engine compares a dry-run response, where an explicit null on
+// a nullable CRD field is a real change, so it must still drift there.
+func TestRenderDrift_NullAsAbsentOff_ServerEngine(t *testing.T) {
+	t.Parallel()
+	desired := map[string]interface{}{
+		"spec": map[string]interface{}{"tags": nil, "selector": nil},
+	}
+	live := map[string]interface{}{
+		"spec": map[string]interface{}{
+			"tags":     []interface{}{"a"},
+			"selector": map[string]interface{}{"app": "x"},
+		},
+	}
+	got := RenderDrift(desired, live, DriftOptions{})
+	want := "spec:\n  selector: <drift>\n  tags: <drift>\n"
+	if got != want {
+		t.Fatalf("server engine null vs collection: got %q want %q", got, want)
+	}
+}
+
+func TestComputeDriftClient_NullAnnotations(t *testing.T) {
+	t.Parallel()
+	desired, err := yaml.ParseYAML("apiVersion: v1\nkind: Service\nmetadata:\n  name: s\n  annotations:\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := yaml.ParseYAML("apiVersion: v1\nkind: Service\nmetadata:\n  name: s\n  annotations:\n    kubectl.kubernetes.io/last-applied-configuration: '{}'\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone); got != "" {
+		t.Fatalf("client engine must treat null annotations as absent, got %q", got)
+	}
+}
+
+// Bot review on #402: canonical-looking strings outside core quantity maps
+// are real edits and must still drift end to end.
+func TestRenderDrift_QuantityLookalikeStringsStillDrift(t *testing.T) {
+	t.Parallel()
+	desired := mustParse(t, `
+apiVersion: example.com/v1
+kind: Widget
+metadata:
+  name: w
+spec:
+  resources:
+    version: "1.0"
+  max: "0.5"
+  template:
+    metadata:
+      annotations:
+        limits: "0.5"
+`)
+	live := mustParse(t, `
+apiVersion: example.com/v1
+kind: Widget
+metadata:
+  name: w
+spec:
+  resources:
+    version: "1"
+  max: "500m"
+  template:
+    metadata:
+      annotations:
+        limits: "500m"
+`)
+	got := RenderDrift(desired, live, clientOpts)
+	want := "spec:\n  max: <drift>\n  resources:\n    version: <drift>\n  template:\n    metadata:\n      annotations:\n        limits: <drift>\n"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
 func TestRenderDrift_NullMapInDesired(t *testing.T) {
 	t.Parallel()
 	desired := mustParse(t, `
@@ -47,7 +124,7 @@ metadata:
 			t.Parallel()
 			live := deepClone(desired)
 			live["metadata"].(map[string]interface{})["annotations"] = c.live
-			if got := RenderDrift(desired, live, DriftOptions{}); got != "" {
+			if got := RenderDrift(desired, live, clientOpts); got != "" {
 				t.Fatalf("null annotations should not drift, got %q", got)
 			}
 		})
@@ -65,7 +142,7 @@ func TestRenderDrift_NullInDesired_ListAndScalar(t *testing.T) {
 			"replicas": int64(2),
 		},
 	}
-	got := RenderDrift(desired, live, DriftOptions{})
+	got := RenderDrift(desired, live, clientOpts)
 	want := "spec:\n  replicas: <drift>\n"
 	if got != want {
 		t.Fatalf("null list is absent, null scalar is drift: got %q want %q", got, want)
@@ -80,7 +157,7 @@ func TestRenderDrift_NullInDesired_LiveKeyAbsent(t *testing.T) {
 	live := map[string]interface{}{
 		"metadata": map[string]interface{}{"name": "x"},
 	}
-	if got := RenderDrift(desired, live, DriftOptions{}); got != "" {
+	if got := RenderDrift(desired, live, clientOpts); got != "" {
 		t.Fatalf("null against an absent live key should not drift, got %q", got)
 	}
 }
@@ -115,7 +192,7 @@ func TestRenderDrift_NullInsideSliceElement(t *testing.T) {
 			}},
 		},
 	}
-	if got := RenderDrift(desired, live, DriftOptions{}); got != "" {
+	if got := RenderDrift(desired, live, clientOpts); got != "" {
 		t.Fatalf("null list inside a slice element should not drift, got %q", got)
 	}
 }
@@ -195,6 +272,15 @@ func TestQuantityEqual(t *testing.T) {
 		{"string-pvc-storage", "1024Mi", "1Gi", []string{"spec", "resources", "requests", "storage"}, true},
 		{"string-quota-hard", "0.5", "500m", []string{"spec", "hard", "cpu"}, true},
 		{"string-emptydir-sizelimit", "1024Mi", "1Gi", []string{"spec", "volumes", "[0]", "emptyDir", "sizeLimit"}, true},
+		// Cases raised by CodeRabbit and Copilot on #402.
+		{"string-crd-resources-version", "1.0", "1", []string{"spec", "resources", "version"}, false},
+		{"string-template-annotation-limits", "0.5", "500m", []string{"spec", "template", "metadata", "annotations", "limits"}, false},
+		{"number-template-annotation", int64(1), "1", []string{"spec", "template", "metadata", "annotations", "limits"}, false},
+		{"string-crd-spec-max", "0.5", "500m", []string{"spec", "max"}, false},
+		{"string-limits-nested-deeper", "1.0", "1", []string{"spec", "limits", "x", "version"}, false},
+		{"string-limitrange-max", "0.5", "500m", []string{"spec", "limits", "[0]", "max", "cpu"}, true},
+		{"string-quota-dotted-key", "0.5", "500m", []string{"spec", "hard", "requests.cpu"}, true},
+		{"string-runtimeclass-podfixed", "0.25", "250m", []string{"overhead", "podFixed", "cpu"}, true},
 	}
 	for _, c := range cases {
 		c := c

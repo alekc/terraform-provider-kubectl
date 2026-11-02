@@ -527,6 +527,7 @@ func computeDriftClient(desired, live *yaml.Manifest, ignoreFields, maskPaths []
 		ShowMode:     mode,
 		Kind:         desired.GetKind(),
 		APIVersion:   desired.GetAPIVersion(),
+		NullAsAbsent: true,
 	})
 }
 

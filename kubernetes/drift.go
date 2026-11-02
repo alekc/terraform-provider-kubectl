@@ -88,6 +88,10 @@ type DriftOptions struct {
 	// `stringData.*` are masked automatically.
 	Kind       string
 	APIVersion string
+
+	// NullAsAbsent treats a desired null against a live map or list as an
+	// absent key. Client engine only: a server dry-run null is real (#401).
+	NullAsAbsent bool
 }
 
 // RenderDrift returns a YAML string containing only the paths under which
@@ -112,7 +116,7 @@ func RenderDrift(desired, live map[string]interface{}, opts DriftOptions) string
 	ignore := buildIgnoreSet(opts.IgnoreFields)
 	masks := buildMaskGlobs(opts.MaskPaths, opts.Kind, opts.APIVersion)
 
-	tree, hasDrift := collectMapDrift(desired, live, nil, ignore, masks, opts.ShowMode)
+	tree, hasDrift := collectMapDrift(desired, live, nil, ignore, masks, opts.ShowMode, opts.NullAsAbsent)
 	if !hasDrift {
 		return ""
 	}
@@ -129,7 +133,7 @@ func RenderDrift(desired, live map[string]interface{}, opts DriftOptions) string
 
 // collectMapDrift walks a map pair and returns the drift subtree plus a
 // bool indicating whether anything drifted under this node.
-func collectMapDrift(desired, live map[string]interface{}, path []string, ignore ignoreSet, masks []maskGlob, mode ShowMode) (map[string]interface{}, bool) {
+func collectMapDrift(desired, live map[string]interface{}, path []string, ignore ignoreSet, masks []maskGlob, mode ShowMode, nullAsAbsent bool) (map[string]interface{}, bool) {
 	result := map[string]interface{}{}
 	keys := make([]string, 0, len(desired))
 	for k := range desired {
@@ -169,7 +173,7 @@ func collectMapDrift(desired, live map[string]interface{}, path []string, ignore
 			log.Printf("[TRACE] desired-only path (live lacks key): %s", strings.Join(childPath, "."))
 			continue
 		}
-		child, drifted := collectAnyDrift(dv, lv, childPath, ignore, masks, mode)
+		child, drifted := collectAnyDrift(dv, lv, childPath, ignore, masks, mode, nullAsAbsent)
 		if drifted {
 			result[k] = child
 			any = true
@@ -179,10 +183,10 @@ func collectMapDrift(desired, live map[string]interface{}, path []string, ignore
 }
 
 // collectAnyDrift dispatches on the desired value's concrete type.
-func collectAnyDrift(desired, live interface{}, path []string, ignore ignoreSet, masks []maskGlob, mode ShowMode) (interface{}, bool) {
+func collectAnyDrift(desired, live interface{}, path []string, ignore ignoreSet, masks []maskGlob, mode ShowMode, nullAsAbsent bool) (interface{}, bool) {
 	// A YAML null where live holds a map or list (`annotations:` with no
 	// value) means the same as an absent key: live-only content is ignored.
-	if desired == nil {
+	if desired == nil && nullAsAbsent {
 		switch live.(type) {
 		case map[string]interface{}, []interface{}:
 			return nil, false
@@ -195,7 +199,7 @@ func collectAnyDrift(desired, live interface{}, path []string, ignore ignoreSet,
 		if live != nil && l == nil {
 			return renderLeaf(d, live, path, masks, mode), true
 		}
-		return collectMapDrift(d, l, path, ignore, masks, mode)
+		return collectMapDrift(d, l, path, ignore, masks, mode, nullAsAbsent)
 	case []interface{}:
 		l, ok := live.([]interface{})
 		if !ok {
@@ -204,7 +208,7 @@ func collectAnyDrift(desired, live interface{}, path []string, ignore ignoreSet,
 			}
 			return renderLeaf(d, live, path, masks, mode), true
 		}
-		return collectSliceDrift(d, l, path, ignore, masks, mode)
+		return collectSliceDrift(d, l, path, ignore, masks, mode, nullAsAbsent)
 	default:
 		if leafEqual(desired, live) || quantityEqual(desired, live, path) {
 			return nil, false
@@ -216,7 +220,7 @@ func collectAnyDrift(desired, live interface{}, path []string, ignore ignoreSet,
 // collectSliceDrift compares two []interface{} by index. Length mismatches
 // are reported with explicit <missing> entries for the trailing positions
 // on whichever side is shorter.
-func collectSliceDrift(desired, live []interface{}, path []string, ignore ignoreSet, masks []maskGlob, mode ShowMode) ([]interface{}, bool) {
+func collectSliceDrift(desired, live []interface{}, path []string, ignore ignoreSet, masks []maskGlob, mode ShowMode, nullAsAbsent bool) ([]interface{}, bool) {
 	var out []interface{}
 	any := false
 	max := len(desired)
@@ -236,7 +240,7 @@ func collectSliceDrift(desired, live []interface{}, path []string, ignore ignore
 		idxPath := append(path, fmt.Sprintf("[%d]", i)) //nolint:gocritic // intentional non-aliasing
 		switch {
 		case hasD && hasL:
-			child, drifted := collectAnyDrift(d, l, idxPath, ignore, masks, mode)
+			child, drifted := collectAnyDrift(d, l, idxPath, ignore, masks, mode, nullAsAbsent)
 			if drifted {
 				out = append(out, wrapIndexedItem(i, child))
 				any = true
@@ -401,36 +405,41 @@ func quantityEqual(desired, live interface{}, path []string) bool {
 	return q.String() == strings.TrimSpace(ls)
 }
 
-// quantityPathAllowed excludes metadata and ConfigMap / Secret payloads, where
-// "1.0" becoming "1" is a real edit rather than apiserver canonicalisation.
+// quantityPathAllowed excludes any metadata (top level or nested, such as
+// pod template annotations) and ConfigMap / Secret payloads.
 func quantityPathAllowed(path []string) bool {
 	if len(path) == 0 {
 		return false
 	}
 	switch path[0] {
-	case "metadata", "data", "stringData", "binaryData":
+	case "data", "stringData", "binaryData":
 		return false
+	}
+	for _, p := range path {
+		if p == "metadata" {
+			return false
+		}
 	}
 	return true
 }
 
-// quantityKeys name the core-API fields that hold resource.Quantity values.
-// A string only counts as a quantity under one of them; a number anywhere.
-var quantityKeys = map[string]bool{
-	"resources": true, "requests": true, "limits": true, "capacity": true,
-	"allocatable": true, "hard": true, "overhead": true, "podFixed": true,
-	"sizeLimit": true, "max": true, "min": true, "default": true,
-	"defaultRequest": true, "maxLimitRequestRatio": true,
+// quantityParents name core-API maps whose values are resource.Quantity:
+// requests.cpu, hard["requests.cpu"], LimitRange max.memory and so on.
+var quantityParents = map[string]bool{
+	"requests": true, "limits": true, "capacity": true, "allocatable": true,
+	"hard": true, "overhead": true, "podFixed": true, "max": true,
+	"min": true, "default": true, "defaultRequest": true,
+	"maxLimitRequestRatio": true,
 }
 
-// quantityPathKnown reports whether any segment of path is a quantity key.
+// quantityPathKnown reports whether a string at path is a core quantity: a
+// value directly under a quantityParents map, or an emptyDir sizeLimit.
 func quantityPathKnown(path []string) bool {
-	for _, p := range path {
-		if quantityKeys[p] {
-			return true
-		}
+	n := len(path)
+	if n >= 1 && path[n-1] == "sizeLimit" {
+		return true
 	}
-	return false
+	return n >= 2 && quantityParents[path[n-2]]
 }
 
 // ignoreSet packages the dotted paths that should be skipped entirely.
