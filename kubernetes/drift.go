@@ -92,6 +92,32 @@ type DriftOptions struct {
 	// NullAsAbsent treats a desired null against a live map or list as an
 	// absent key. Client engine only: a server dry-run null is real (#401).
 	NullAsAbsent bool
+
+	// CanonicalQuantities lets a quantity match the apiserver's canonical
+	// string (1 vs "1"). Client engine only, and core API groups only.
+	CanonicalQuantities bool
+}
+
+// walkFlags carries the client-engine normalisations down the walk.
+type walkFlags struct {
+	nullAsAbsent bool
+	quantities   bool
+}
+
+// coreQuantityGroups are the built-in API groups whose quantity fields
+// quantityEqual knows; CRDs keep strict comparison (int-or-string fields).
+var coreQuantityGroups = map[string]bool{"": true, "apps": true, "batch": true, "node.k8s.io": true}
+
+// coreQuantityGroup reports whether apiVersion belongs to coreQuantityGroups.
+func coreQuantityGroup(apiVersion string) bool {
+	if apiVersion == "" {
+		return false
+	}
+	group := ""
+	if i := strings.Index(apiVersion, "/"); i >= 0 {
+		group = apiVersion[:i]
+	}
+	return coreQuantityGroups[group]
 }
 
 // RenderDrift returns a YAML string containing only the paths under which
@@ -116,7 +142,11 @@ func RenderDrift(desired, live map[string]interface{}, opts DriftOptions) string
 	ignore := buildIgnoreSet(opts.IgnoreFields)
 	masks := buildMaskGlobs(opts.MaskPaths, opts.Kind, opts.APIVersion)
 
-	tree, hasDrift := collectMapDrift(desired, live, nil, ignore, masks, opts.ShowMode, opts.NullAsAbsent)
+	flags := walkFlags{
+		nullAsAbsent: opts.NullAsAbsent,
+		quantities:   opts.CanonicalQuantities && coreQuantityGroup(opts.APIVersion),
+	}
+	tree, hasDrift := collectMapDrift(desired, live, nil, ignore, masks, opts.ShowMode, flags)
 	if !hasDrift {
 		return ""
 	}
@@ -133,7 +163,7 @@ func RenderDrift(desired, live map[string]interface{}, opts DriftOptions) string
 
 // collectMapDrift walks a map pair and returns the drift subtree plus a
 // bool indicating whether anything drifted under this node.
-func collectMapDrift(desired, live map[string]interface{}, path []string, ignore ignoreSet, masks []maskGlob, mode ShowMode, nullAsAbsent bool) (map[string]interface{}, bool) {
+func collectMapDrift(desired, live map[string]interface{}, path []string, ignore ignoreSet, masks []maskGlob, mode ShowMode, flags walkFlags) (map[string]interface{}, bool) {
 	result := map[string]interface{}{}
 	keys := make([]string, 0, len(desired))
 	for k := range desired {
@@ -173,7 +203,7 @@ func collectMapDrift(desired, live map[string]interface{}, path []string, ignore
 			log.Printf("[TRACE] desired-only path (live lacks key): %s", strings.Join(childPath, "."))
 			continue
 		}
-		child, drifted := collectAnyDrift(dv, lv, childPath, ignore, masks, mode, nullAsAbsent)
+		child, drifted := collectAnyDrift(dv, lv, childPath, ignore, masks, mode, flags)
 		if drifted {
 			result[k] = child
 			any = true
@@ -183,10 +213,10 @@ func collectMapDrift(desired, live map[string]interface{}, path []string, ignore
 }
 
 // collectAnyDrift dispatches on the desired value's concrete type.
-func collectAnyDrift(desired, live interface{}, path []string, ignore ignoreSet, masks []maskGlob, mode ShowMode, nullAsAbsent bool) (interface{}, bool) {
+func collectAnyDrift(desired, live interface{}, path []string, ignore ignoreSet, masks []maskGlob, mode ShowMode, flags walkFlags) (interface{}, bool) {
 	// A YAML null where live holds a map or list (`annotations:` with no
 	// value) means the same as an absent key: live-only content is ignored.
-	if desired == nil && nullAsAbsent {
+	if desired == nil && flags.nullAsAbsent {
 		switch live.(type) {
 		case map[string]interface{}, []interface{}:
 			return nil, false
@@ -199,7 +229,7 @@ func collectAnyDrift(desired, live interface{}, path []string, ignore ignoreSet,
 		if live != nil && l == nil {
 			return renderLeaf(d, live, path, masks, mode), true
 		}
-		return collectMapDrift(d, l, path, ignore, masks, mode, nullAsAbsent)
+		return collectMapDrift(d, l, path, ignore, masks, mode, flags)
 	case []interface{}:
 		l, ok := live.([]interface{})
 		if !ok {
@@ -208,9 +238,9 @@ func collectAnyDrift(desired, live interface{}, path []string, ignore ignoreSet,
 			}
 			return renderLeaf(d, live, path, masks, mode), true
 		}
-		return collectSliceDrift(d, l, path, ignore, masks, mode, nullAsAbsent)
+		return collectSliceDrift(d, l, path, ignore, masks, mode, flags)
 	default:
-		if leafEqual(desired, live) || quantityEqual(desired, live, path) {
+		if leafEqual(desired, live) || (flags.quantities && quantityEqual(desired, live, path)) {
 			return nil, false
 		}
 		return renderLeaf(desired, live, path, masks, mode), true
@@ -220,7 +250,7 @@ func collectAnyDrift(desired, live interface{}, path []string, ignore ignoreSet,
 // collectSliceDrift compares two []interface{} by index. Length mismatches
 // are reported with explicit <missing> entries for the trailing positions
 // on whichever side is shorter.
-func collectSliceDrift(desired, live []interface{}, path []string, ignore ignoreSet, masks []maskGlob, mode ShowMode, nullAsAbsent bool) ([]interface{}, bool) {
+func collectSliceDrift(desired, live []interface{}, path []string, ignore ignoreSet, masks []maskGlob, mode ShowMode, flags walkFlags) ([]interface{}, bool) {
 	var out []interface{}
 	any := false
 	max := len(desired)
@@ -240,7 +270,7 @@ func collectSliceDrift(desired, live []interface{}, path []string, ignore ignore
 		idxPath := append(path, fmt.Sprintf("[%d]", i)) //nolint:gocritic // intentional non-aliasing
 		switch {
 		case hasD && hasL:
-			child, drifted := collectAnyDrift(d, l, idxPath, ignore, masks, mode, nullAsAbsent)
+			child, drifted := collectAnyDrift(d, l, idxPath, ignore, masks, mode, flags)
 			if drifted {
 				out = append(out, wrapIndexedItem(i, child))
 				any = true
@@ -379,15 +409,12 @@ func leafEqual(desired, live interface{}) bool {
 // stores for a resource.Quantity written as desired: 1 -> "1", 0.5 -> "500m".
 func quantityEqual(desired, live interface{}, path []string) bool {
 	ls, ok := live.(string)
-	if !ok || !quantityPathAllowed(path) {
+	if !ok || !quantityPathAllowed(path) || !quantityPathKnown(path) {
 		return false
 	}
 	var raw string
 	switch d := desired.(type) {
 	case string:
-		if !quantityPathKnown(path) {
-			return false
-		}
 		raw = strings.TrimSpace(d)
 	case int, int32, int64, uint, uint32, uint64:
 		raw = fmt.Sprintf("%d", d)

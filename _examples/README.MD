@@ -10,5 +10,5 @@
 
 ## Tests and Bugs
 
-- [Fix for 'got string expected struct'](./ingress_complex/complex_ingress.tf) this also provides a sample of using both the `kubectl` provider and the `kubernetes` provider in the same TF config. 
-- [Null annotations](./drift_normalisation/null_annotations_service.tf), [null annotations with resource quantities](./drift_normalisation/null_annotations_quantity_deployment.tf) and [ResourceQuota quantities](./drift_normalisation/resource_quota.tf): no drift after apply (#401).
+- [Fix for 'got string expected struct'](./ingress_complex/complex_ingress.tf) this also provides a sample of using both the `kubectl` provider and the `kubernetes` provider in the same TF config.
+- [Null annotations](./drift_normalisation/null_annotations_service.tf), [null annotations with resource quantities](./drift_normalisation/null_annotations_quantity_deployment.tf), [ResourceQuota quantities](./drift_normalisation/resource_quota.tf) and [a custom resource with null and int-or-string fields](./drift_normalisation/crd_null_and_int_or_string.tf): no drift after apply (#401).

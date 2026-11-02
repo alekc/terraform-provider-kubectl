@@ -18,7 +18,130 @@ func mustParse(t *testing.T, body string) map[string]interface{} {
 }
 
 // clientOpts mirrors what computeDriftClient passes to RenderDrift.
-var clientOpts = DriftOptions{NullAsAbsent: true}
+var clientOpts = DriftOptions{NullAsAbsent: true, CanonicalQuantities: true}
+
+// clientOptsFor is clientOpts for a given apiVersion, which gates quantities.
+func clientOptsFor(apiVersion string) DriftOptions {
+	o := clientOpts
+	o.APIVersion = apiVersion
+	return o
+}
+
+func TestCoreQuantityGroup(t *testing.T) {
+	t.Parallel()
+	for apiVersion, want := range map[string]bool{
+		"v1": true, "apps/v1": true, "batch/v1": true, "node.k8s.io/v1": true,
+		"": false, "example.com/v1": false, "autoscaling.k8s.io/v1": false,
+		"karpenter.sh/v1": false, "cilium.io/v2": false,
+	} {
+		if got := coreQuantityGroup(apiVersion); got != want {
+			t.Errorf("coreQuantityGroup(%q) = %v, want %v", apiVersion, got, want)
+		}
+	}
+}
+
+// Server engine: the dry-run response keeps whatever type was applied, so a
+// number vs string at a quantity path is a real difference there.
+func TestRenderDrift_ServerEngine_NoQuantityMatching(t *testing.T) {
+	t.Parallel()
+	desired := map[string]interface{}{"spec": map[string]interface{}{
+		"resources": map[string]interface{}{"limits": map[string]interface{}{"cpu": int64(1)}},
+	}}
+	live := map[string]interface{}{"spec": map[string]interface{}{
+		"resources": map[string]interface{}{"limits": map[string]interface{}{"cpu": "1"}},
+	}}
+	got := RenderDrift(desired, live, DriftOptions{APIVersion: "apps/v1"})
+	if got == "" {
+		t.Fatal("server engine must not canonicalise quantities")
+	}
+	if got := RenderDrift(desired, live, clientOptsFor("apps/v1")); got != "" {
+		t.Fatalf("client engine on a core kind should match, got %q", got)
+	}
+}
+
+// Custom resources keep strict comparison: int-or-string fields store the
+// type that was written, and CRD maps named limits/max/hard are not quantities.
+func TestRenderDrift_CRD_StrictComparison(t *testing.T) {
+	t.Parallel()
+	desired := mustParse(t, `
+apiVersion: drifttest.kubectl.alekc.dev/v1
+kind: DriftWidget
+metadata:
+  name: w
+  annotations:
+spec:
+  surge: 1
+  limits:
+    cpu: 1
+  max:
+    cpu: "0.5"
+  hard:
+    tier: "0.5"
+  sizeLimit: "1024Mi"
+  tags:
+`)
+	live := mustParse(t, `
+apiVersion: drifttest.kubectl.alekc.dev/v1
+kind: DriftWidget
+metadata:
+  name: w
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: "{}"
+spec:
+  surge: "1"
+  limits:
+    cpu: "1"
+  max:
+    cpu: 500m
+  hard:
+    tier: 500m
+  sizeLimit: 1Gi
+  tags:
+  - a
+`)
+	got := RenderDrift(desired, live, clientOptsFor("drifttest.kubectl.alekc.dev/v1"))
+	want := "spec:\n  hard:\n    tier: <drift>\n  limits:\n    cpu: <drift>\n  max:\n    cpu: <drift>\n  sizeLimit: <drift>\n  surge: <drift>\n"
+	if got != want {
+		t.Fatalf("CRD must compare strictly, null map/list still absent:\ngot  %q\nwant %q", got, want)
+	}
+}
+
+// CRD with values that already match exactly: no drift, null-as-absent still
+// applies to custom resources.
+func TestComputeDriftClient_CRDInSync(t *testing.T) {
+	t.Parallel()
+	body := "apiVersion: drifttest.kubectl.alekc.dev/v1\nkind: DriftWidget\nmetadata:\n  name: w\n  annotations:\nspec:\n  surge: 1\n  limits:\n    cpu: 1\n"
+	desired, err := yaml.ParseYAML(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := yaml.ParseYAML(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live.Raw.Object["metadata"].(map[string]interface{})["annotations"] = map[string]interface{}{
+		"kubectl.kubernetes.io/last-applied-configuration": "{}",
+	}
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone); got != "" {
+		t.Fatalf("in-sync CRD should not drift, got %q", got)
+	}
+}
+
+// End to end through the client engine: the issue's DaemonSet cpu: 1.
+func TestComputeDriftClient_CoreQuantity(t *testing.T) {
+	t.Parallel()
+	desired, err := yaml.ParseYAML("apiVersion: apps/v1\nkind: DaemonSet\nmetadata:\n  name: d\nspec:\n  template:\n    spec:\n      initContainers:\n      - name: i\n        resources:\n          limits:\n            cpu: 1\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := yaml.ParseYAML("apiVersion: apps/v1\nkind: DaemonSet\nmetadata:\n  name: d\nspec:\n  template:\n    spec:\n      initContainers:\n      - name: i\n        resources:\n          limits:\n            cpu: \"1\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone); got != "" {
+		t.Fatalf("client engine must match cpu 1 against \"1\", got %q", got)
+	}
+}
 
 // The server engine compares a dry-run response, where an explicit null on
 // a nullable CRD field is a real change, so it must still drift there.
@@ -87,7 +210,8 @@ spec:
       annotations:
         limits: "500m"
 `)
-	got := RenderDrift(desired, live, clientOpts)
+	// Core group, so only the path rule can keep these as drift.
+	got := RenderDrift(desired, live, clientOptsFor("v1"))
 	want := "spec:\n  max: <drift>\n  resources:\n    version: <drift>\n  template:\n    metadata:\n      annotations:\n        limits: <drift>\n"
 	if got != want {
 		t.Fatalf("got %q want %q", got, want)
@@ -177,6 +301,28 @@ func TestComputeDriftClient_SecretNullData(t *testing.T) {
 	}
 }
 
+// opencode cross-check on #402: null data plus stringData must keep the
+// stringData comparison instead of dropping it with the null map.
+func TestComputeDriftClient_SecretNullDataWithStringData(t *testing.T) {
+	t.Parallel()
+	desired, err := yaml.ParseYAML("apiVersion: v1\nkind: Secret\nmetadata:\n  name: s\ndata:\nstringData:\n  foo: x\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := yaml.ParseYAML("apiVersion: v1\nkind: Secret\nmetadata:\n  name: s\ndata:\n  foo: b2xk\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "data:\n  foo: <drift sensitive>\n"
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone); got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	live.Raw.Object["data"] = map[string]interface{}{"foo": "eA=="}
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone); got != "" {
+		t.Fatalf("matching stringData should not drift, got %q", got)
+	}
+}
+
 func TestRenderDrift_NullInsideSliceElement(t *testing.T) {
 	t.Parallel()
 	desired := map[string]interface{}{
@@ -235,7 +381,7 @@ spec:
             cpu: 500m
             memory: 1Gi
 `)
-	if got := RenderDrift(desired, live, DriftOptions{}); got != "" {
+	if got := RenderDrift(desired, live, clientOptsFor("apps/v1")); got != "" {
 		t.Fatalf("canonicalised quantities should not drift, got %q", got)
 	}
 }
@@ -268,7 +414,8 @@ func TestQuantityEqual(t *testing.T) {
 		{"empty-path", int64(1), "1", nil, false},
 		{"string-outside-quantity-keys", "0.5", "500m", []string{"spec", "containers", "[0]", "env", "[0]", "value"}, false},
 		{"string-crd-version", "1.0", "1", []string{"spec", "version"}, false},
-		{"number-outside-quantity-keys", int64(1), "1", []string{"spec", "minAllowed", "cpu"}, true},
+		{"number-outside-quantity-keys", int64(1), "1", []string{"spec", "minAllowed", "cpu"}, false},
+		{"number-int-or-string-field", int64(1), "1", []string{"spec", "surge"}, false},
 		{"string-pvc-storage", "1024Mi", "1Gi", []string{"spec", "resources", "requests", "storage"}, true},
 		{"string-quota-hard", "0.5", "500m", []string{"spec", "hard", "cpu"}, true},
 		{"string-emptydir-sizelimit", "1024Mi", "1Gi", []string{"spec", "volumes", "[0]", "emptyDir", "sizeLimit"}, true},

@@ -510,6 +510,10 @@ func computeDriftClient(desired, live *yaml.Manifest, ignoreFields, maskPaths []
 		if stringData, found := desiredObj["stringData"]; found {
 			if sdMap, ok := stringData.(map[string]interface{}); ok {
 				desiredObj = desired.Raw.DeepCopy().Object
+				// A bare `data:` is null; SetNestedField cannot write into it.
+				if _, isMap := desiredObj["data"].(map[string]interface{}); !isMap {
+					desiredObj["data"] = map[string]interface{}{}
+				}
 				for k, v := range sdMap {
 					encoded := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%v", v)))
 					if err := meta_v1_unstruct.SetNestedField(desiredObj, encoded, "data", k); err != nil {
@@ -522,12 +526,13 @@ func computeDriftClient(desired, live *yaml.Manifest, ignoreFields, maskPaths []
 		}
 	}
 	return RenderDrift(desiredObj, live.Raw.Object, DriftOptions{
-		IgnoreFields: ignoreFields,
-		MaskPaths:    maskPaths,
-		ShowMode:     mode,
-		Kind:         desired.GetKind(),
-		APIVersion:   desired.GetAPIVersion(),
-		NullAsAbsent: true,
+		IgnoreFields:        ignoreFields,
+		MaskPaths:           maskPaths,
+		ShowMode:            mode,
+		Kind:                desired.GetKind(),
+		APIVersion:          desired.GetAPIVersion(),
+		NullAsAbsent:        true,
+		CanonicalQuantities: true,
 	})
 }
 
