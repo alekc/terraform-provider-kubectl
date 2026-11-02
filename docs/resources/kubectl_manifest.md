@@ -325,15 +325,18 @@ You can configure a list of yaml keys whose changes in the live object are ignor
 Set these for fields that Operators or other processes in kubernetes change after apply, so that those changes alone do not trigger an update.
 
 `ignore_fields` only affects drift detection. It does not remove anything from the apply: whenever the resource is
-applied, for example because `yaml_body` changed, the full manifest is sent, ignored paths included, and any value
-another process set on those paths is overwritten.
+applied, for example because `yaml_body` changed, the full manifest is sent, ignored paths included. With the default
+client-side apply, any value another process set on those paths is overwritten. With `server_side_apply = true` and
+`force_conflicts = false`, the apply fails with a conflict instead; with `force_conflicts = true` it is overwritten.
 
 If another process owns a field:
 
-- For a field required at creation, such as a container image, use `lifecycle { ignore_changes = [yaml_body] }` so the
-  manifest is only applied on create.
 - For an optional field, leave it out of `yaml_body` and set `server_side_apply = true`, so Terraform's field manager
   never writes it.
+- For a field required at creation, such as a container image, there is no create-only mode. Combining
+  `lifecycle { ignore_changes = [yaml_body] }` with the path in `ignore_fields` stops both edits and live changes from
+  triggering an update, but any update caused by another argument sends the manifest stored in state again,
+  including the original value of that field.
 
 By default, the following control fields are ignored:
   - `status`
