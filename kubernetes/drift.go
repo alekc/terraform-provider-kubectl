@@ -463,7 +463,7 @@ var quantityParents = map[string]bool{
 // value directly under a quantityParents map, or an emptyDir sizeLimit.
 func quantityPathKnown(path []string) bool {
 	n := len(path)
-	if n >= 1 && path[n-1] == "sizeLimit" {
+	if n >= 2 && path[n-1] == "sizeLimit" && path[n-2] == "emptyDir" {
 		return true
 	}
 	return n >= 2 && quantityParents[path[n-2]]

@@ -127,6 +127,22 @@ func TestComputeDriftClient_CRDInSync(t *testing.T) {
 	}
 }
 
+// Copilot on #402: a v1 Service selector label named sizeLimit is a plain
+// string; "0.5" and "500m" select different Pods.
+func TestRenderDrift_SelectorKeySizeLimitStillDrifts(t *testing.T) {
+	t.Parallel()
+	desired := map[string]interface{}{"spec": map[string]interface{}{
+		"selector": map[string]interface{}{"sizeLimit": "0.5"},
+	}}
+	live := map[string]interface{}{"spec": map[string]interface{}{
+		"selector": map[string]interface{}{"sizeLimit": "500m"},
+	}}
+	want := "spec:\n  selector:\n    sizeLimit: <drift>\n"
+	if got := RenderDrift(desired, live, clientOptsFor("v1")); got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
 // End to end through the client engine: the issue's DaemonSet cpu: 1.
 func TestComputeDriftClient_CoreQuantity(t *testing.T) {
 	t.Parallel()
@@ -419,6 +435,9 @@ func TestQuantityEqual(t *testing.T) {
 		{"string-pvc-storage", "1024Mi", "1Gi", []string{"spec", "resources", "requests", "storage"}, true},
 		{"string-quota-hard", "0.5", "500m", []string{"spec", "hard", "cpu"}, true},
 		{"string-emptydir-sizelimit", "1024Mi", "1Gi", []string{"spec", "volumes", "[0]", "emptyDir", "sizeLimit"}, true},
+		// Copilot on #402: a label key named sizeLimit is not a quantity.
+		{"selector-key-sizelimit", "0.5", "500m", []string{"spec", "selector", "sizeLimit"}, false},
+		{"bare-sizelimit-leaf", "1024Mi", "1Gi", []string{"spec", "sizeLimit"}, false},
 		// Cases raised by CodeRabbit and Copilot on #402.
 		{"string-crd-resources-version", "1.0", "1", []string{"spec", "resources", "version"}, false},
 		{"string-template-annotation-limits", "0.5", "500m", []string{"spec", "template", "metadata", "annotations", "limits"}, false},
