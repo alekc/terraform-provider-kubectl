@@ -93,7 +93,7 @@ YAML
 * `field_manager` - Optional. Override the default field manager name. This is only relevent when using server-side apply. Default `kubectl`.
 * `force_conflicts` - Optional. Allow using force_conflicts. Default `false`.
 * `apply_only` - Optional. When `true`, the resource is never deleted on `terraform destroy`. Default `false`.
-* `ignore_fields` - Optional. List of map fields to ignore when applying the manifest. See below for more details.
+* `ignore_fields` - Optional. List of map fields to ignore when detecting drift. They are still sent on every apply. See below for more details.
 * `show_drift_values` - Optional. Controls how leaf values appear in the computed `drift` attribute. One of `none` (default; renders `<drift>` markers, paths only), `hash` (renders `<was:HASH now:HASH>` short-hash markers), or `full` (renders literal before/after values, parity with `kubectl diff`). Secret `data` / `stringData` paths and `mask_paths` globs always mask their leaves regardless of mode. See [Drift Visualisation](#drift-visualisation) below.
 * `mask_paths` - Optional. Glob paths whose leaves are masked in the `drift` attribute regardless of `show_drift_values`. Supports `*` (one path segment) and `**` (zero or more segments). E.g. `spec.template.spec.containers.*.env.*.value` or `**.password`. Layers on top of the built-in Secret masking.
 * `drift_engine` - Optional. Algorithm used to detect drift. `client` (default) compares the user's manifest to the live object client-side; fast (no extra API calls) but susceptible to false drift on arrays, server-side defaulting, and admission-webhook mutations. `server` runs an SSA dry-run patch against the apiserver and uses the response as the desired side of the comparison; same semantics as `kubectl diff`. Costs one extra API call per Read and requires PATCH on the resource's kind in RBAC. Falls back to `client` on patch failure with a `[WARN]` log.
@@ -321,8 +321,19 @@ YAML
 
 ## Ignore Manifest Fields
 
-You can configure a list of yaml keys to ignore changes to via the `ignore_fields` field.
-Set these for fields set by Operators or other processes in kubernetes and as such you don't want to update.
+You can configure a list of yaml keys whose changes in the live object are ignored when detecting drift, via the `ignore_fields` field.
+Set these for fields that Operators or other processes in kubernetes change after apply, so that those changes alone do not trigger an update.
+
+`ignore_fields` only affects drift detection. It does not remove anything from the apply: whenever the resource is
+applied, for example because `yaml_body` changed, the full manifest is sent, ignored paths included, and any value
+another process set on those paths is overwritten.
+
+If another process owns a field:
+
+- For a field required at creation, such as a container image, use `lifecycle { ignore_changes = [yaml_body] }` so the
+  manifest is only applied on create.
+- For an optional field, leave it out of `yaml_body` and set `server_side_apply = true`, so Terraform's field manager
+  never writes it.
 
 By default, the following control fields are ignored:
   - `status`
