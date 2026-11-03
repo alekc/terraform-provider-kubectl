@@ -3,6 +3,7 @@ package kubernetes
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"reflect"
@@ -92,7 +93,7 @@ type DriftOptions struct {
 	APIVersion string
 
 	// NullAsAbsent treats a desired null against a live map or list as absent
-	// where apply leaves it alone: CRDs, metadata.annotations. Client only.
+	// where apply leaves it alone (see nullIsNoop). Client engine only.
 	NullAsAbsent bool
 
 	// CanonicalQuantities lets a quantity match the apiserver's canonical
@@ -104,8 +105,51 @@ type DriftOptions struct {
 type walkFlags struct {
 	nullAsAbsent bool
 	quantities   bool
-	mergePatch   bool // apply sends a JSON merge patch (CRDs): null is a no-op
+	mergePatch   bool // apply sends a JSON merge patch (CRDs)
 	namespace    bool // v1 Namespace: the apiserver re-adds its name label
+	// lastApplied is live's last-applied object, the merge patch's original.
+	lastApplied map[string]interface{}
+}
+
+// lastAppliedAnnotation is where client-side apply stores the original.
+const lastAppliedAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
+
+// parseLastApplied returns live's last-applied object, or nil when it is
+// missing or unparsable (no null is then a provable no-op).
+func parseLastApplied(live map[string]interface{}) map[string]interface{} {
+	meta, _ := live["metadata"].(map[string]interface{})
+	ann, _ := meta["annotations"].(map[string]interface{})
+	raw, _ := ann[lastAppliedAnnotation].(string)
+	if raw == "" {
+		return nil
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// nullInLastApplied reports whether last-applied holds path as an explicit
+// null. Paths through a list never qualify: the merge patch replaces lists.
+func nullInLastApplied(lastApplied map[string]interface{}, path []string) bool {
+	cur := lastApplied
+	for i, seg := range path {
+		if strings.HasPrefix(seg, "[") {
+			return false
+		}
+		v, ok := cur[seg]
+		if !ok {
+			return false
+		}
+		if i == len(path)-1 {
+			return v == nil
+		}
+		if cur, ok = v.(map[string]interface{}); !ok {
+			return false
+		}
+	}
+	return false
 }
 
 // namespaceNameLabel is the label the apiserver sets on every Namespace.
@@ -123,29 +167,24 @@ func usesMergePatch(apiVersion, kind string) bool {
 // nullIsNoop reports whether a desired null against live map or list
 // content leaves it in place on a client-side apply (measured, #402).
 func nullIsNoop(live interface{}, path []string, flags walkFlags) bool {
-	if flags.mergePatch {
-		return true
-	}
-	if len(path) != 2 || path[0] != "metadata" {
-		return false
-	}
-	switch path[1] {
-	case "annotations":
+	if len(path) == 2 && path[0] == "metadata" && path[1] == "annotations" {
 		// apply writes last-applied into the map, so the patch is {}.
 		return true
-	case "labels":
-		m, ok := live.(map[string]interface{})
-		if !flags.namespace || !ok {
+	}
+	if flags.mergePatch {
+		// The merge patch sends null unless last-applied already has it.
+		return nullInLastApplied(flags.lastApplied, path)
+	}
+	m, ok := live.(map[string]interface{})
+	if !flags.namespace || !ok || len(path) != 2 || path[0] != "metadata" || path[1] != "labels" {
+		return false
+	}
+	for k := range m {
+		if k != namespaceNameLabel {
 			return false
 		}
-		for k := range m {
-			if k != namespaceNameLabel {
-				return false
-			}
-		}
-		return true
 	}
-	return false
+	return true
 }
 
 // coreQuantityGroups are the built-in API groups whose quantity fields
@@ -191,6 +230,9 @@ func RenderDrift(desired, live map[string]interface{}, opts DriftOptions) string
 		quantities:   opts.CanonicalQuantities && coreQuantityGroup(opts.APIVersion),
 		mergePatch:   usesMergePatch(opts.APIVersion, opts.Kind),
 		namespace:    opts.APIVersion == "v1" && opts.Kind == "Namespace",
+	}
+	if flags.nullAsAbsent && flags.mergePatch {
+		flags.lastApplied = parseLastApplied(live)
 	}
 	tree, hasDrift := collectMapDrift(desired, live, nil, ignore, masks, opts.ShowMode, flags)
 	if !hasDrift {

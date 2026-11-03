@@ -510,9 +510,20 @@ func computeDriftClient(desired, live *yaml.Manifest, ignoreFields, maskPaths []
 		if stringData, found := desiredObj["stringData"]; found {
 			if sdMap, ok := stringData.(map[string]interface{}); ok {
 				desiredObj = desired.Raw.DeepCopy().Object
+				dataValue, dataPresent := desiredObj["data"]
 				// A bare `data:` is null; SetNestedField cannot write into it.
-				if _, isMap := desiredObj["data"].(map[string]interface{}); !isMap {
+				if _, isMap := dataValue.(map[string]interface{}); !isMap {
 					desiredObj["data"] = map[string]interface{}{}
+				}
+				if dataPresent && dataValue == nil {
+					// The patch sends data: null, so live keys outside
+					// stringData are deleted: compare them against null.
+					liveData, _ := live.Raw.Object["data"].(map[string]interface{})
+					for k := range liveData {
+						if _, kept := sdMap[k]; !kept {
+							desiredObj["data"].(map[string]interface{})[k] = nil
+						}
+					}
 				}
 				for k, v := range sdMap {
 					encoded := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%v", v)))

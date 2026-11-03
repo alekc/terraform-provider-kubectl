@@ -88,7 +88,7 @@ kind: DriftWidget
 metadata:
   name: w
   annotations:
-    kubectl.kubernetes.io/last-applied-configuration: "{}"
+    kubectl.kubernetes.io/last-applied-configuration: '{"spec":{"tags":null}}'
 spec:
   surge: "1"
   limits:
@@ -290,7 +290,14 @@ func TestRenderDrift_NullInDesired_ListAndScalar(t *testing.T) {
 	if got != want {
 		t.Fatalf("built-in: got %q want %q", got, want)
 	}
-	// CRD: JSON merge patch makes null a no-op; a null scalar still drifts.
+	// CRD without last-applied: the merge patch sends null, so it drifts.
+	got = RenderDrift(desired, live, clientOptsFor("example.com/v1", "Widget"))
+	if got != want {
+		t.Fatalf("CRD, no last-applied: got %q want %q", got, want)
+	}
+	// CRD whose last-applied holds the null: no-op; a null scalar still drifts.
+	live["metadata"] = map[string]interface{}{"annotations": map[string]interface{}{
+		lastAppliedAnnotation: `{"spec":{"ports":null,"replicas":null}}`}}
 	got = RenderDrift(desired, live, clientOptsFor("example.com/v1", "Widget"))
 	want = "spec:\n  replicas: <drift>\n"
 	if got != want {
@@ -344,14 +351,57 @@ func TestRenderDrift_NamespaceNullLabels(t *testing.T) {
 	}
 }
 
-// CRDs get a JSON merge patch, where a null labels map is a no-op too.
+// CodeRabbit on #402: the CRD merge patch drops a null only when last-applied
+// holds it; after an import or an external apply it deletes live labels.
 func TestRenderDrift_CRDNullLabels(t *testing.T) {
 	t.Parallel()
 	desired := map[string]interface{}{"metadata": map[string]interface{}{"labels": nil}}
-	live := map[string]interface{}{"metadata": map[string]interface{}{
-		"labels": map[string]interface{}{"team": "a"}}}
-	if got := RenderDrift(desired, live, clientOptsFor("example.com/v1", "Widget")); got != "" {
-		t.Fatalf("CRD null labels should not drift, got %q", got)
+	for name, c := range map[string]struct {
+		lastApplied interface{} // nil: no annotation
+		want        string
+	}{
+		"last-applied-null":    {`{"metadata":{"labels":null}}`, ""},
+		"last-applied-no-key":  {`{"metadata":{"name":"w"}}`, "metadata:\n  labels: <drift>\n"},
+		"last-applied-map":     {`{"metadata":{"labels":{"team":"a"}}}`, "metadata:\n  labels: <drift>\n"},
+		"last-applied-garbage": {`{not json`, "metadata:\n  labels: <drift>\n"},
+		"no-last-applied":      {nil, "metadata:\n  labels: <drift>\n"},
+	} {
+		meta := map[string]interface{}{"labels": map[string]interface{}{"team": "a"}}
+		if c.lastApplied != nil {
+			meta["annotations"] = map[string]interface{}{lastAppliedAnnotation: c.lastApplied}
+		}
+		live := map[string]interface{}{"metadata": meta}
+		if got := RenderDrift(desired, live, clientOptsFor("example.com/v1", "Widget")); got != c.want {
+			t.Errorf("%s: got %q want %q", name, got, c.want)
+		}
+	}
+}
+
+func TestNullInLastApplied(t *testing.T) {
+	t.Parallel()
+	la := map[string]interface{}{"spec": map[string]interface{}{
+		"tags": nil, "m": map[string]interface{}{"k": nil}, "s": "x",
+		"list": []interface{}{map[string]interface{}{"env": nil}},
+	}}
+	for _, c := range []struct {
+		path []string
+		want bool
+	}{
+		{[]string{"spec", "tags"}, true},
+		{[]string{"spec", "m", "k"}, true},
+		{[]string{"spec", "m"}, false},
+		{[]string{"spec", "s"}, false},
+		{[]string{"spec", "absent"}, false},
+		{[]string{"spec", "s", "deeper"}, false},
+		{[]string{"spec", "list", "[0]", "env"}, false},
+		{nil, false},
+	} {
+		if got := nullInLastApplied(la, c.path); got != c.want {
+			t.Errorf("nullInLastApplied(%v) = %v, want %v", c.path, got, c.want)
+		}
+	}
+	if nullInLastApplied(nil, []string{"spec"}) {
+		t.Error("nil last-applied must not match")
 	}
 }
 
@@ -445,6 +495,31 @@ func TestComputeDriftClient_SecretNullDataWithStringData(t *testing.T) {
 	}
 }
 
+// CodeRabbit on #402: apply sends data: null, so a live data key outside
+// stringData is deleted and must drift. With no data key it is left alone.
+func TestComputeDriftClient_SecretNullDataLiveOnlyKey(t *testing.T) {
+	t.Parallel()
+	live, err := yaml.ParseYAML("apiVersion: v1\nkind: Secret\nmetadata:\n  name: s\ndata:\n  foo: eA==\n  bar: eQ==\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for body, want := range map[string]string{
+		"apiVersion: v1\nkind: Secret\nmetadata:\n  name: s\ndata:\nstringData:\n  foo: x\n": "data:\n  bar: <drift sensitive>\n",
+		"apiVersion: v1\nkind: Secret\nmetadata:\n  name: s\nstringData:\n  foo: x\n":        "",
+	} {
+		desired, err := yaml.ParseYAML(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := computeDriftClient(desired, live, nil, nil, ShowNone); got != want {
+			t.Errorf("desired %q: got %q want %q", body, got, want)
+		}
+		if _, set := desired.Raw.Object["data"].(map[string]interface{}); set {
+			t.Error("computeDriftClient must not mutate the desired manifest")
+		}
+	}
+}
+
 func TestRenderDrift_NullInsideSliceElement(t *testing.T) {
 	t.Parallel()
 	desired := map[string]interface{}{
@@ -460,10 +535,14 @@ func TestRenderDrift_NullInsideSliceElement(t *testing.T) {
 			}},
 		},
 	}
-	if got := RenderDrift(desired, live, clientOptsFor("example.com/v1", "Widget")); got != "" {
-		t.Fatalf("CRD: null list inside a slice element should not drift, got %q", got)
-	}
+	// The merge patch replaces the list, so env goes even when last-applied
+	// holds the same null (measured).
+	live["metadata"] = map[string]interface{}{"annotations": map[string]interface{}{
+		lastAppliedAnnotation: `{"spec":{"containers":[{"name":"a","env":null}]}}`}}
 	want := "spec:\n  containers:\n  - _index_: 0\n    env: <drift>\n"
+	if got := RenderDrift(desired, live, clientOptsFor("example.com/v1", "Widget")); got != want {
+		t.Fatalf("CRD: got %q want %q", got, want)
+	}
 	if got := RenderDrift(desired, live, clientOptsFor("v1", "Pod")); got != want {
 		t.Fatalf("built-in: got %q want %q", got, want)
 	}
