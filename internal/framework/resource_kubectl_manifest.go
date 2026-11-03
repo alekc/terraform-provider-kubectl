@@ -613,6 +613,7 @@ func (r *manifestResource) Read(ctx context.Context, req resource.ReadRequest, r
 		DriftEngine:       driftEngineFromString(data.DriftEngine),
 		FieldManager:      stringOrDefault(data.FieldManager, "kubectl"),
 		ForceConflicts:    data.ForceConflicts.ValueBool(),
+		ServerSideApply:   data.ServerSideApply.ValueBool(),
 	}
 
 	result, readErr := kubernetes.ReadManifest(ctx, provider, opts)

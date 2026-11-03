@@ -99,6 +99,10 @@ type DriftOptions struct {
 	// CanonicalQuantities lets a quantity match the apiserver's canonical
 	// string (1 vs "1"). Client engine only, and core API groups only.
 	CanonicalQuantities bool
+
+	// ServerSideApply: apply ignores last-applied, so no null exemption may
+	// rely on it.
+	ServerSideApply bool
 }
 
 // walkFlags carries the client-engine normalisations down the walk.
@@ -107,7 +111,8 @@ type walkFlags struct {
 	quantities   bool
 	mergePatch   bool // apply sends a JSON merge patch (CRDs)
 	namespace    bool // v1 Namespace: the apiserver re-adds its name label
-	// lastApplied is live's last-applied object, the merge patch's original.
+	// lastApplied is live's last-applied object, the three-way patch's
+	// original. Nil under server-side apply or when live has none.
 	lastApplied map[string]interface{}
 }
 
@@ -131,13 +136,11 @@ func parseLastApplied(live map[string]interface{}) map[string]interface{} {
 }
 
 // nullInLastApplied reports whether last-applied holds path as an explicit
-// null. Paths through a list never qualify: the merge patch replaces lists.
+// null. Paths through a list never qualify: the merge patch replaces lists,
+// and the map assertion below stops the walk at one.
 func nullInLastApplied(lastApplied map[string]interface{}, path []string) bool {
 	cur := lastApplied
 	for i, seg := range path {
-		if strings.HasPrefix(seg, "[") {
-			return false
-		}
 		v, ok := cur[seg]
 		if !ok {
 			return false
@@ -147,6 +150,20 @@ func nullInLastApplied(lastApplied map[string]interface{}, path []string) bool {
 		}
 		if cur, ok = v.(map[string]interface{}); !ok {
 			return false
+		}
+	}
+	return false
+}
+
+// lastAppliedAnnotationsLive reports whether an annotation recorded in
+// last-applied is still in live, which a null annotations map would delete.
+func lastAppliedAnnotationsLive(lastApplied map[string]interface{}, live interface{}) bool {
+	meta, _ := lastApplied["metadata"].(map[string]interface{})
+	recorded, _ := meta["annotations"].(map[string]interface{})
+	liveMap, _ := live.(map[string]interface{})
+	for k := range recorded {
+		if _, ok := liveMap[k]; ok {
+			return true
 		}
 	}
 	return false
@@ -168,8 +185,9 @@ func usesMergePatch(apiVersion, kind string) bool {
 // content leaves it in place on a client-side apply (measured, #402).
 func nullIsNoop(live interface{}, path []string, flags walkFlags) bool {
 	if len(path) == 2 && path[0] == "metadata" && path[1] == "annotations" {
-		// apply writes last-applied into the map, so the patch is {}.
-		return true
+		// apply writes last-applied into the map, so the patch only deletes
+		// keys last-applied recorded that are still live.
+		return !lastAppliedAnnotationsLive(flags.lastApplied, live)
 	}
 	if flags.mergePatch {
 		// The merge patch sends null unless last-applied already has it.
@@ -231,7 +249,7 @@ func RenderDrift(desired, live map[string]interface{}, opts DriftOptions) string
 		mergePatch:   usesMergePatch(opts.APIVersion, opts.Kind),
 		namespace:    opts.APIVersion == "v1" && opts.Kind == "Namespace",
 	}
-	if flags.nullAsAbsent && flags.mergePatch {
+	if flags.nullAsAbsent && !opts.ServerSideApply {
 		flags.lastApplied = parseLastApplied(live)
 	}
 	tree, hasDrift := collectMapDrift(desired, live, nil, ignore, masks, opts.ShowMode, flags)
@@ -308,6 +326,11 @@ func collectAnyDrift(desired, live interface{}, path []string, ignore ignoreSet,
 		switch live.(type) {
 		case map[string]interface{}, []interface{}:
 			if nullIsNoop(live, path, flags) {
+				return nil, false
+			}
+		default:
+			// CRD scalar: the merge patch omits a null last-applied holds.
+			if flags.mergePatch && nullInLastApplied(flags.lastApplied, path) {
 				return nil, false
 			}
 		}

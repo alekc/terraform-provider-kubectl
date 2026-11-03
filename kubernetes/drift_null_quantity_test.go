@@ -124,7 +124,7 @@ func TestComputeDriftClient_CRDInSync(t *testing.T) {
 	live.Raw.Object["metadata"].(map[string]interface{})["annotations"] = map[string]interface{}{
 		"kubectl.kubernetes.io/last-applied-configuration": "{}",
 	}
-	if got := computeDriftClient(desired, live, nil, nil, ShowNone); got != "" {
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone, false); got != "" {
 		t.Fatalf("in-sync CRD should not drift, got %q", got)
 	}
 }
@@ -156,7 +156,7 @@ func TestComputeDriftClient_CoreQuantity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := computeDriftClient(desired, live, nil, nil, ShowNone); got != "" {
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone, false); got != "" {
 		t.Fatalf("client engine must match cpu 1 against \"1\", got %q", got)
 	}
 }
@@ -191,7 +191,7 @@ func TestComputeDriftClient_NullAnnotations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := computeDriftClient(desired, live, nil, nil, ShowNone); got != "" {
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone, false); got != "" {
 		t.Fatalf("client engine must treat null annotations as absent, got %q", got)
 	}
 }
@@ -295,13 +295,68 @@ func TestRenderDrift_NullInDesired_ListAndScalar(t *testing.T) {
 	if got != want {
 		t.Fatalf("CRD, no last-applied: got %q want %q", got, want)
 	}
-	// CRD whose last-applied holds the null: no-op; a null scalar still drifts.
+	// CRD whose last-applied holds the list null only: the scalar still drifts.
 	live["metadata"] = map[string]interface{}{"annotations": map[string]interface{}{
-		lastAppliedAnnotation: `{"spec":{"ports":null,"replicas":null}}`}}
+		lastAppliedAnnotation: `{"spec":{"ports":null}}`}}
 	got = RenderDrift(desired, live, clientOptsFor("example.com/v1", "Widget"))
 	want = "spec:\n  replicas: <drift>\n"
 	if got != want {
 		t.Fatalf("CRD: got %q want %q", got, want)
+	}
+	// CodeRabbit on #402: a recorded null scalar is a patch no-op too.
+	live["metadata"] = map[string]interface{}{"annotations": map[string]interface{}{
+		lastAppliedAnnotation: `{"spec":{"ports":null,"replicas":null}}`}}
+	if got = RenderDrift(desired, live, clientOptsFor("example.com/v1", "Widget")); got != "" {
+		t.Fatalf("CRD, both recorded: got %q want no drift", got)
+	}
+	// Built-in kinds send a null scalar in the strategic patch: it drifts.
+	if got = RenderDrift(desired, live, clientOptsFor("v1", "Service")); got != "spec:\n  ports: <drift>\n  replicas: <drift>\n" {
+		t.Fatalf("built-in, recorded nulls: got %q", got)
+	}
+}
+
+// Copilot on #402: server-side apply ignores last-applied, so a recorded
+// null is no exemption there.
+func TestRenderDrift_CRDNullServerSideApply(t *testing.T) {
+	t.Parallel()
+	desired := map[string]interface{}{"spec": map[string]interface{}{"tags": nil}}
+	live := map[string]interface{}{
+		"metadata": map[string]interface{}{"annotations": map[string]interface{}{
+			lastAppliedAnnotation: `{"spec":{"tags":null}}`}},
+		"spec": map[string]interface{}{"tags": []interface{}{"a"}},
+	}
+	opts := clientOptsFor("example.com/v1", "Widget")
+	if got := RenderDrift(desired, live, opts); got != "" {
+		t.Fatalf("client-side apply: got %q want no drift", got)
+	}
+	opts.ServerSideApply = true
+	if got := RenderDrift(desired, live, opts); got != "spec:\n  tags: <drift>\n" {
+		t.Fatalf("server-side apply: got %q", got)
+	}
+}
+
+// Copilot on #402: a null annotations map deletes the keys last-applied
+// recorded (after an outside kubectl apply), so those must drift.
+func TestRenderDrift_NullAnnotationsRecordedInLastApplied(t *testing.T) {
+	t.Parallel()
+	desired := map[string]interface{}{"metadata": map[string]interface{}{"annotations": nil}}
+	for name, c := range map[string]struct {
+		lastApplied string
+		want        string
+	}{
+		"recorded-and-live":  {`{"metadata":{"annotations":{"owner":"x"}}}`, "metadata:\n  annotations: <drift>\n"},
+		"recorded-gone":      {`{"metadata":{"annotations":{"gone":"x"}}}`, ""},
+		"empty":              {`{"metadata":{"annotations":{}}}`, ""},
+		"no-annotations-key": {`{"metadata":{"name":"s"}}`, ""},
+		"unparsable":         {`{nope`, ""},
+	} {
+		for _, kind := range [][2]string{{"v1", "Service"}, {"example.com/v1", "Widget"}} {
+			live := map[string]interface{}{"metadata": map[string]interface{}{"annotations": map[string]interface{}{
+				lastAppliedAnnotation: c.lastApplied, "owner": "x", "ctrl": "y"}}}
+			if got := RenderDrift(desired, live, clientOptsFor(kind[0], kind[1])); got != c.want {
+				t.Errorf("%s %s: got %q want %q", name, kind[1], got, c.want)
+			}
+		}
 	}
 }
 
@@ -382,6 +437,8 @@ func TestNullInLastApplied(t *testing.T) {
 	la := map[string]interface{}{"spec": map[string]interface{}{
 		"tags": nil, "m": map[string]interface{}{"k": nil}, "s": "x",
 		"list": []interface{}{map[string]interface{}{"env": nil}},
+		// Copilot on #402: a literal map key may look like a list index.
+		"[tenant]": nil,
 	}}
 	for _, c := range []struct {
 		path []string
@@ -394,6 +451,7 @@ func TestNullInLastApplied(t *testing.T) {
 		{[]string{"spec", "absent"}, false},
 		{[]string{"spec", "s", "deeper"}, false},
 		{[]string{"spec", "list", "[0]", "env"}, false},
+		{[]string{"spec", "[tenant]"}, true},
 		{nil, false},
 	} {
 		if got := nullInLastApplied(la, c.path); got != c.want {
@@ -468,7 +526,7 @@ func TestComputeDriftClient_SecretNullData(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Strategic patch keeps data: null, so apply would wipe the Secret's data.
-	if got := computeDriftClient(desired, live, nil, nil, ShowNone); got != "data: <drift sensitive>\n" {
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone, false); got != "data: <drift sensitive>\n" {
 		t.Fatalf("Secret with null data against live data must drift, got %q", got)
 	}
 }
@@ -486,11 +544,11 @@ func TestComputeDriftClient_SecretNullDataWithStringData(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "data:\n  foo: <drift sensitive>\n"
-	if got := computeDriftClient(desired, live, nil, nil, ShowNone); got != want {
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone, false); got != want {
 		t.Fatalf("got %q want %q", got, want)
 	}
 	live.Raw.Object["data"] = map[string]interface{}{"foo": "eA=="}
-	if got := computeDriftClient(desired, live, nil, nil, ShowNone); got != "" {
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone, false); got != "" {
 		t.Fatalf("matching stringData should not drift, got %q", got)
 	}
 }
@@ -511,7 +569,7 @@ func TestComputeDriftClient_SecretNullDataLiveOnlyKey(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := computeDriftClient(desired, live, nil, nil, ShowNone); got != want {
+		if got := computeDriftClient(desired, live, nil, nil, ShowNone, false); got != want {
 			t.Errorf("desired %q: got %q want %q", body, got, want)
 		}
 		if _, set := desired.Raw.Object["data"].(map[string]interface{}); set {
