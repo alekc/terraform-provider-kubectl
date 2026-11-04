@@ -305,7 +305,7 @@ func ApplyManifest(ctx context.Context, provider *KubeProvider, opts ApplyManife
 		// authoritative. Apply path always uses the client engine
 		// here because we already have the apply response in hand;
 		// running an extra SSA dry-run would be redundant.
-		Drift: computeDriftClient(manifest, response, opts.IgnoreFields, opts.MaskPaths, opts.ShowDriftValues, opts.ServerSideApply),
+		Drift: computeDriftClient(manifest, response, opts.IgnoreFields, opts.MaskPaths, opts.ShowDriftValues, opts.FieldManager, opts.ServerSideApply),
 	}
 
 	if opts.WaitForRollout {
@@ -468,7 +468,7 @@ func computeDrift(ctx context.Context, client dynamic.ResourceInterface, desired
 		log.Printf("[WARN] %v/%v server-side drift engine failed (%s), falling back to client engine", desired.GetAPIVersion(), desired.GetKind(), classifySSAError(err))
 		// fall through to client engine
 	}
-	return computeDriftClient(desired, live, ignoreFields, maskPaths, mode, serverSideApply)
+	return computeDriftClient(desired, live, ignoreFields, maskPaths, mode, fieldManager, serverSideApply)
 }
 
 // classifySSAError maps an SSA dry-run failure to a short, non-sensitive
@@ -504,7 +504,7 @@ func classifySSAError(err error) string {
 // per-key diffs as YAML. Handles the Secret v1 stringData -> data
 // normalisation on a deep copy of the desired manifest, so the caller's
 // pointer is never mutated (issue #269 class).
-func computeDriftClient(desired, live *yaml.Manifest, ignoreFields, maskPaths []string, mode ShowMode, serverSideApply bool) string {
+func computeDriftClient(desired, live *yaml.Manifest, ignoreFields, maskPaths []string, mode ShowMode, fieldManager string, serverSideApply bool) string {
 	if desired == nil || desired.Raw == nil || live == nil || live.Raw == nil {
 		return ""
 	}
@@ -548,6 +548,7 @@ func computeDriftClient(desired, live *yaml.Manifest, ignoreFields, maskPaths []
 		NullAsAbsent:        true,
 		CanonicalQuantities: true,
 		ServerSideApply:     serverSideApply,
+		FieldManager:        fieldManager,
 	})
 }
 

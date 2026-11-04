@@ -103,6 +103,10 @@ type DriftOptions struct {
 	// ServerSideApply: apply ignores last-applied, so no null exemption may
 	// rely on it.
 	ServerSideApply bool
+
+	// FieldManager is the server-side apply manager ("kubectl" if empty),
+	// whose managedFields entry says which annotations a null map deletes.
+	FieldManager string
 }
 
 // walkFlags carries the client-engine normalisations down the walk.
@@ -114,6 +118,9 @@ type walkFlags struct {
 	// lastApplied is live's last-applied object, the three-way patch's
 	// original. Nil under server-side apply or when live has none.
 	lastApplied map[string]interface{}
+	// ownedAnnotations are the keys a null annotations map would delete:
+	// last-applied's under client-side apply, our manager's under SSA.
+	ownedAnnotations map[string]bool
 }
 
 // lastAppliedAnnotation is where client-side apply stores the original.
@@ -155,13 +162,46 @@ func nullInLastApplied(lastApplied map[string]interface{}, path []string) bool {
 	return false
 }
 
-// lastAppliedAnnotationsLive reports whether an annotation recorded in
-// last-applied is still in live, which a null annotations map would delete.
-func lastAppliedAnnotationsLive(lastApplied map[string]interface{}, live interface{}) bool {
+// lastAppliedAnnotations returns the annotation keys last-applied recorded.
+func lastAppliedAnnotations(lastApplied map[string]interface{}) map[string]bool {
 	meta, _ := lastApplied["metadata"].(map[string]interface{})
 	recorded, _ := meta["annotations"].(map[string]interface{})
-	liveMap, _ := live.(map[string]interface{})
+	out := make(map[string]bool, len(recorded))
 	for k := range recorded {
+		out[k] = true
+	}
+	return out
+}
+
+// ssaOwnedAnnotations returns the annotation keys that manager's Apply entry
+// in live's managedFields owns; a server-side apply without them deletes them.
+func ssaOwnedAnnotations(live map[string]interface{}, manager string) map[string]bool {
+	meta, _ := live["metadata"].(map[string]interface{})
+	entries, _ := meta["managedFields"].([]interface{})
+	out := map[string]bool{}
+	for _, e := range entries {
+		entry, _ := e.(map[string]interface{})
+		sub, _ := entry["subresource"].(string)
+		if entry["manager"] != manager || entry["operation"] != "Apply" || sub != "" {
+			continue
+		}
+		fields, _ := entry["fieldsV1"].(map[string]interface{})
+		fmeta, _ := fields["f:metadata"].(map[string]interface{})
+		fann, _ := fmeta["f:annotations"].(map[string]interface{})
+		for k := range fann {
+			if name, ok := strings.CutPrefix(k, "f:"); ok {
+				out[name] = true
+			}
+		}
+	}
+	return out
+}
+
+// ownedAnnotationLive reports whether a key in owned is still in live, which
+// a null annotations map would delete.
+func ownedAnnotationLive(owned map[string]bool, live interface{}) bool {
+	liveMap, _ := live.(map[string]interface{})
+	for k := range owned {
 		if _, ok := liveMap[k]; ok {
 			return true
 		}
@@ -185,9 +225,9 @@ func usesMergePatch(apiVersion, kind string) bool {
 // content leaves it in place on a client-side apply (measured, #402).
 func nullIsNoop(live interface{}, path []string, flags walkFlags) bool {
 	if len(path) == 2 && path[0] == "metadata" && path[1] == "annotations" {
-		// apply writes last-applied into the map, so the patch only deletes
-		// keys last-applied recorded that are still live.
-		return !lastAppliedAnnotationsLive(flags.lastApplied, live)
+		// Apply only deletes keys it owns (last-applied or managedFields),
+		// and the client-side patch also writes last-applied into the map.
+		return !ownedAnnotationLive(flags.ownedAnnotations, live)
 	}
 	if flags.mergePatch {
 		// The merge patch sends null unless last-applied already has it.
@@ -249,8 +289,15 @@ func RenderDrift(desired, live map[string]interface{}, opts DriftOptions) string
 		mergePatch:   usesMergePatch(opts.APIVersion, opts.Kind),
 		namespace:    opts.APIVersion == "v1" && opts.Kind == "Namespace",
 	}
-	if flags.nullAsAbsent && !opts.ServerSideApply {
+	if flags.nullAsAbsent && opts.ServerSideApply {
+		manager := opts.FieldManager
+		if manager == "" {
+			manager = "kubectl"
+		}
+		flags.ownedAnnotations = ssaOwnedAnnotations(live, manager)
+	} else if flags.nullAsAbsent {
 		flags.lastApplied = parseLastApplied(live)
+		flags.ownedAnnotations = lastAppliedAnnotations(flags.lastApplied)
 	}
 	tree, hasDrift := collectMapDrift(desired, live, nil, ignore, masks, opts.ShowMode, flags)
 	if !hasDrift {
@@ -573,10 +620,14 @@ var quantityParents = map[string]bool{
 }
 
 // quantityPathKnown reports whether a string at path is a core quantity: a
-// value directly under a quantityParents map, or an emptyDir sizeLimit.
+// value directly under a quantityParents map, an emptyDir sizeLimit or a
+// resourceFieldRef divisor.
 func quantityPathKnown(path []string) bool {
 	n := len(path)
 	if n >= 2 && path[n-1] == "sizeLimit" && path[n-2] == "emptyDir" {
+		return true
+	}
+	if n >= 2 && path[n-1] == "divisor" && path[n-2] == "resourceFieldRef" {
 		return true
 	}
 	return n >= 2 && quantityParents[path[n-2]]

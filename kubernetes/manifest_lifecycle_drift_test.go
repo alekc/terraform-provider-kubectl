@@ -33,7 +33,7 @@ func TestComputeDriftYAML_InSync(t *testing.T) {
 			"key": "value",
 		},
 	})
-	got := computeDriftClient(desired, live, nil, nil, ShowNone, false)
+	got := computeDriftClient(desired, live, nil, nil, ShowNone, "", false)
 	if got != "" {
 		t.Fatalf("expected in-sync, got %q", got)
 	}
@@ -60,7 +60,7 @@ func TestComputeDriftYAML_SecretStringDataNormalisation(t *testing.T) {
 			"password": "aHVudGVyMg==",
 		},
 	})
-	got := computeDriftClient(desired, live, nil, nil, ShowNone, false)
+	got := computeDriftClient(desired, live, nil, nil, ShowNone, "", false)
 	if got != "" {
 		t.Fatalf("Secret stringData -> data must normalise; got drift %q", got)
 	}
@@ -85,7 +85,7 @@ func TestComputeDriftYAML_SecretAutoMasks(t *testing.T) {
 			"password": "Z29vZGJ5ZQ==",
 		},
 	})
-	got := computeDriftClient(desired, live, nil, nil, ShowFull, false)
+	got := computeDriftClient(desired, live, nil, nil, ShowFull, "", false)
 	if !strings.Contains(got, "<drift sensitive>") {
 		t.Fatalf("expected sensitive marker for Secret data, got %q", got)
 	}
@@ -116,7 +116,7 @@ func TestComputeDriftYAML_DoesNotMutateDesired(t *testing.T) {
 			"password": "aHVudGVyMg==",
 		},
 	})
-	_ = computeDriftClient(desired, live, nil, nil, ShowNone, false)
+	_ = computeDriftClient(desired, live, nil, nil, ShowNone, "", false)
 	if _, hasStringData := desired.Raw.Object["stringData"]; !hasStringData {
 		t.Fatalf("computeDriftClient stripped stringData from caller's manifest")
 	}

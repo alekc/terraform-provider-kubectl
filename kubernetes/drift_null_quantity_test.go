@@ -124,7 +124,7 @@ func TestComputeDriftClient_CRDInSync(t *testing.T) {
 	live.Raw.Object["metadata"].(map[string]interface{})["annotations"] = map[string]interface{}{
 		"kubectl.kubernetes.io/last-applied-configuration": "{}",
 	}
-	if got := computeDriftClient(desired, live, nil, nil, ShowNone, false); got != "" {
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone, "", false); got != "" {
 		t.Fatalf("in-sync CRD should not drift, got %q", got)
 	}
 }
@@ -156,7 +156,7 @@ func TestComputeDriftClient_CoreQuantity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := computeDriftClient(desired, live, nil, nil, ShowNone, false); got != "" {
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone, "", false); got != "" {
 		t.Fatalf("client engine must match cpu 1 against \"1\", got %q", got)
 	}
 }
@@ -191,7 +191,7 @@ func TestComputeDriftClient_NullAnnotations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := computeDriftClient(desired, live, nil, nil, ShowNone, false); got != "" {
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone, "", false); got != "" {
 		t.Fatalf("client engine must treat null annotations as absent, got %q", got)
 	}
 }
@@ -526,7 +526,7 @@ func TestComputeDriftClient_SecretNullData(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Strategic patch keeps data: null, so apply would wipe the Secret's data.
-	if got := computeDriftClient(desired, live, nil, nil, ShowNone, false); got != "data: <drift sensitive>\n" {
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone, "", false); got != "data: <drift sensitive>\n" {
 		t.Fatalf("Secret with null data against live data must drift, got %q", got)
 	}
 }
@@ -544,11 +544,11 @@ func TestComputeDriftClient_SecretNullDataWithStringData(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "data:\n  foo: <drift sensitive>\n"
-	if got := computeDriftClient(desired, live, nil, nil, ShowNone, false); got != want {
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone, "", false); got != want {
 		t.Fatalf("got %q want %q", got, want)
 	}
 	live.Raw.Object["data"] = map[string]interface{}{"foo": "eA=="}
-	if got := computeDriftClient(desired, live, nil, nil, ShowNone, false); got != "" {
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone, "", false); got != "" {
 		t.Fatalf("matching stringData should not drift, got %q", got)
 	}
 }
@@ -569,7 +569,7 @@ func TestComputeDriftClient_SecretNullDataLiveOnlyKey(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := computeDriftClient(desired, live, nil, nil, ShowNone, false); got != want {
+		if got := computeDriftClient(desired, live, nil, nil, ShowNone, "", false); got != want {
 			t.Errorf("desired %q: got %q want %q", body, got, want)
 		}
 		if _, set := desired.Raw.Object["data"].(map[string]interface{}); set {
@@ -703,5 +703,64 @@ func TestQuantityEqual(t *testing.T) {
 				t.Errorf("quantityEqual(%v, %v, %v) = %v, want %v", c.desired, c.live, c.path, got, c.want)
 			}
 		})
+	}
+}
+
+// CodeRabbit on #402: resourceFieldRef.divisor is a core Quantity, so a
+// number or another spelling matches the apiserver's canonical string.
+func TestRenderDrift_ResourceFieldRefDivisor(t *testing.T) {
+	t.Parallel()
+	ref := func(divisor interface{}) map[string]interface{} {
+		return map[string]interface{}{"spec": map[string]interface{}{"containers": []interface{}{
+			map[string]interface{}{"env": []interface{}{map[string]interface{}{
+				"valueFrom": map[string]interface{}{"resourceFieldRef": map[string]interface{}{
+					"resource": "limits.cpu", "divisor": divisor}}}}}}}}
+	}
+	opts := clientOptsFor("v1", "Pod")
+	for _, d := range []interface{}{"1000m", int64(1)} {
+		if got := RenderDrift(ref(d), ref("1"), opts); got != "" {
+			t.Errorf("divisor %v vs \"1\": got %q want no drift", d, got)
+		}
+	}
+	if got := RenderDrift(ref("1m"), ref("1"), opts); got == "" {
+		t.Error("divisor 1m vs \"1\" must drift")
+	}
+}
+
+// CodeRabbit on #402: under server-side apply a null annotations map deletes
+// the annotations our manager's Apply entry owns, so those must drift.
+func TestRenderDrift_NullAnnotationsServerSideApply(t *testing.T) {
+	t.Parallel()
+	desired := map[string]interface{}{"metadata": map[string]interface{}{"annotations": nil}}
+	entry := func(manager, operation, subresource string) map[string]interface{} {
+		e := map[string]interface{}{"manager": manager, "operation": operation,
+			"fieldsV1": map[string]interface{}{"f:metadata": map[string]interface{}{
+				"f:annotations": map[string]interface{}{"f:owner": map[string]interface{}{}}}}}
+		if subresource != "" {
+			e["subresource"] = subresource
+		}
+		return e
+	}
+	for name, c := range map[string]struct {
+		entry   map[string]interface{}
+		manager string
+		want    string
+	}{
+		"owned-default-manager": {entry("kubectl", "Apply", ""), "", "metadata:\n  annotations: <drift>\n"},
+		"owned-named-manager":   {entry("tf", "Apply", ""), "tf", "metadata:\n  annotations: <drift>\n"},
+		"other-manager":         {entry("helm", "Apply", ""), "", ""},
+		"update-operation":      {entry("kubectl", "Update", ""), "", ""},
+		"subresource":           {entry("kubectl", "Apply", "status"), "", ""},
+	} {
+		live := map[string]interface{}{"metadata": map[string]interface{}{
+			"annotations":   map[string]interface{}{"owner": "x"},
+			"managedFields": []interface{}{c.entry},
+		}}
+		opts := clientOptsFor("v1", "ConfigMap")
+		opts.ServerSideApply = true
+		opts.FieldManager = c.manager
+		if got := RenderDrift(desired, live, opts); got != c.want {
+			t.Errorf("%s: got %q want %q", name, got, c.want)
+		}
 	}
 }

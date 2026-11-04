@@ -907,7 +907,10 @@ func (r *manifestResource) ModifyPlan(ctx context.Context, req resource.ModifyPl
 			!plan.IgnoreFields.Equal(state.IgnoreFields) ||
 			!plan.MaskPaths.Equal(state.MaskPaths) ||
 			plan.ShowDriftValues.ValueString() != state.ShowDriftValues.ValueString() ||
-			plan.DriftEngine.ValueString() != state.DriftEngine.ValueString()
+			plan.DriftEngine.ValueString() != state.DriftEngine.ValueString() ||
+			// The client engine's null rules depend on the apply mode.
+			plan.ServerSideApply.ValueBool() != state.ServerSideApply.ValueBool() ||
+			plan.FieldManager.ValueString() != state.FieldManager.ValueString()
 		if inputsChanged {
 			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("drift"), types.StringUnknown())...)
 		}
