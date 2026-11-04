@@ -3,12 +3,17 @@ package kubernetes
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/kubectl/pkg/scheme"
 	yamlWriter "sigs.k8s.io/yaml"
 )
 
@@ -86,6 +91,183 @@ type DriftOptions struct {
 	// `stringData.*` are masked automatically.
 	Kind       string
 	APIVersion string
+
+	// NullAsAbsent treats a desired null against a live map or list as absent
+	// where apply leaves it alone (see nullIsNoop). Client engine only.
+	NullAsAbsent bool
+
+	// CanonicalQuantities lets a quantity match the apiserver's canonical
+	// string (1 vs "1"). Client engine only, and core API groups only.
+	CanonicalQuantities bool
+
+	// ServerSideApply: apply ignores last-applied, so no null exemption may
+	// rely on it.
+	ServerSideApply bool
+
+	// FieldManager is the server-side apply manager ("kubectl" if empty),
+	// whose managedFields entry says which annotations a null map deletes.
+	FieldManager string
+}
+
+// walkFlags carries the client-engine normalisations down the walk.
+type walkFlags struct {
+	nullAsAbsent bool
+	quantities   bool
+	mergePatch   bool // apply sends a JSON merge patch (CRDs)
+	namespace    bool // v1 Namespace: the apiserver re-adds its name label
+	// lastApplied is live's last-applied object, the three-way patch's
+	// original. Nil under server-side apply or when live has none.
+	lastApplied map[string]interface{}
+	// ownedAnnotations are the keys a null annotations map would delete:
+	// last-applied's under client-side apply, our manager's under SSA.
+	ownedAnnotations map[string]bool
+}
+
+// lastAppliedAnnotation is where client-side apply stores the original.
+const lastAppliedAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
+
+// parseLastApplied returns live's last-applied object, or nil when it is
+// missing or unparsable (no null is then a provable no-op).
+func parseLastApplied(live map[string]interface{}) map[string]interface{} {
+	meta, _ := live["metadata"].(map[string]interface{})
+	ann, _ := meta["annotations"].(map[string]interface{})
+	raw, _ := ann[lastAppliedAnnotation].(string)
+	if raw == "" {
+		return nil
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// nullInLastApplied reports whether last-applied holds path as an explicit
+// null. Paths through a list never qualify: the merge patch replaces lists,
+// and the map assertion below stops the walk at one.
+func nullInLastApplied(lastApplied map[string]interface{}, path []string) bool {
+	cur := lastApplied
+	for i, seg := range path {
+		v, ok := cur[seg]
+		if !ok {
+			return false
+		}
+		if i == len(path)-1 {
+			return v == nil
+		}
+		if cur, ok = v.(map[string]interface{}); !ok {
+			return false
+		}
+	}
+	return false
+}
+
+// lastAppliedAnnotations returns the annotation keys last-applied recorded.
+func lastAppliedAnnotations(lastApplied map[string]interface{}) map[string]bool {
+	meta, _ := lastApplied["metadata"].(map[string]interface{})
+	recorded, _ := meta["annotations"].(map[string]interface{})
+	out := make(map[string]bool, len(recorded))
+	for k := range recorded {
+		out[k] = true
+	}
+	return out
+}
+
+// ssaRemovedKeys returns the keys under fieldsV1 path (e.g. "f:data") that a
+// server-side apply omitting them deletes: owned by manager's Apply entry and
+// by no other managedFields entry. An empty manager means "kubectl".
+func ssaRemovedKeys(live map[string]interface{}, manager string, path ...string) map[string]bool {
+	if manager == "" {
+		manager = "kubectl"
+	}
+	meta, _ := live["metadata"].(map[string]interface{})
+	entries, _ := meta["managedFields"].([]interface{})
+	ours, others := map[string]bool{}, map[string]bool{}
+	for _, e := range entries {
+		entry, _ := e.(map[string]interface{})
+		sub, _ := entry["subresource"].(string)
+		target := others
+		if entry["manager"] == manager && entry["operation"] == "Apply" && sub == "" {
+			target = ours
+		}
+		fields, _ := entry["fieldsV1"].(map[string]interface{})
+		for _, seg := range path {
+			fields, _ = fields[seg].(map[string]interface{})
+		}
+		for k := range fields {
+			if name, ok := strings.CutPrefix(k, "f:"); ok {
+				target[name] = true
+			}
+		}
+	}
+	for k := range others {
+		delete(ours, k)
+	}
+	return ours
+}
+
+// ownedAnnotationLive reports whether a key in owned is still in live, which
+// a null annotations map would delete.
+func ownedAnnotationLive(owned map[string]bool, live interface{}) bool {
+	liveMap, _ := live.(map[string]interface{})
+	for k := range owned {
+		if _, ok := liveMap[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// namespaceNameLabel is the label the apiserver sets on every Namespace.
+const namespaceNameLabel = "kubernetes.io/metadata.name"
+
+// usesMergePatch mirrors kubectl's apply.Patcher: kinds its scheme does not
+// know (CRDs) get a JSON merge patch, the rest a strategic merge patch.
+func usesMergePatch(apiVersion, kind string) bool {
+	if apiVersion == "" || kind == "" {
+		return false
+	}
+	return !scheme.Scheme.Recognizes(schema.FromAPIVersionAndKind(apiVersion, kind))
+}
+
+// nullIsNoop reports whether a desired null against live map or list
+// content leaves it in place on a client-side apply (measured, #402).
+func nullIsNoop(live interface{}, path []string, flags walkFlags) bool {
+	if len(path) == 2 && path[0] == "metadata" && path[1] == "annotations" {
+		// Apply only deletes keys it owns (last-applied or managedFields),
+		// and the client-side patch also writes last-applied into the map.
+		return !ownedAnnotationLive(flags.ownedAnnotations, live)
+	}
+	if flags.mergePatch {
+		// The merge patch sends null unless last-applied already has it.
+		return nullInLastApplied(flags.lastApplied, path)
+	}
+	m, ok := live.(map[string]interface{})
+	if !flags.namespace || !ok || len(path) != 2 || path[0] != "metadata" || path[1] != "labels" {
+		return false
+	}
+	for k := range m {
+		if k != namespaceNameLabel {
+			return false
+		}
+	}
+	return true
+}
+
+// coreQuantityGroups are the built-in API groups whose quantity fields
+// quantityEqual knows; CRDs keep strict comparison (int-or-string fields).
+var coreQuantityGroups = map[string]bool{"": true, "apps": true, "batch": true, "node.k8s.io": true}
+
+// coreQuantityGroup reports whether apiVersion belongs to coreQuantityGroups.
+func coreQuantityGroup(apiVersion string) bool {
+	if apiVersion == "" {
+		return false
+	}
+	group := ""
+	if i := strings.Index(apiVersion, "/"); i >= 0 {
+		group = apiVersion[:i]
+	}
+	return coreQuantityGroups[group]
 }
 
 // RenderDrift returns a YAML string containing only the paths under which
@@ -110,7 +292,19 @@ func RenderDrift(desired, live map[string]interface{}, opts DriftOptions) string
 	ignore := buildIgnoreSet(opts.IgnoreFields)
 	masks := buildMaskGlobs(opts.MaskPaths, opts.Kind, opts.APIVersion)
 
-	tree, hasDrift := collectMapDrift(desired, live, nil, ignore, masks, opts.ShowMode)
+	flags := walkFlags{
+		nullAsAbsent: opts.NullAsAbsent,
+		quantities:   opts.CanonicalQuantities && coreQuantityGroup(opts.APIVersion),
+		mergePatch:   usesMergePatch(opts.APIVersion, opts.Kind),
+		namespace:    opts.APIVersion == "v1" && opts.Kind == "Namespace",
+	}
+	if flags.nullAsAbsent && opts.ServerSideApply {
+		flags.ownedAnnotations = ssaRemovedKeys(live, opts.FieldManager, "f:metadata", "f:annotations")
+	} else if flags.nullAsAbsent {
+		flags.lastApplied = parseLastApplied(live)
+		flags.ownedAnnotations = lastAppliedAnnotations(flags.lastApplied)
+	}
+	tree, hasDrift := collectMapDrift(desired, live, nil, ignore, masks, opts.ShowMode, flags)
 	if !hasDrift {
 		return ""
 	}
@@ -127,7 +321,7 @@ func RenderDrift(desired, live map[string]interface{}, opts DriftOptions) string
 
 // collectMapDrift walks a map pair and returns the drift subtree plus a
 // bool indicating whether anything drifted under this node.
-func collectMapDrift(desired, live map[string]interface{}, path []string, ignore ignoreSet, masks []maskGlob, mode ShowMode) (map[string]interface{}, bool) {
+func collectMapDrift(desired, live map[string]interface{}, path []string, ignore ignoreSet, masks []maskGlob, mode ShowMode, flags walkFlags) (map[string]interface{}, bool) {
 	result := map[string]interface{}{}
 	keys := make([]string, 0, len(desired))
 	for k := range desired {
@@ -167,7 +361,7 @@ func collectMapDrift(desired, live map[string]interface{}, path []string, ignore
 			log.Printf("[TRACE] desired-only path (live lacks key): %s", strings.Join(childPath, "."))
 			continue
 		}
-		child, drifted := collectAnyDrift(dv, lv, childPath, ignore, masks, mode)
+		child, drifted := collectAnyDrift(dv, lv, childPath, ignore, masks, mode, flags)
 		if drifted {
 			result[k] = child
 			any = true
@@ -177,7 +371,22 @@ func collectMapDrift(desired, live map[string]interface{}, path []string, ignore
 }
 
 // collectAnyDrift dispatches on the desired value's concrete type.
-func collectAnyDrift(desired, live interface{}, path []string, ignore ignoreSet, masks []maskGlob, mode ShowMode) (interface{}, bool) {
+func collectAnyDrift(desired, live interface{}, path []string, ignore ignoreSet, masks []maskGlob, mode ShowMode, flags walkFlags) (interface{}, bool) {
+	// A YAML null against a live map or list (`annotations:` with no value)
+	// counts as absent only where the apply would leave live content alone.
+	if desired == nil && flags.nullAsAbsent {
+		switch live.(type) {
+		case map[string]interface{}, []interface{}:
+			if nullIsNoop(live, path, flags) {
+				return nil, false
+			}
+		default:
+			// CRD scalar: the merge patch omits a null last-applied holds.
+			if flags.mergePatch && nullInLastApplied(flags.lastApplied, path) {
+				return nil, false
+			}
+		}
+	}
 	switch d := desired.(type) {
 	case map[string]interface{}:
 		l, _ := live.(map[string]interface{})
@@ -185,7 +394,7 @@ func collectAnyDrift(desired, live interface{}, path []string, ignore ignoreSet,
 		if live != nil && l == nil {
 			return renderLeaf(d, live, path, masks, mode), true
 		}
-		return collectMapDrift(d, l, path, ignore, masks, mode)
+		return collectMapDrift(d, l, path, ignore, masks, mode, flags)
 	case []interface{}:
 		l, ok := live.([]interface{})
 		if !ok {
@@ -194,9 +403,9 @@ func collectAnyDrift(desired, live interface{}, path []string, ignore ignoreSet,
 			}
 			return renderLeaf(d, live, path, masks, mode), true
 		}
-		return collectSliceDrift(d, l, path, ignore, masks, mode)
+		return collectSliceDrift(d, l, path, ignore, masks, mode, flags)
 	default:
-		if leafEqual(desired, live) {
+		if leafEqual(desired, live) || (flags.quantities && quantityEqual(desired, live, path)) {
 			return nil, false
 		}
 		return renderLeaf(desired, live, path, masks, mode), true
@@ -206,7 +415,7 @@ func collectAnyDrift(desired, live interface{}, path []string, ignore ignoreSet,
 // collectSliceDrift compares two []interface{} by index. Length mismatches
 // are reported with explicit <missing> entries for the trailing positions
 // on whichever side is shorter.
-func collectSliceDrift(desired, live []interface{}, path []string, ignore ignoreSet, masks []maskGlob, mode ShowMode) ([]interface{}, bool) {
+func collectSliceDrift(desired, live []interface{}, path []string, ignore ignoreSet, masks []maskGlob, mode ShowMode, flags walkFlags) ([]interface{}, bool) {
 	var out []interface{}
 	any := false
 	max := len(desired)
@@ -226,7 +435,7 @@ func collectSliceDrift(desired, live []interface{}, path []string, ignore ignore
 		idxPath := append(path, fmt.Sprintf("[%d]", i)) //nolint:gocritic // intentional non-aliasing
 		switch {
 		case hasD && hasL:
-			child, drifted := collectAnyDrift(d, l, idxPath, ignore, masks, mode)
+			child, drifted := collectAnyDrift(d, l, idxPath, ignore, masks, mode, flags)
 			if drifted {
 				out = append(out, wrapIndexedItem(i, child))
 				any = true
@@ -359,6 +568,74 @@ func leafEqual(desired, live interface{}) bool {
 		}
 	}
 	return reflect.DeepEqual(desired, live)
+}
+
+// quantityEqual reports whether live is the canonical form the apiserver
+// stores for a resource.Quantity written as desired: 1 -> "1", 0.5 -> "500m".
+func quantityEqual(desired, live interface{}, path []string) bool {
+	ls, ok := live.(string)
+	if !ok || !quantityPathAllowed(path) || !quantityPathKnown(path) {
+		return false
+	}
+	var raw string
+	switch d := desired.(type) {
+	case string:
+		raw = strings.TrimSpace(d)
+	case int, int32, int64, uint, uint32, uint64:
+		raw = fmt.Sprintf("%d", d)
+	case float64:
+		raw = strconv.FormatFloat(d, 'f', -1, 64)
+	case float32:
+		raw = strconv.FormatFloat(float64(d), 'f', -1, 32)
+	default:
+		return false
+	}
+	q, err := resource.ParseQuantity(raw)
+	if err != nil {
+		return false
+	}
+	return q.String() == strings.TrimSpace(ls)
+}
+
+// quantityPathAllowed excludes any metadata (top level or nested, such as
+// pod template annotations) and ConfigMap / Secret payloads.
+func quantityPathAllowed(path []string) bool {
+	if len(path) == 0 {
+		return false
+	}
+	switch path[0] {
+	case "data", "stringData", "binaryData":
+		return false
+	}
+	for _, p := range path {
+		if p == "metadata" {
+			return false
+		}
+	}
+	return true
+}
+
+// quantityParents name core-API maps whose values are resource.Quantity:
+// requests.cpu, hard["requests.cpu"], LimitRange max.memory and so on.
+var quantityParents = map[string]bool{
+	"requests": true, "limits": true, "capacity": true, "allocatable": true,
+	"hard": true, "overhead": true, "podFixed": true, "max": true,
+	"min": true, "default": true, "defaultRequest": true,
+	"maxLimitRequestRatio": true,
+}
+
+// quantityPathKnown reports whether a string at path is a core quantity: a
+// value directly under a quantityParents map, an emptyDir sizeLimit or a
+// resourceFieldRef divisor.
+func quantityPathKnown(path []string) bool {
+	n := len(path)
+	if n >= 2 && path[n-1] == "sizeLimit" && path[n-2] == "emptyDir" {
+		return true
+	}
+	if n >= 2 && path[n-1] == "divisor" && path[n-2] == "resourceFieldRef" {
+		return true
+	}
+	return n >= 2 && quantityParents[path[n-2]]
 }
 
 // ignoreSet packages the dotted paths that should be skipped entirely.

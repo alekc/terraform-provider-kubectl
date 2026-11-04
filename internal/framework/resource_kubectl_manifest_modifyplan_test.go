@@ -8,6 +8,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -329,6 +330,46 @@ func TestModifyPlan_IdentityChangeRequiresReplace(t *testing.T) {
 			}
 			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
 				t.Errorf("RequiresReplace = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestModifyPlan_ApplyModeChangeUnknownsDrift asserts a change to
+// server_side_apply or field_manager marks drift Unknown (CodeRabbit, #402):
+// the client engine's null rules depend on both.
+func TestModifyPlan_ApplyModeChangeUnknownsDrift(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := &manifestResource{}
+	for name, tc := range map[string]struct {
+		mutate      func(*manifestResourceModel)
+		wantUnknown bool
+	}{
+		"unchanged":     {func(*manifestResourceModel) {}, false},
+		"ssa toggled":   {func(m *manifestResourceModel) { m.ServerSideApply = types.BoolValue(true) }, true},
+		"field manager": {func(m *manifestResourceModel) { m.FieldManager = types.StringValue("tf") }, true},
+	} {
+		tc := tc
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			state := baseModel()
+			state.Drift = types.StringValue("")
+			state.ServerSideApply = types.BoolValue(false)
+			state.FieldManager = types.StringValue("kubectl")
+			plan := state
+			tc.mutate(&plan)
+			req, resp := newUpdatePlan(ctx, t, state, plan)
+
+			r.ModifyPlan(ctx, req, resp)
+
+			if resp.Diagnostics.HasError() {
+				t.Fatalf("unexpected error: %+v", resp.Diagnostics)
+			}
+			var drift types.String
+			resp.Diagnostics.Append(resp.Plan.GetAttribute(ctx, path.Root("drift"), &drift)...)
+			if drift.IsUnknown() != tc.wantUnknown {
+				t.Fatalf("drift unknown = %v, want %v", drift.IsUnknown(), tc.wantUnknown)
 			}
 		})
 	}

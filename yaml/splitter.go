@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	yamlParser "gopkg.in/yaml.v2"
+	yamlParser "gopkg.in/yaml.v3"
 	"strings"
 )
 
