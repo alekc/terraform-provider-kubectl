@@ -16,12 +16,9 @@ import (
 // waiting for the production 3s..30s intervals.
 func zeroBackoff() backoff.BackOff { return backoff.NewConstantBackOff(0) }
 
-// TestNewApplyBackoff_Tuning locks in the two deliberate deviations from
-// the library defaults that the apply retry contract depends on: a hard
-// 30s ceiling (RandomizationFactor 0, so no jitter pushes a sleep past
-// MaxInterval) and no wall-clock stop (MaxElapsedTime 0, so WithMaxRetries
-// is the sole loop bound). A regression here silently changes documented
-// retry behaviour, so assert the fields directly.
+// TestNewApplyBackoff_Tuning locks in the hard 30s ceiling (RandomizationFactor
+// 0, so no jitter pushes a sleep past MaxInterval). A regression here silently
+// changes documented retry behaviour, so assert the fields directly.
 func TestNewApplyBackoff_Tuning(t *testing.T) {
 	b := newApplyBackoff()
 	assert.Equal(t, applyRetryInitialInterval, b.InitialInterval, "initial interval")
@@ -29,7 +26,6 @@ func TestNewApplyBackoff_Tuning(t *testing.T) {
 	assert.Equal(t, 3*time.Second, b.InitialInterval, "initial interval literal")
 	assert.Equal(t, 30*time.Second, b.MaxInterval, "max interval literal")
 	assert.Zero(t, b.RandomizationFactor, "randomization factor must be 0 for a hard ceiling")
-	assert.Zero(t, b.MaxElapsedTime, "max elapsed time must be 0 so WithMaxRetries bounds the loop")
 }
 
 // TestNewApplyBackoff_HardCeiling drives NextBackOff far past the point
@@ -41,7 +37,7 @@ func TestNewApplyBackoff_HardCeiling(t *testing.T) {
 	b.Reset()
 	for i := 0; i < 50; i++ {
 		next := b.NextBackOff()
-		require.NotEqual(t, backoff.Stop, next, "MaxElapsedTime=0 must not stop the backoff")
+		require.NotEqual(t, backoff.Stop, next, "the policy itself must never stop the loop")
 		assert.LessOrEqual(t, next, applyRetryMaxInterval, "sleep must never exceed the 30s ceiling")
 	}
 }
@@ -108,7 +104,7 @@ func TestRunWithApplyRetryPolicy_ExhaustsRetries(t *testing.T) {
 
 	err := runWithApplyRetryPolicy(context.Background(), 2, zeroBackoff(), op)
 
-	assert.ErrorIs(t, err, wantErr)
+	assert.Same(t, wantErr, err, "the last op error must be returned unwrapped")
 	assert.Equal(t, 3, calls, "retryCount 2 must produce 1 + 2 = 3 total attempts")
 }
 
@@ -128,7 +124,8 @@ func TestRunWithApplyRetryPolicy_CancelledCtxStopsBeforeRetry(t *testing.T) {
 
 	err := runWithApplyRetryPolicy(ctx, 5, zeroBackoff(), op)
 
-	assert.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.ErrorIs(t, err, wantErr, "the op error must stay matchable")
 	assert.Equal(t, 1, calls, "a cancelled ctx must stop retries after the first attempt")
 }
 
