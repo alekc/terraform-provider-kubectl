@@ -65,7 +65,7 @@ func TestComputeDrift_ServerEngine_UsesPatchResponse(t *testing.T) {
 			"data":       map[string]interface{}{"key": "DESIRED"},
 		}},
 	}
-	got := computeDrift(context.Background(), stub, desired, live, nil, nil, ShowFull, ServerDriftEngine, "kubectl", false)
+	got := computeDrift(context.Background(), stub, desired, live, nil, nil, ShowFull, ServerDriftEngine, "kubectl", false, false)
 
 	if !stub.patchCalled {
 		t.Fatalf("server engine did not call Patch")
@@ -105,7 +105,7 @@ func TestComputeDrift_ServerEngine_FallsBackOnPatchError(t *testing.T) {
 	stub := &stubResource{
 		respErr: errors.New("RBAC: PATCH not permitted"),
 	}
-	got := computeDrift(context.Background(), stub, desired, live, nil, nil, ShowNone, ServerDriftEngine, "kubectl", false)
+	got := computeDrift(context.Background(), stub, desired, live, nil, nil, ShowNone, ServerDriftEngine, "kubectl", false, false)
 
 	if !stub.patchCalled {
 		t.Fatalf("server engine should have attempted Patch before falling back")
@@ -136,13 +136,13 @@ func TestComputeDrift_ClientEngine_DoesNotCallPatch(t *testing.T) {
 		"data":       map[string]interface{}{"key": "LIVE"},
 	})
 	stub := &stubResource{}
-	_ = computeDrift(context.Background(), stub, desired, live, nil, nil, ShowNone, ClientDriftEngine, "kubectl", false)
+	_ = computeDrift(context.Background(), stub, desired, live, nil, nil, ShowNone, ClientDriftEngine, "kubectl", false, false)
 	if stub.patchCalled {
 		t.Errorf("client engine must not call Patch")
 	}
 	// Also: empty engine (zero value) defaults to client semantics.
 	stub2 := &stubResource{}
-	_ = computeDrift(context.Background(), stub2, desired, live, nil, nil, ShowNone, "", "kubectl", false)
+	_ = computeDrift(context.Background(), stub2, desired, live, nil, nil, ShowNone, "", "kubectl", false, false)
 	if stub2.patchCalled {
 		t.Errorf("empty DriftEngine must default to client (no Patch call)")
 	}
@@ -167,7 +167,7 @@ func TestComputeDrift_ServerEngine_ForceConflictsPropagates(t *testing.T) {
 	stub := &stubResource{
 		resp: &meta_v1_unstruct.Unstructured{Object: desired.Raw.Object},
 	}
-	_ = computeDrift(context.Background(), stub, desired, live, nil, nil, ShowNone, ServerDriftEngine, "alekc-tool", true)
+	_ = computeDrift(context.Background(), stub, desired, live, nil, nil, ShowNone, ServerDriftEngine, "alekc-tool", true, false)
 	if stub.gotOptions.Force == nil || !*stub.gotOptions.Force {
 		t.Errorf("ForceConflicts=true should propagate to PatchOptions.Force")
 	}
@@ -197,7 +197,7 @@ func TestComputeDrift_ServerEngine_ForceConflictsFalseLeavesForceNil(t *testing.
 	stub := &stubResource{
 		resp: &meta_v1_unstruct.Unstructured{Object: desired.Raw.Object},
 	}
-	_ = computeDrift(context.Background(), stub, desired, live, nil, nil, ShowNone, ServerDriftEngine, "kubectl", false)
+	_ = computeDrift(context.Background(), stub, desired, live, nil, nil, ShowNone, ServerDriftEngine, "kubectl", false, false)
 	if stub.gotOptions.Force != nil {
 		t.Errorf("ForceConflicts=false should leave PatchOptions.Force nil; got %v", *stub.gotOptions.Force)
 	}
@@ -222,7 +222,7 @@ func TestComputeDrift_ServerEngine_EmptyFieldManagerDefaultsToKubectl(t *testing
 	stub := &stubResource{
 		resp: &meta_v1_unstruct.Unstructured{Object: desired.Raw.Object},
 	}
-	_ = computeDrift(context.Background(), stub, desired, live, nil, nil, ShowNone, ServerDriftEngine, "", false)
+	_ = computeDrift(context.Background(), stub, desired, live, nil, nil, ShowNone, ServerDriftEngine, "", false, false)
 	if stub.gotOptions.FieldManager != "kubectl" {
 		t.Errorf("empty FieldManager should default to %q; got %q", "kubectl", stub.gotOptions.FieldManager)
 	}

@@ -305,7 +305,7 @@ func ApplyManifest(ctx context.Context, provider *KubeProvider, opts ApplyManife
 		// authoritative. Apply path always uses the client engine
 		// here because we already have the apply response in hand;
 		// running an extra SSA dry-run would be redundant.
-		Drift: computeDriftClient(manifest, response, opts.IgnoreFields, opts.MaskPaths, opts.ShowDriftValues),
+		Drift: computeDriftClient(manifest, response, opts.IgnoreFields, opts.MaskPaths, opts.ShowDriftValues, opts.FieldManager, opts.ServerSideApply),
 	}
 
 	if opts.WaitForRollout {
@@ -346,7 +346,7 @@ func ApplyManifest(ctx context.Context, provider *KubeProvider, opts ApplyManife
 	// Re-read after waits so live_uid and drift reflect any post-wait
 	// mutations the controllers introduced (status fields, defaulting,
 	// admission webhooks, etc.).
-	readResult, err := readManifestUsingClient(ctx, restClient.ResourceInterface, manifest, opts.IgnoreFields, opts.MaskPaths, opts.ShowDriftValues, opts.DriftEngine, opts.FieldManager, opts.ForceConflicts) //nolint:contextcheck // ctx is the apply ctx, intentionally reused for the post-wait read
+	readResult, err := readManifestUsingClient(ctx, restClient.ResourceInterface, manifest, opts.IgnoreFields, opts.MaskPaths, opts.ShowDriftValues, opts.DriftEngine, opts.FieldManager, opts.ForceConflicts, opts.ServerSideApply) //nolint:contextcheck // ctx is the apply ctx, intentionally reused for the post-wait read
 	if err != nil {
 		return nil, err
 	}
@@ -377,6 +377,9 @@ type ReadManifestOptions struct {
 	// FieldManager "kubectl" if empty; ForceConflicts false.
 	FieldManager   string
 	ForceConflicts bool
+	// ServerSideApply is the apply mode: the client engine's last-applied
+	// null handling holds only for client-side apply.
+	ServerSideApply bool
 }
 
 // ReadManifestResult captures the live state observed during a Read.
@@ -412,13 +415,13 @@ func ReadManifest(ctx context.Context, provider *KubeProvider, opts ReadManifest
 		return nil, fmt.Errorf("failed to create kubernetes rest client for read of resource: %+v", restClient.Error)
 	}
 
-	return readManifestUsingClient(ctx, restClient.ResourceInterface, manifest, opts.IgnoreFields, opts.MaskPaths, opts.ShowDriftValues, opts.DriftEngine, opts.FieldManager, opts.ForceConflicts)
+	return readManifestUsingClient(ctx, restClient.ResourceInterface, manifest, opts.IgnoreFields, opts.MaskPaths, opts.ShowDriftValues, opts.DriftEngine, opts.FieldManager, opts.ForceConflicts, opts.ServerSideApply)
 }
 
 // readManifestUsingClient is the inner Read used both by ReadManifest and
 // by ApplyManifest's post-wait re-read. Takes an already-resolved client
 // so the apply path can reuse the one it built.
-func readManifestUsingClient(ctx context.Context, client dynamic.ResourceInterface, manifest *yaml.Manifest, ignoreFields, maskPaths []string, showMode ShowMode, engine DriftEngine, fieldManager string, forceConflicts bool) (*ReadManifestResult, error) {
+func readManifestUsingClient(ctx context.Context, client dynamic.ResourceInterface, manifest *yaml.Manifest, ignoreFields, maskPaths []string, showMode ShowMode, engine DriftEngine, fieldManager string, forceConflicts, serverSideApply bool) (*ReadManifestResult, error) {
 	rawResponse, err := client.Get(ctx, manifest.GetName(), meta_v1.GetOptions{})
 	if err != nil {
 		if k8serrors.IsGone(err) || k8serrors.IsNotFound(err) {
@@ -434,7 +437,7 @@ func readManifestUsingClient(ctx context.Context, client dynamic.ResourceInterfa
 	return &ReadManifestResult{
 		Found:   true,
 		LiveUID: string(live.GetUID()),
-		Drift:   computeDrift(ctx, client, manifest, live, ignoreFields, maskPaths, showMode, engine, fieldManager, forceConflicts),
+		Drift:   computeDrift(ctx, client, manifest, live, ignoreFields, maskPaths, showMode, engine, fieldManager, forceConflicts, serverSideApply),
 	}, nil
 }
 
@@ -444,7 +447,7 @@ func readManifestUsingClient(ctx context.Context, client dynamic.ResourceInterfa
 // the comparison; on any failure (RBAC, webhook rejection, CRD that
 // doesn't accept ApplyPatchType) it logs a [WARN] and falls back to the
 // client engine so Read still completes successfully.
-func computeDrift(ctx context.Context, client dynamic.ResourceInterface, desired, live *yaml.Manifest, ignoreFields, maskPaths []string, mode ShowMode, engine DriftEngine, fieldManager string, forceConflicts bool) string {
+func computeDrift(ctx context.Context, client dynamic.ResourceInterface, desired, live *yaml.Manifest, ignoreFields, maskPaths []string, mode ShowMode, engine DriftEngine, fieldManager string, forceConflicts, serverSideApply bool) string {
 	if engine == ServerDriftEngine {
 		serverDesired, err := serverSideApplyDryRun(ctx, client, desired, fieldManager, forceConflicts)
 		if err == nil {
@@ -465,7 +468,7 @@ func computeDrift(ctx context.Context, client dynamic.ResourceInterface, desired
 		log.Printf("[WARN] %v/%v server-side drift engine failed (%s), falling back to client engine", desired.GetAPIVersion(), desired.GetKind(), classifySSAError(err))
 		// fall through to client engine
 	}
-	return computeDriftClient(desired, live, ignoreFields, maskPaths, mode)
+	return computeDriftClient(desired, live, ignoreFields, maskPaths, mode, fieldManager, serverSideApply)
 }
 
 // classifySSAError maps an SSA dry-run failure to a short, non-sensitive
@@ -501,7 +504,7 @@ func classifySSAError(err error) string {
 // per-key diffs as YAML. Handles the Secret v1 stringData -> data
 // normalisation on a deep copy of the desired manifest, so the caller's
 // pointer is never mutated (issue #269 class).
-func computeDriftClient(desired, live *yaml.Manifest, ignoreFields, maskPaths []string, mode ShowMode) string {
+func computeDriftClient(desired, live *yaml.Manifest, ignoreFields, maskPaths []string, mode ShowMode, fieldManager string, serverSideApply bool) string {
 	if desired == nil || desired.Raw == nil || live == nil || live.Raw == nil {
 		return ""
 	}
@@ -510,6 +513,26 @@ func computeDriftClient(desired, live *yaml.Manifest, ignoreFields, maskPaths []
 		if stringData, found := desiredObj["stringData"]; found {
 			if sdMap, ok := stringData.(map[string]interface{}); ok {
 				desiredObj = desired.Raw.DeepCopy().Object
+				dataValue, dataPresent := desiredObj["data"]
+				// A bare `data:` is null; SetNestedField cannot write into it.
+				if _, isMap := dataValue.(map[string]interface{}); !isMap {
+					desiredObj["data"] = map[string]interface{}{}
+				}
+				if dataPresent && dataValue == nil {
+					// The patch sends data: null, so live keys outside
+					// stringData are deleted: compare them against null.
+					// Server-side apply deletes only keys our manager alone owns.
+					liveData, _ := live.Raw.Object["data"].(map[string]interface{})
+					var removed map[string]bool
+					if serverSideApply {
+						removed = ssaRemovedKeys(live.Raw.Object, fieldManager, "f:data")
+					}
+					for k := range liveData {
+						if _, kept := sdMap[k]; !kept && (!serverSideApply || removed[k]) {
+							desiredObj["data"].(map[string]interface{})[k] = nil
+						}
+					}
+				}
 				for k, v := range sdMap {
 					encoded := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%v", v)))
 					if err := meta_v1_unstruct.SetNestedField(desiredObj, encoded, "data", k); err != nil {
@@ -522,11 +545,15 @@ func computeDriftClient(desired, live *yaml.Manifest, ignoreFields, maskPaths []
 		}
 	}
 	return RenderDrift(desiredObj, live.Raw.Object, DriftOptions{
-		IgnoreFields: ignoreFields,
-		MaskPaths:    maskPaths,
-		ShowMode:     mode,
-		Kind:         desired.GetKind(),
-		APIVersion:   desired.GetAPIVersion(),
+		IgnoreFields:        ignoreFields,
+		MaskPaths:           maskPaths,
+		ShowMode:            mode,
+		Kind:                desired.GetKind(),
+		APIVersion:          desired.GetAPIVersion(),
+		NullAsAbsent:        true,
+		CanonicalQuantities: true,
+		ServerSideApply:     serverSideApply,
+		FieldManager:        fieldManager,
 	})
 }
 
