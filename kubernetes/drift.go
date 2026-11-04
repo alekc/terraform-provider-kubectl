@@ -173,28 +173,37 @@ func lastAppliedAnnotations(lastApplied map[string]interface{}) map[string]bool 
 	return out
 }
 
-// ssaOwnedAnnotations returns the annotation keys that manager's Apply entry
-// in live's managedFields owns; a server-side apply without them deletes them.
-func ssaOwnedAnnotations(live map[string]interface{}, manager string) map[string]bool {
+// ssaRemovedKeys returns the keys under fieldsV1 path (e.g. "f:data") that a
+// server-side apply omitting them deletes: owned by manager's Apply entry and
+// by no other managedFields entry. An empty manager means "kubectl".
+func ssaRemovedKeys(live map[string]interface{}, manager string, path ...string) map[string]bool {
+	if manager == "" {
+		manager = "kubectl"
+	}
 	meta, _ := live["metadata"].(map[string]interface{})
 	entries, _ := meta["managedFields"].([]interface{})
-	out := map[string]bool{}
+	ours, others := map[string]bool{}, map[string]bool{}
 	for _, e := range entries {
 		entry, _ := e.(map[string]interface{})
 		sub, _ := entry["subresource"].(string)
-		if entry["manager"] != manager || entry["operation"] != "Apply" || sub != "" {
-			continue
+		target := others
+		if entry["manager"] == manager && entry["operation"] == "Apply" && sub == "" {
+			target = ours
 		}
 		fields, _ := entry["fieldsV1"].(map[string]interface{})
-		fmeta, _ := fields["f:metadata"].(map[string]interface{})
-		fann, _ := fmeta["f:annotations"].(map[string]interface{})
-		for k := range fann {
+		for _, seg := range path {
+			fields, _ = fields[seg].(map[string]interface{})
+		}
+		for k := range fields {
 			if name, ok := strings.CutPrefix(k, "f:"); ok {
-				out[name] = true
+				target[name] = true
 			}
 		}
 	}
-	return out
+	for k := range others {
+		delete(ours, k)
+	}
+	return ours
 }
 
 // ownedAnnotationLive reports whether a key in owned is still in live, which
@@ -290,11 +299,7 @@ func RenderDrift(desired, live map[string]interface{}, opts DriftOptions) string
 		namespace:    opts.APIVersion == "v1" && opts.Kind == "Namespace",
 	}
 	if flags.nullAsAbsent && opts.ServerSideApply {
-		manager := opts.FieldManager
-		if manager == "" {
-			manager = "kubectl"
-		}
-		flags.ownedAnnotations = ssaOwnedAnnotations(live, manager)
+		flags.ownedAnnotations = ssaRemovedKeys(live, opts.FieldManager, "f:metadata", "f:annotations")
 	} else if flags.nullAsAbsent {
 		flags.lastApplied = parseLastApplied(live)
 		flags.ownedAnnotations = lastAppliedAnnotations(flags.lastApplied)

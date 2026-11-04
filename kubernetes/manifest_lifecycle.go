@@ -521,9 +521,14 @@ func computeDriftClient(desired, live *yaml.Manifest, ignoreFields, maskPaths []
 				if dataPresent && dataValue == nil {
 					// The patch sends data: null, so live keys outside
 					// stringData are deleted: compare them against null.
+					// Server-side apply deletes only keys our manager alone owns.
 					liveData, _ := live.Raw.Object["data"].(map[string]interface{})
+					var removed map[string]bool
+					if serverSideApply {
+						removed = ssaRemovedKeys(live.Raw.Object, fieldManager, "f:data")
+					}
 					for k := range liveData {
-						if _, kept := sdMap[k]; !kept {
+						if _, kept := sdMap[k]; !kept && (!serverSideApply || removed[k]) {
 							desiredObj["data"].(map[string]interface{})[k] = nil
 						}
 					}

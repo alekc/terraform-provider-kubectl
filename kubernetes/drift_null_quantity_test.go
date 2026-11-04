@@ -751,10 +751,16 @@ func TestRenderDrift_NullAnnotationsServerSideApply(t *testing.T) {
 		"other-manager":         {entry("helm", "Apply", ""), "", ""},
 		"update-operation":      {entry("kubectl", "Update", ""), "", ""},
 		"subresource":           {entry("kubectl", "Apply", "status"), "", ""},
+		"co-owned":              {entry("kubectl", "Apply", ""), "", ""},
 	} {
+		fields := []interface{}{c.entry}
+		if name == "co-owned" {
+			// Apply keeps a field another manager also owns.
+			fields = append(fields, entry("helm", "Update", ""))
+		}
 		live := map[string]interface{}{"metadata": map[string]interface{}{
 			"annotations":   map[string]interface{}{"owner": "x"},
-			"managedFields": []interface{}{c.entry},
+			"managedFields": fields,
 		}}
 		opts := clientOptsFor("v1", "ConfigMap")
 		opts.ServerSideApply = true
@@ -762,5 +768,39 @@ func TestRenderDrift_NullAnnotationsServerSideApply(t *testing.T) {
 		if got := RenderDrift(desired, live, opts); got != c.want {
 			t.Errorf("%s: got %q want %q", name, got, c.want)
 		}
+	}
+}
+
+// CodeRabbit on #402: under server-side apply, data: null deletes only the
+// Secret keys our manager alone owns, so other keys must not drift.
+func TestComputeDriftClient_SecretNullDataServerSideApply(t *testing.T) {
+	t.Parallel()
+	desired, err := yaml.ParseYAML("apiVersion: v1\nkind: Secret\nmetadata:\n  name: s\ndata:\nstringData:\n  foo: x\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := func(manager, operation string, keys ...string) map[string]interface{} {
+		data := map[string]interface{}{}
+		for _, k := range keys {
+			data["f:"+k] = map[string]interface{}{}
+		}
+		return map[string]interface{}{"manager": manager, "operation": operation,
+			"fieldsV1": map[string]interface{}{"f:data": data}}
+	}
+	live, err := yaml.ParseYAML("apiVersion: v1\nkind: Secret\nmetadata:\n  name: s\ndata:\n  foo: eA==\n  mine: eQ==\n  shared: eQ==\n  theirs: eQ==\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	live.Raw.Object["metadata"].(map[string]interface{})["managedFields"] = []interface{}{
+		entry("tf", "Apply", "foo", "mine", "shared"),
+		entry("controller", "Update", "shared", "theirs"),
+	}
+	want := "data:\n  mine: <drift sensitive>\n"
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone, "tf", true); got != want {
+		t.Errorf("server-side apply: got %q want %q", got, want)
+	}
+	want = "data:\n  mine: <drift sensitive>\n  shared: <drift sensitive>\n  theirs: <drift sensitive>\n"
+	if got := computeDriftClient(desired, live, nil, nil, ShowNone, "tf", false); got != want {
+		t.Errorf("client-side apply: got %q want %q", got, want)
 	}
 }
