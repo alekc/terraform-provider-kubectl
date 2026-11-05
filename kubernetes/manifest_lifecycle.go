@@ -3,15 +3,17 @@ package kubernetes
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/alekc/terraform-provider-kubectl/internal/types"
 	"github.com/alekc/terraform-provider-kubectl/yaml"
-	backoff "github.com/cenkalti/backoff/v4"
+	backoff "github.com/cenkalti/backoff/v7"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	meta_v1_unstruct "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -111,22 +113,21 @@ const (
 )
 
 // newApplyBackoff builds the exponential backoff used between apply
-// retries. Two deliberate deviations from the library defaults:
+// retries. Deliberate deviations from the library defaults, the second
+// applied by runWithApplyRetryPolicy rather than here:
 //
 //   - RandomizationFactor = 0 makes MaxInterval a hard ceiling. The
 //     default 0.5 jitter is applied AFTER MaxInterval clamps the base
 //     interval, so NextBackOff could otherwise return up to 1.5 *
 //     MaxInterval; users tuning apply_retry_count expect the documented
 //     30s ceiling to actually hold.
-//   - MaxElapsedTime = 0 disables the wall-clock stop condition so the
-//     WithMaxRetries wrapper is the sole loop bound. The default 15m
-//     would silently truncate retries on slow clusters with large N.
+//   - No wall-clock stop: runWithApplyRetryPolicy passes WithMaxElapsedTime(0)
+//     so the attempt count is the sole loop bound.
 func newApplyBackoff() *backoff.ExponentialBackOff {
 	exp := backoff.NewExponentialBackOff()
 	exp.InitialInterval = applyRetryInitialInterval
 	exp.MaxInterval = applyRetryMaxInterval
 	exp.RandomizationFactor = 0
-	exp.MaxElapsedTime = 0
 	return exp
 }
 
@@ -155,17 +156,24 @@ func runWithApplyRetryPolicy(ctx context.Context, retryCount uint64, base backof
 	if retryCount == 0 {
 		return op()
 	}
-	policy := backoff.WithContext(
-		backoff.WithMaxRetries(base, retryCount),
-		ctx,
-	)
-	return backoff.Retry(func() error {
+	// WithMaxTries counts attempts, not retries; the default 15m elapsed-time
+	// cap is disabled so a slow cluster with a large count is not cut short.
+	tries := uint(retryCount) + 1
+	if retryCount >= uint64(math.MaxUint) {
+		tries = math.MaxUint
+	}
+	_, err := backoff.Retry(ctx, func() (struct{}, error) {
 		if err := op(); err != nil {
 			log.Printf("[ERROR] applying manifest failed: %+v", err)
-			return err
+			return struct{}{}, err
 		}
-		return nil
-	}, policy)
+		return struct{}{}, nil
+	}, backoff.WithBackOff(base), backoff.WithMaxTries(tries), backoff.WithMaxElapsedTime(0))
+	// Exhausted retries surface the apply error verbatim, as before v7.
+	if re := backoff.AsRetryError(err); re != nil && errors.Is(re.Cause, backoff.ErrExhausted) {
+		return re.LastErr
+	}
+	return err
 }
 
 // ApplyManifest runs `kubectl apply` against the given manifest, optionally
