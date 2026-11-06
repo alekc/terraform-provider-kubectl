@@ -200,7 +200,7 @@ jobs:
         run: |
           chmod +x terraform-provider-kubectl
           mv terraform-provider-kubectl "${HOME}/"
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           wait: 2m
           node_image: kindest/node:v${{ needs.get_version_matrix.outputs.latest_k8s_version }}
@@ -314,7 +314,7 @@ jobs:
         run: |
           chmod +x terraform-provider-kubectl
           mv terraform-provider-kubectl "${HOME}/"
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           wait: 2m
           node_image: kindest/node:v${{ needs.get_version_matrix.outputs.latest_k8s_version }}
@@ -436,7 +436,7 @@ jobs:
           VERSION="${TAG#v}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Latest published: ${VERSION}"
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           wait: 2m
           node_image: kindest/node:v${{ needs.get_version_matrix.outputs.latest_k8s_version }}
@@ -643,7 +643,7 @@ jobs:
           VERSION="${TAG#v}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Latest published: ${VERSION}"
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           wait: 2m
           node_image: kindest/node:v${{ needs.get_version_matrix.outputs.latest_k8s_version }}
@@ -849,7 +849,7 @@ jobs:
           VERSION="${TAG#v}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Latest published gavinbunney: ${VERSION}"
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           wait: 2m
           node_image: kindest/node:v${{ needs.get_version_matrix.outputs.latest_k8s_version }}
@@ -1053,7 +1053,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           wait: 2m
           node_image: kindest/node:v${{ needs.get_version_matrix.outputs.latest_k8s_version }}
@@ -1117,7 +1117,7 @@ jobs:
         # download-artifact does not preserve the executable bit on the
         # uploaded file; restore it before running.
         run: chmod +x acc.test
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         id: kind
         with:
           wait: 2m
@@ -1196,7 +1196,7 @@ jobs:
           name: acc-test-binary
       - name: Make binary executable
         run: chmod +x acc.test
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         id: kind
         with:
           wait: 2m
@@ -1297,7 +1297,7 @@ jobs:
           name: acc-test-binary
       - name: Make binary executable
         run: chmod +x acc.test
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         id: kind
         with:
           wait: 2m
@@ -1366,7 +1366,7 @@ jobs:
           name: acc-test-binary
       - name: Make binary executable
         run: chmod +x acc.test
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         id: kind
         with:
           wait: 2m
