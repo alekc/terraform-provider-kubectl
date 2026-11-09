@@ -16,7 +16,7 @@ require (
 	github.com/icza/dyno v0.0.0-20260912175837-51f8ab52fd15
 	github.com/mitchellh/go-homedir v1.1.0
 	github.com/stretchr/testify v1.12.1
-	github.com/zclconf/go-cty v1.19.0
+	github.com/zclconf/go-cty v1.20.0
 	github.com/zclconf/go-cty-yaml v1.2.0
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/api v0.37.2
