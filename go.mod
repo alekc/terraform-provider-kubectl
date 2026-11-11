@@ -2,7 +2,7 @@ module github.com/alekc/terraform-provider-kubectl
 
 go 1.27.0
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 require (
 	github.com/cenkalti/backoff/v7 v7.0.3
