@@ -249,6 +249,8 @@ func moveFromGavinbunneyManifest(ctx context.Context, req resource.MoveStateRequ
 			}),
 		},
 	}
+	// gavinbunney's wait had no Default either, so it can be null (#412).
+	fillNullDefaults(&target)
 
 	resp.Diagnostics.Append(resp.TargetState.Set(ctx, &target)...)
 }

@@ -261,6 +261,92 @@ func TestUpgradeState_V1ToV2_ExercisesUpgrader(t *testing.T) {
 	if !got.MaskPaths.IsNull() {
 		t.Errorf("mask_paths should be null after upgrade; got %+v", got.MaskPaths)
 	}
+	// v1 leaves every defaulted attribute null, as v2.x does for `wait` (#412).
+	assertSchemaDefaults(t, got)
+}
+
+// assertSchemaDefaults fails unless all nine defaulted attributes hold their
+// schema Default.
+func assertSchemaDefaults(t *testing.T, got manifestResourceModel) {
+	t.Helper()
+	bools := map[string]struct {
+		v    types.Bool
+		want bool
+	}{
+		"force_new":           {got.ForceNew, false},
+		"upgrade_api_version": {got.UpgradeAPIVersion, false},
+		"server_side_apply":   {got.ServerSideApply, false},
+		"force_conflicts":     {got.ForceConflicts, false},
+		"apply_only":          {got.ApplyOnly, false},
+		"wait":                {got.Wait, false},
+		"wait_for_rollout":    {got.WaitForRollout, true},
+		"validate_schema":     {got.ValidateSchema, true},
+	}
+	for name, b := range bools {
+		if b.v.IsNull() || b.v.ValueBool() != b.want {
+			t.Errorf("%s: got %v, want %v", name, b.v, b.want)
+		}
+	}
+	if got.FieldManager.ValueString() != "kubectl" {
+		t.Errorf("field_manager: got %v, want \"kubectl\"", got.FieldManager)
+	}
+}
+
+// TestFillNullDefaults covers the helper on its own: nulls take the schema
+// default, and set values (including false and "") are left alone.
+func TestFillNullDefaults(t *testing.T) {
+	t.Parallel()
+
+	var m manifestResourceModel
+	m.ForceNew = types.BoolNull()
+	m.UpgradeAPIVersion = types.BoolNull()
+	m.ServerSideApply = types.BoolNull()
+	m.ForceConflicts = types.BoolNull()
+	m.ApplyOnly = types.BoolNull()
+	m.Wait = types.BoolNull()
+	m.WaitForRollout = types.BoolNull()
+	m.ValidateSchema = types.BoolNull()
+	m.FieldManager = types.StringNull()
+	fillNullDefaults(&m)
+	assertSchemaDefaults(t, m)
+
+	set := manifestResourceModel{
+		ForceNew:          types.BoolValue(true),
+		UpgradeAPIVersion: types.BoolValue(true),
+		ServerSideApply:   types.BoolValue(true),
+		ForceConflicts:    types.BoolValue(true),
+		ApplyOnly:         types.BoolValue(true),
+		Wait:              types.BoolValue(true),
+		WaitForRollout:    types.BoolValue(false),
+		ValidateSchema:    types.BoolValue(false),
+		FieldManager:      types.StringValue(""),
+	}
+	want := set
+	fillNullDefaults(&set)
+	pairs := map[string][2]types.Bool{
+		"force_new":           {set.ForceNew, want.ForceNew},
+		"upgrade_api_version": {set.UpgradeAPIVersion, want.UpgradeAPIVersion},
+		"server_side_apply":   {set.ServerSideApply, want.ServerSideApply},
+		"force_conflicts":     {set.ForceConflicts, want.ForceConflicts},
+		"apply_only":          {set.ApplyOnly, want.ApplyOnly},
+		"wait":                {set.Wait, want.Wait},
+		"wait_for_rollout":    {set.WaitForRollout, want.WaitForRollout},
+		"validate_schema":     {set.ValidateSchema, want.ValidateSchema},
+	}
+	for name, p := range pairs {
+		if !p[0].Equal(p[1]) {
+			t.Errorf("%s: set value changed: got %v, want %v", name, p[0], p[1])
+		}
+	}
+	if !set.FieldManager.Equal(want.FieldManager) {
+		t.Errorf("field_manager: set value changed: got %v", set.FieldManager)
+	}
+
+	unknown := manifestResourceModel{Wait: types.BoolUnknown()}
+	fillNullDefaults(&unknown)
+	if !unknown.Wait.IsUnknown() {
+		t.Errorf("wait: unknown must stay unknown, got %v", unknown.Wait)
+	}
 }
 
 // TestUpgradeState_RegistersBothVersions verifies the upgrader

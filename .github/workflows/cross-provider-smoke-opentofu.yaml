@@ -113,7 +113,7 @@ jobs:
           }
 
           resource "kubectl_manifest" "cm" {
-            wait       = true
+            # `wait` left unset: its null state must not plan a diff (#412).
             depends_on = [kubectl_manifest.ns]
             yaml_body  = <<-YAML
               apiVersion: v1
@@ -183,7 +183,7 @@ jobs:
           }
 
           resource "kubectl_manifest" "cm_v3" {
-            wait       = true
+            # `wait` left unset: its null state must not plan a diff (#412).
             depends_on = [kubectl_manifest.ns_v3]
             yaml_body  = <<-YAML
               apiVersion: v1

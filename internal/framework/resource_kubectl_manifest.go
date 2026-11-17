@@ -587,6 +587,8 @@ func (r *manifestResource) Read(ctx context.Context, req resource.ReadRequest, r
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	// Covers states 3.0.x already wrote at schema v2 with a null (#412).
+	fillNullDefaults(&data)
 
 	provider, err := r.kubeProvider()
 	if err != nil {
@@ -1134,7 +1136,7 @@ type manifestResourceModelV1 struct {
 // with safe defaults. drift = "" means "no drift recorded yet"; the
 // next Read recomputes it from cluster state.
 func promoteV1ToV2(v1 manifestResourceModelV1) manifestResourceModel {
-	return manifestResourceModel{
+	m := manifestResourceModel{
 		ID:                v1.ID,
 		UID:               v1.UID,
 		LiveUID:           v1.LiveUID,
@@ -1164,6 +1166,8 @@ func promoteV1ToV2(v1 manifestResourceModelV1) manifestResourceModel {
 		WaitFor:           v1.WaitFor,
 		Timeouts:          v1.Timeouts,
 	}
+	fillNullDefaults(&m)
+	return m
 }
 
 // stringOneOfValidator is a small inline validator mirroring SDK v2's
@@ -1215,6 +1219,28 @@ func boolOrTrue(b types.Bool) bool {
 		return true
 	}
 	return b.ValueBool()
+}
+
+// fillNullDefaults sets the nine apply options to their schema Default when
+// null. Default only applies to config, so a null from v2.x, gavinbunney or
+// 3.0.x state would otherwise plan a diff and re-apply the manifest (#412).
+func fillNullDefaults(m *manifestResourceModel) {
+	setBool := func(b *types.Bool, v bool) {
+		if b.IsNull() {
+			*b = types.BoolValue(v)
+		}
+	}
+	setBool(&m.ForceNew, false)
+	setBool(&m.UpgradeAPIVersion, false)
+	setBool(&m.ServerSideApply, false)
+	setBool(&m.ForceConflicts, false)
+	setBool(&m.ApplyOnly, false)
+	setBool(&m.Wait, false)
+	setBool(&m.WaitForRollout, true)
+	setBool(&m.ValidateSchema, true)
+	if m.FieldManager.IsNull() {
+		m.FieldManager = types.StringValue(defaultFieldManager)
+	}
 }
 
 // stringOrDefault returns the string value, or fallback if null/unknown.
@@ -1369,18 +1395,9 @@ func (r *manifestResource) ImportState(ctx context.Context, req resource.ImportS
 	}
 	data.YAMLBodyParsed = types.StringValue(obfuscated)
 
-	// Set Optional+Computed booleans / strings to their schema-default
-	// values so the next plan against an unmodified config sees no
-	// drift.
-	data.ForceNew = types.BoolValue(false)
-	data.UpgradeAPIVersion = types.BoolValue(false)
-	data.ServerSideApply = types.BoolValue(false)
-	data.FieldManager = types.StringValue("kubectl")
-	data.ForceConflicts = types.BoolValue(false)
-	data.ApplyOnly = types.BoolValue(false)
-	data.Wait = types.BoolValue(false)
-	data.WaitForRollout = types.BoolValue(true)
-	data.ValidateSchema = types.BoolValue(true)
+	// Schema defaults, so the next plan against an unmodified config
+	// sees no drift.
+	fillNullDefaults(&data)
 
 	// Fields without a schema default still need typed-null values
 	// rather than the Go zero value: types.List / types.Object /
