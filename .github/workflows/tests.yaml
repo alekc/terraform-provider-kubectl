@@ -802,6 +802,119 @@ jobs:
             kubectl get namespace upgrade-smoke -o yaml >&2 || true
             exit 1
           fi
+  upgrade_from_v2_smoke_terraform:
+    # #412: state from 2.4.1 leaves an unset `wait` null. The built binary must
+    # plan no change for it via the upgrader (-refresh=false) and, after
+    # v3.0.1 rewrites it at schema v2 with the null kept, via Read.
+    needs:
+      - get_version_matrix
+      - unit_test
+      - build_provider_binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      KUBE_CONFIG_PATH: /home/runner/.kube/config
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download provider binary
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: provider-binary
+      - name: Install provider binary and dev_overrides config
+        # The override lives in its own file, so only steps that set
+        # TF_CLI_CONFIG_FILE use the built binary.
+        run: |
+          chmod +x terraform-provider-kubectl
+          mv terraform-provider-kubectl "${HOME}/"
+          cat > "${HOME}/dev.tfrc" <<EOF
+          provider_installation {
+            dev_overrides {
+              "alekc/kubectl" = "${HOME}"
+            }
+            direct {}
+          }
+          EOF
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
+        with:
+          wait: 2m
+          node_image: kindest/node:v${{ needs.get_version_matrix.outputs.latest_k8s_version }}
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ needs.get_version_matrix.outputs.latest_terraform_version }}
+          terraform_wrapper: false
+      - name: Write config
+        run: |
+          mkdir -p v2-smoke
+          cat > v2-smoke/main.tf <<'EOF'
+          terraform {
+            required_providers {
+              kubectl = {
+                source  = "alekc/kubectl"
+                version = "2.4.1"
+              }
+            }
+          }
+
+          provider "kubectl" {}
+
+          resource "kubectl_manifest" "ns" {
+            wait      = true
+            yaml_body = <<-YAML
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: v2-smoke
+            YAML
+          }
+
+          resource "kubectl_manifest" "cm" {
+            depends_on = [kubectl_manifest.ns]
+            yaml_body  = <<-YAML
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: v2-smoke-cm
+                namespace: v2-smoke
+              data:
+                key: value
+            YAML
+          }
+          EOF
+          cat > v2-smoke/wait-is-null.jq <<'EOF'
+          .values.root_module.resources[]
+          | select(.address == "kubectl_manifest.cm") | .values.wait == null
+          EOF
+      - name: Phase 1 - apply with 2.4.1
+        working-directory: v2-smoke
+        run: |
+          terraform init
+          terraform apply -auto-approve
+          # Precondition: without a null in state this job tests nothing.
+          terraform show -json | jq -e -f wait-is-null.jq
+      - name: Phase 2 - upgrader path, built binary, no refresh
+        working-directory: v2-smoke
+        env:
+          TF_CLI_CONFIG_FILE: /home/runner/dev.tfrc
+        run: terraform plan -refresh=false -detailed-exitcode -no-color
+      - name: Phase 3 - v3.0.1 refresh-only rewrites state at schema v2
+        working-directory: v2-smoke
+        # Pinned: 3.0.1 is the last release that keeps the null.
+        run: |
+          sed -i 's/version = "2.4.1"/version = "3.0.1"/' main.tf
+          terraform init -upgrade
+          terraform apply -refresh-only -auto-approve
+          terraform show -json | jq -e -f wait-is-null.jq
+      - name: Phase 4 - Read path, built binary
+        working-directory: v2-smoke
+        env:
+          TF_CLI_CONFIG_FILE: /home/runner/dev.tfrc
+        run: terraform plan -detailed-exitcode -no-color
+      - name: Cleanup
+        if: always()
+        working-directory: v2-smoke
+        env:
+          TF_CLI_CONFIG_FILE: /home/runner/dev.tfrc
+        run: terraform destroy -auto-approve
   cross_provider_upgrade_smoke_terraform:
     # Cross-provider state-move smoke (Phase A of the v3.0.0
     # framework-migration epic, issue #123 / milestone v3.0.0). Installs
