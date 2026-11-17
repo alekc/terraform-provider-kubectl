@@ -140,6 +140,39 @@ func TestMoveFromGavinbunney_HappyPath(t *testing.T) {
 	}
 }
 
+// TestMoveFromGavinbunney_NullDefaults moves a source whose defaulted
+// attributes are null, as gavinbunney stores an unset `wait` (#412).
+func TestMoveFromGavinbunney_NullDefaults(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	src := sampleGavinbunneySource()
+	src.ForceNew = types.BoolNull()
+	src.ServerSideApply = types.BoolNull()
+	src.ForceConflicts = types.BoolNull()
+	src.ApplyOnly = types.BoolNull()
+	src.Wait = types.BoolNull()
+	src.WaitForRollout = types.BoolNull()
+	src.ValidateSchema = types.BoolNull()
+	req := resource.MoveStateRequest{
+		SourceTypeName:        gavinbunneyManifestTypeName,
+		SourceProviderAddress: "registry.terraform.io/gavinbunney/kubectl",
+		SourceSchemaVersion:   1,
+		SourceState:           newSourceState(ctx, t, src),
+	}
+	resp := &resource.MoveStateResponse{TargetState: newTargetState(ctx, t)}
+
+	moveFromGavinbunneyManifest(ctx, req, resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected diagnostics: %+v", resp.Diagnostics)
+	}
+	var got manifestResourceModel
+	if diags := resp.TargetState.Get(ctx, &got); diags.HasError() {
+		t.Fatalf("reading target state: %+v", diags)
+	}
+	assertSchemaDefaults(t, got)
+}
+
 // TestMoveFromGavinbunney_DiscardsLegacyFingerprints asserts the mover
 // drops gavinbunney's yaml_incluster / live_manifest_incluster (now
 // removed from this provider's schema in v3) and starts the moved
